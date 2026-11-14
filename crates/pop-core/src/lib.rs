@@ -1,6 +1,7 @@
 //! Engine-independent core: original data formats and (later) the game simulation.
 //! No graphics/audio deps, so mechanics can be tested headless against the original.
 pub mod dat;
+pub mod exe;
 pub mod image;
 pub mod level;
 pub mod sim;
@@ -73,5 +74,34 @@ mod tests {
             }
         }
         assert!(n >= 1300, "only {n} images");
+    }
+
+    #[test]
+    fn exe_tables() {
+        use super::exe::*;
+        let e = Exe::open(format!("{DIR}PRINCE.EXE")).unwrap();
+        let f = e.kid_frames();
+        assert_eq!(f.len(), KID_FRAMES);
+        assert_eq!(f[1], Frame { image: 1, sword: 0, dx: 1, dy: 0, flags: 0x44 }); // first start-run frame
+        let ids = |file: &str| -> Vec<u16> {
+            let d = Dat::open(format!("{DIR}{file}")).unwrap();
+            d.ids().collect()
+        };
+        let (kid, guard) = (ids("KID.DAT"), ids("GUARD.DAT"));
+        let has = |t: &[Frame], base: u16, ids: &[u16]| t.iter().filter(|f| f.image != 0 && f.image != 255).all(|f| ids.contains(&(base + f.image as u16)));
+        assert!(has(&f, 400, &kid));
+        assert_eq!(e.guard_frames().len(), GUARD_FRAMES);
+        assert!(has(&e.guard_frames(), 750, &guard));
+        assert_eq!(e.cutscene_frames().len(), CUT_FRAMES);
+        // sequence 1 = start run: action 1 (run), frames 1..=4
+        let s1 = e.sequence(1).unwrap();
+        assert_eq!(&s1[..6], &[Op::Action(1), Op::Frame(1), Op::Frame(2), Op::Frame(3), Op::Frame(4), Op::Dx(8)]);
+        for n in 1..=SEQUENCES {
+            for op in e.sequence(n).unwrap() {
+                if let Op::Frame(x) = op {
+                    assert!((x as usize) < KID_FRAMES, "sequence {n}: frame {x}");
+                }
+            }
+        }
     }
 }
