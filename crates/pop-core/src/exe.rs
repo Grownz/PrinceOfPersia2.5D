@@ -18,7 +18,7 @@ pub const SEQUENCES: usize = 114;
 
 /// One animation frame (5 bytes in the file). Kid: image `i` is KID.DAT resource 401 + i; guard-type characters:
 /// GUARD/FAT/VIZIER.DAT resource 751 + i. Image 255 = none.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Frame {
     /// 255 = no image
     pub image: u8,
