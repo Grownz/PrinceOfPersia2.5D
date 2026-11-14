@@ -622,7 +622,7 @@ t4 f5 x=147 c[138,143] (thin) 6:F0. **t5** f6 x=150 c[137,150] 6:FF -> delta -1 
 < 8, fwd fresh -> safe_step -> **seq 34** (28 + 6). Frames 121..132, x: 143,144,145,147,149,149,149,149, max
 right_coll 149 (149 < 149 is false, flags stay 6:F0). No bump; ends in seq 2 at x = 149, box c[143,149].
 
-**F. Standing jump into the wall.** (a) x = 110 facing right, keys fwd+up at t0 -> seq 3; lands at x = 148, box never
+**F. Standing jump into the wall.** (a) x = 110 facing right, keys fwd+up at t0 -> seq 3; lands at x = 149 (corrected: the dx ops of seq 3 sum to 39; the first draft said 148), box never
 passes 149: **no bump**. (b) x = 120: t8 f24 x=146 c[119,146] 6:F0; **t9** f25 x=151 y=112 c[123,151] 6:FF -> delta -2
 -> x = 149; tile col 5 floor; y diff 118-112 = 6 < 15 -> y = 118, fall_y = 0; frame 25 -> **seq 46** (hard bump),
 play_seq: dx-1 dy-4 -> x = 148, y = 114, frame 102; sound 8. t10 f107 x=145 y=118, t11 f108 x=147, t12 f109,
