@@ -1,5 +1,5 @@
 //! Room viewer: draws one room of a level as procedural 3D geometry (placeholder art).
-//! Keys: arrows = neighbouring room, PageUp/PageDown = level, Tab = debug text.
+//! Keys: arrows + Shift = kid, Ctrl+arrows = neighbouring room, PageUp/PageDown = level, Tab = debug text.
 mod kid;
 mod room;
 
@@ -15,7 +15,9 @@ struct Game {
     /// 1-based
     room: usize,
     kid: pop_core::kid::Kid,
-    kid_prev: (i32, i32),
+    /// kid position (world units) and room at the start of the last logic tick, for interpolation
+    kid_prev: (Vec2, u8),
+    kid_respawn: bool,
 }
 
 #[derive(Component)]
@@ -36,17 +38,16 @@ fn main() {
         }))
         .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
         .insert_resource(Time::<Fixed>::from_hz(sim::STEP_HZ))
-        .insert_resource(Game { world: sim::World::default(), levels, level, room, kid: default(), kid_prev: (0, 0) })
+        .insert_resource(Game { world: sim::World::default(), levels, level, room, kid: default(), kid_prev: (Vec2::ZERO, 0), kid_respawn: true })
+        .insert_resource(kid::Latch::default())
         .insert_resource(kid::KidAssets::load(&dir))
         .add_systems(Startup, (setup, kid::setup)) // first room is built by room::rebuild_on_change
-        .add_systems(FixedUpdate, |mut g: ResMut<Game>, a: Option<Res<kid::KidAssets>>| {
+        .add_systems(FixedUpdate, |mut g: ResMut<Game>, a: Res<kid::KidAssets>, mut latch: ResMut<kid::Latch>, keys: Res<ButtonInput<KeyCode>>| {
             if g.world.step() {
-                if let Some(a) = a {
-                    kid::tick(&mut g, &a);
-                }
+                kid::tick(&mut g, &a, &mut latch, &keys);
             }
         })
-        .add_systems(Update, (navigate, kid::keys, room::rebuild_on_change, kid::render, debug_text, screenshot_and_quit).chain())
+        .add_systems(Update, (kid::latch_keys, navigate, kid::keys, room::rebuild_on_change, kid::render, debug_text, screenshot_and_quit).chain())
         .run();
 }
 
@@ -68,8 +69,9 @@ fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<
 }
 
 fn navigate(keys: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, mut text: Query<&mut Visibility, With<DebugText>>) {
+    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     for (key, dir) in [(KeyCode::ArrowLeft, 0), (KeyCode::ArrowRight, 1), (KeyCode::ArrowUp, 2), (KeyCode::ArrowDown, 3)] {
-        if keys.just_pressed(key) {
+        if ctrl && keys.just_pressed(key) {
             let to = g.levels[g.level].links[g.room - 1][dir] as usize;
             if (1..=ROOMS).contains(&to) {
                 g.room = to;
@@ -80,6 +82,7 @@ fn navigate(keys: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, mut text: Quer
     if step != 0 {
         g.level = (g.level as i32 + step).rem_euclid(g.levels.len() as i32) as usize;
         g.room = g.levels[g.level].start_room as usize;
+        g.kid_respawn = true;
     }
     if keys.just_pressed(KeyCode::Tab) {
         for mut v in &mut text {
@@ -93,8 +96,8 @@ fn debug_text(g: Res<Game>, mut q: Query<&mut Text, With<DebugText>>) {
     let [left, right, up, down] = l.links[g.room - 1];
     for mut t in &mut q {
         t.0 = format!(
-            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}  kid: seq {} frame {} action {} x {} y {}\narrows room  PgUp/PgDn level  , . sequence  Space restart  F flip  Tab text",
-            g.level, g.room, left, right, up, down, l.start_room, l.start_tile, g.world.tick, g.kid.seq, g.kid.frame, g.kid.action, g.kid.x, g.kid.y
+            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}  kid: seq {} frame {} action {} x {} y {} room {} row {} fall {} hp {}\narrows+Shift kid  Ctrl+arrows room  PgUp/PgDn level  , . sequence viewer  Space restart  F flip  C control  Tab text",
+            g.level, g.room, left, right, up, down, l.start_room, l.start_tile, g.world.tick, g.kid.seq, g.kid.frame, g.kid.action, g.kid.x, g.kid.y, g.kid.room, g.kid.row, g.kid.fall_y, g.kid.hp
         );
     }
 }

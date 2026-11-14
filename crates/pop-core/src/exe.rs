@@ -9,7 +9,7 @@ const VERSION: &[u8] = b"PRINCE OF PERSIA  V1.1";
 // Frame records are 5 bytes: image, sword, dx, dy, flags.
 const KID_FRAMES_AT: usize = 116916; // verified in the EXE's load_frame (see docs/mechanics.md)
 pub const KID_FRAMES: usize = 241;
-const GUARD_FRAMES_AT: usize = 118122;
+const GUARD_FRAMES_AT: usize = 118127; // = frame 150 (only frames 150.. are stored)
 pub const GUARD_FRAMES: usize = 41;
 const CUT_FRAMES_AT: usize = 118328;
 pub const CUT_FRAMES: usize = 86;
