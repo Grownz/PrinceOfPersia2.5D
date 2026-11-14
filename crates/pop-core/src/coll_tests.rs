@@ -118,7 +118,8 @@ fn vector_e_safe_step_does_not_bump() {
     let t = run(&r, stand(&r, 143, false), 30, |i| if i < 12 { R } else { NONE });
     assert_eq!(t[0].3, 34, "safe step 28 + 6: {:?}", t[0]);
     assert!(t.iter().all(|e| !matches!(e.3, 45 | 46 | 47)), "no bump expected: {t:?}");
-    assert_eq!((t.last().unwrap().0, t.last().unwrap().3), (149, 2));
+    // `seq` keeps the number of the last started sequence; the kid ends standing (frame 15)
+    assert_eq!((t.last().unwrap().0, t.last().unwrap().2), (149, 15));
 }
 
 #[test]
@@ -127,7 +128,8 @@ fn vector_f_standing_jump_into_wall() {
     // (a) far enough: no bump
     let t = run(&r, stand(&r, 110, false), 30, |i| if i == 0 { RU } else { NONE });
     assert!(t.iter().all(|e| !matches!(e.3, 45 | 46 | 47)), "(a) no bump expected");
-    assert_eq!(t.last().unwrap().0, 148);
+    // docs/collisions.md says 148 here, but the dx ops of sequence 3 sum to 39 (verified in the EXE data): 110 + 39
+    assert_eq!(t.last().unwrap().0, 149);
     // (b) closer: hard bump in the air at t9, second bump at t15
     let t = run(&r, stand(&r, 120, false), 20, |i| if i == 0 { RU } else { NONE });
     assert_eq!((t[8].0, t[8].2), (146, 24), "{:?}", t[8]);
