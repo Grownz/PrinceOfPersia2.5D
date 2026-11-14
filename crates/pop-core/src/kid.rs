@@ -106,15 +106,24 @@ const WALL_DIST_FROM_LEFT: [i32; 6] = [0, 10, 0, -1, 0, 0];
 const WALL_DIST_FROM_RIGHT: [i32; 6] = [0, 0, 10, 13, 0, 0];
 
 impl Kid {
-    /// Kid at the level's start position, standing.
-    pub fn spawn(env: &Env) -> Kid {
+    /// Kid at the level start as in the original (do_startpos, docs/mechanics.md section 8): x = 72 + 14*col,
+    /// direction = NOT start_dir, first sequence 7 (fall) on level 1, 84 (run) on level 13, otherwise 5 (turn),
+    /// played once so that its first frame is shown immediately.
+    pub fn spawn(env: &Env, level_no: usize) -> Kid {
+        let mut k = Kid::spawn_standing(env);
+        k.start_seq(env, match level_no { 1 => 7, 13 => 84, _ => 5 });
+        k.play_seq(env);
+        k
+    }
+
+    /// Kid standing (sequence 2) at the start position, without the level-specific first sequence.
+    pub fn spawn_standing(env: &Env) -> Kid {
         let l = env.level;
         let (col, row) = ((l.start_tile % 10) as i32, (l.start_tile / 10) as i32);
         let mut k = Kid {
-            // provisional: the original start x is not verified; this puts the standing kid's foot mid-tile
-            x: (X0 + COL_W * col + 17) as u8,
+            x: (X0 + COL_W * col + 14) as u8,
             y: Y_LAND[row as usize + 1] as u8,
-            facing_left: l.start_dir == 255,
+            facing_left: l.start_dir == 0, // direction = NOT start_dir
             frame: 15,
             room: l.start_room,
             row,
