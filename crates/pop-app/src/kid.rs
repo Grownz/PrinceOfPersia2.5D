@@ -6,7 +6,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use pop_core::kid::{Env, Keys, Kid, COL_W, X0};
+use pop_core::kid::{Env, Keys, Kid};
 use pop_core::{dat::Dat, exe::{Exe, Frame, SEQUENCES}, image, level::TILE_H_PX};
 use std::collections::HashMap;
 
@@ -81,20 +81,23 @@ fn material_for(a: &mut KidAssets, imgs: &mut Assets<Image>, mats: &mut Assets<S
     Some(entry)
 }
 
-/// Sprite anchor in world units: x = (x + dir * frame.dx - 58) / 14 tiles (original: obj_x = 2 * (x + dir * dx) - 116,
-/// screen x = obj_x * 320 / 280, 32 px per tile), y = bottom of the sprite (obj_y = y + frame.dy, row 2 floor = 0).
-/// The anchor of a flipped sprite (right edge) is our guess.
+/// Drawing rule (docs/mechanics.md 7.3). KID.DAT images face LEFT as stored; the engine mirrors them when the kid faces right.
+/// Returns (sx / 32, bottom) in world units: sx = screen x of the image's left edge (facing left) or right edge (facing right),
+/// bottom = the image's bottom line (row 2 floor = 0).
 fn world_pos(k: &Kid, frames: &[Frame]) -> Vec2 {
     let f = frames.get(k.frame as usize).copied().unwrap_or(Frame { image: 255, sword: 0, dx: 0, dy: 0, flags: 0 });
-    let dir = if k.facing_left { -1.0 } else { 1.0 };
-    let x = (k.x as f32 + dir * f.dx as f32 - X0 as f32) / COL_W as f32;
-    let y = (181.0 - (k.y as f32 + f.dy as f32)) * crate::room::TILE_H / TILE_H_PX as f32;
-    Vec2::new(x, y)
+    let dir_byte: u8 = if k.facing_left { 0xFF } else { 0 };
+    let dxs = if k.facing_left { -(f.dx as i32) } else { f.dx as i32 };
+    let parity = (((f.flags ^ dir_byte) & 0x80) == 0) as i32;
+    let obj_x = 2 * (k.x as i32 + dxs) - 116 + parity;
+    let sx = obj_x * 320 / 280;
+    let bottom = k.y.wrapping_add(f.dy as u8) as f32;
+    Vec2::new(sx as f32 / 32.0, (181.0 - bottom) * crate::room::TILE_H / TILE_H_PX as f32)
 }
 
 fn respawn(g: &mut Game, a: &KidAssets) {
     let env = Env { exe: &a.exe, frames: &a.frames, level: &g.levels[g.level] };
-    g.kid = Kid::spawn(&env);
+    g.kid = Kid::spawn(&env, g.level);
     g.room = g.kid.room as usize;
     g.kid_prev = (world_pos(&g.kid, &a.frames), g.kid.room);
 }
@@ -160,9 +163,10 @@ pub fn render(
     let cur = world_pos(&g.kid, &a.frames);
     let p = if g.kid_prev.1 == g.kid.room { g.kid_prev.0.lerp(cur, g.world.alpha()) } else { cur };
     let (sw, sh) = (w / 32.0, h * crate::room::TILE_H / TILE_H_PX as f32);
-    let dir = if g.kid.facing_left { -1.0 } else { 1.0 };
-    t.translation = Vec3::new(p.x + dir * sw / 2.0, p.y + sh / 2.0, 0.6);
-    t.scale = Vec3::new(dir * sw, sh, 1.0);
+    // facing left: p.x is the left edge, image as stored; facing right: p.x is the right edge and the image is mirrored
+    let (cx, flip) = if g.kid.facing_left { (p.x + sw / 2.0, 1.0) } else { (p.x - sw / 2.0, -1.0) };
+    t.translation = Vec3::new(cx, p.y + sh / 2.0, 0.6);
+    t.scale = Vec3::new(flip * sw, sh, 1.0);
 }
 
 /// Test hook: `POP_SCRIPT="r:25,ru:1,-:30"` plays keys per logic tick (letters l r u d s, `-` = none), instead of the keyboard.

@@ -251,7 +251,7 @@ Char.frame and the function returns. So **exactly one frame per tick**, and all 
   - Wall offsets: `ds:24CE` wall_dist_from_left = {0,10,0,-1,0,0}, `ds:24D4` wall_dist_from_right = {0,0,10,13,0,0}, indexed by wall_type.
 - Bumping (`0000:5645` check_bumped, `0000:57F0` bumped): x is pushed back by the collision delta. Then a bump sequence:
   seq 47 (normal), 46 (hard, for frames 24, 25, 40..42 and 102..106), 45 (bump-fall, via `0000:588C`, x -= 4), 64/65 with the sword.
-  The collision deltas come from check_collisions `0000:53AC`, which was not read yet (INFERRED from the call order).
+  The collision deltas come from check_collisions `0000:53AC` (now VERIFIED, see section 9).
 
 ---
 
@@ -260,8 +260,9 @@ Char.frame and the function returns. So **exactly one frame per tick**, and all 
 - **x**: unsigned byte, **14 units per column**, 10 columns per room. Column c starts at x = 58 + 14c (`ds:24BA` x_bump = -12, 2, 16, 30, 44, 58, 72, ...; index = col + 5).
   - get_tile_div_mod `0000:712C`: lookup tables `ds:22BA` (col) and `ds:23BA` (mod), equivalent to **col = floor((x - 58) / 14), mod = (x - 58) mod 14** for x = 0..255.
   - get_tile_div_mod_m7 `0000:711A` is the same with x - 7. Note: x < 7 makes a negative index, which reads the bytes before the table (an original quirk).
-- **Room change** `0000:3B7A` goto_other_room: left: x += 140; right: x -= 140; up: y += 189 and row is recomputed; down: y -= 189.
-  Room links: `ds:585E + 4*room` = left, right, up, down.
+- **Room change** `0000:3B7A` goto_other_room(dir): room = link[dir] (also when the link is 0), then left (0): x += 140; right (1): x -= 140;
+  up (2): y += 189; down (3): y -= 189. For up **and** down the row is recomputed with y_to_row_mod4 (`0000:3BC9`, `0000:3BE3`;
+  round 1 said only up). Returns the opposite direction. Room links: `ds:585E + 4*room` = left, right, up, down. Trigger rules: section 10.
 - **y**: unsigned byte, **63 per row**, 3 rows per room (189). y_land `ds:22B0` = {-8, 55, 118, 181, 244}. A kid standing on row r has y = y_land[r+1] = **55 + 63r** (land `0000:5F0C`).
   - y_to_row_mod4 `0000:716F` = ((y + 60) / 63) % 4 - 1.
   - `0000:7142` = the largest i in -1..3 with y_land[i+1] <= y.
@@ -287,4 +288,181 @@ start_chompers `950B`, release_arrows `7B48`, room change `3B7A`, seq setters `5
 
 - The 12 Hz tick rate (taken from the brief, not from the timer code).
 - Whether `84B1` and `71DF` do more than check_killed_shadow and loading Kid/Opp.
-- The exact collision geometry in check_collisions, and the joystick thresholds.
+- The joystick thresholds.
+
+---
+
+# Round 2
+
+## 7. Facing and drawing (VERIFIED unless marked)
+
+### 7.1 Which way the images face
+- **Every KID.DAT image faces LEFT** as stored. Checked visually: resource 415 (image 14 = frame 15, standing, 12x41 px) and 410
+  (image 9, running) decoded with `crates/pop-core/examples/dump_image.rs`: face, nose and chest are on the left side.
+- **Char.direction: 0 = right, 0xFF (any negative) = left** (char_dx_forward `0000:6F4F` negates dx when direction < 0).
+- **The engine mirrors the image when direction == 0 (facing right)**: add_midtable `0000:AE6C`:
+  `if (obj_direction == 0 && chtab_flip_ok[chtab]) blit += 0x80`. chtab_flip_ok = `ds:259C` = {1,0,1,1,1,1,0,0,0,0,0,1,...}
+  (chtab 0 sword, 2/3/4 kid, 5 guard can flip; chtab 1 cannot). Facing left = image drawn as stored.
+
+### 7.2 Pipeline
+1. load_frame_to_obj `0000:C110` (Char = the character being drawn; draw_kid `0000:BFB8` = loadkid + this, draw_guard `0000:BFEC`):
+   - obj_direction `[4DF6]` = Char.direction; obj_id `[42E4]` = frame.image; obj_chtab `[4CD8]` = **2 + (frame.sword >> 6)**.
+     The guard frame table has 0xC0 in its sword bytes (`ds:14AF`: `0C CD 02 01 00`), so guards get chtab 5. The kid gets 2.
+   - **obj_x** `[4642]` (word, 280-wide space) = `2 * char_dx_forward(frame.dx) - 116` = `2*(x + (dir==right ? dx : -dx)) - 116`,
+     then **+1 if bit 7 of (frame.flags XOR direction) is 0**, i.e. +1 when (facing right and flags&0x80 == 0) or (facing left and flags&0x80 != 0).
+   - **obj_y** `[4651]` (byte) = `(u8)(y + frame.dy)`: the **bottom** line of the image.
+2. draw_kid order (`0000:BFB8`): loadkid, load_fram_det_col, load_frame_to_obj, `0000:812E` (**if the tile at the char is 5, Char.y += 1**,
+   on the temporary copy), set_char_collision, ... It runs after obj_y was computed and set_char_collision reads obj_y, so it does not move
+   the image or the box; what reads it later (`4DEA`, `4EB9`, `7F79`) was not traced.
+3. add_objtable `0000:C050` stores obj_x as xh = obj_x div 8, xl = obj_x mod 8 (`0000:7258`, floor division, exact for negatives) and obj_y.
+4. draw_objtable_item (`0000:BEF0` reload, kid case `0000:BDD0`) calls add_midtable(chtab, id+1, xh, xl, obj_y, blit, 1) `0000:AE02`:
+   - entry.y = **obj_y - image_height + 1** (top line; `0000:AE61`, image header word 0 = height).
+   - flip bit as in 7.1.
+5. draw_mid `0000:B0D4`: x = xh*8 + xl (= obj_x); if chtab != 0, **x = obj_x * 320 / 280** (`0000:C2CA`, long multiply then divide);
+   **if flipped, x -= image_width** (`0000:B22D`, header word 1 = width). The image is then mirrored in place if its cached state
+   differs (`0000:B24F`, bit 15 of header word 2). y is passed on unchanged (INFERRED: screen line, no scaling was seen; the blitter `0000:B343` was not read).
+
+### 7.3 Formula (kid, guard, shadow: chtab != 0)
+```
+dxs   = (direction == 0) ? frame.dx : -frame.dx
+obj_x = 2*(Char.x + dxs) - 116 + ((((frame.flags ^ direction) & 0x80) == 0) ? 1 : 0)
+sx    = trunc(obj_x * 320 / 280)
+left  = (direction == 0) ? sx - w : sx          right edge = left + w (exclusive)
+bottom= (u8)(Char.y + frame.dy)                 top = bottom - h + 1
+```
+Facing left: sx is the **left** edge, image as stored. Facing right: sx is the **right** edge (exclusive), image mirrored.
+Example: Char.x = 58 + 14c, dx 0, no parity -> obj_x = 28c, sx = 32c = the left edge of column c on screen (32 px per column).
+- **Sword** (`0000:84EC`, drawn when Char.sword != 0 or frames 229..237, and frame.sword & 0x3F != 0): table `ds:1726`, 3 bytes per entry
+  {image, dx, dy}. obj_x = screen_x(obj_x of the body) + (direction < 0 ? -dx : dx) (`0000:6F70`), obj_y += dy, chtab 0.
+  chtab 0 is **not** rescaled in draw_mid, so the sword dx is in screen pixels. The same flip rule applies.
+- Shadow (charid 1) uses the kid images with chtab 2 (same formula; it only differs in blit mode). INFERRED from load_frame_to_obj having no charid test.
+
+### 7.4 Collision box (set_char_collision `0000:745F`)
+`half = (w + 1) / 2` (pixels), `char_x_left = obj_x/2 + 58`, minus half when facing right; `char_x_right = left + half`.
+Coll copies `[3D60]` left_coll / `[4336]` right_coll get `+4 / -4` when flags & 0x20. char_height `[4656]` = image height. So the box uses
+the image width in pixels against x units (a quirk), and its side matches the drawing (the image extends right of obj_x when facing left).
+Globals: `[3D5C]` char_x_left, `[3D50]` char_x_right, `[3D60]` char_x_left_coll, `[4336]` char_x_right_coll, `[4ED6]` top y, `[5ADA]` top row, `[34E4]` bottom row.
+
+## 8. Level start (do_startpos `0000:4A0F`, set_start_pos `0000:4AF6`; VERIFIED)
+
+Level file bytes at 2112 are copied to `[5902]` start room, `[5903]` start tile (0..29), `[5904]` start_dir.
+- Char.room = start room; col = tile % 10, row = tile / 10.
+- **Char.x = x_bump[col + 5] + 14 = 72 + 14*col** (`ds:24BF` = x_bump + 5).
+- **Char.direction = NOT start_dir** (`0000:4A86`). Then the first sequence:
+  - **level 1: seq 7 (fall)**, after get_tile(room 5, col 2, row 0) and trigger_button(0, 0, -1) (`0000:924B`). Level 1 data: start
+    room 1, tile 0, dir 255 -> direction = 0, **facing right**, standing on row 0 over an empty tile. **Falling is the original behaviour**:
+    seq 7 shows f102..f105 with dy +3/+6/+9/+12 (action 3), then fall(1,15) and seq 12. Worked through: y 55 -> 58 (first frame shown at
+    start) -> 64 -> 73 -> 85; then action 4: fall_y 18, y 103, row becomes 1 (tile empty); next tick fall_y 21, y 124 >= 118 -> lands on
+    row 1 col 0 (tile 19 torch = floor) with fall_y 21 < 22 -> **seq 17, soft landing into a crouch**, no damage.
+  - level 13: seq 84 (run).
+  - all other levels: **seq 5 (turn)**. Its flip op restores start_dir, so the kid ends facing start_dir. The dx ops of seq 5 add +7
+    forward in the new direction: standing x = 72 + 14*col + 7*(start_dir == 0 ? +1 : -1). Start tiles point at the right half of the
+    entry door (tile 17), for example level 2 room 5 tile 13.
+  - level 3 with checkpoint flag `[4CAC]`: start room 2, tile 6, dir 0xFF, and the tile at (room 7, col 4, row 0) is cleared.
+- set_start_pos: y = y_land[row + 1]; alive = -1; charid 0; zeroes knock, feather, fall_x, fall_y, sword, offguard and others; then
+  **play_seq once** (the first frame is shown at level start). Level 7 in room 17: goto_other_room(3) (the kid starts above and drops in). Then savekid.
+- HP: `[4646]` (hitp_beg_lev) on normal levels, 4 on level 0.
+- The 4 bytes after start_dir (2115..2118) are not read here; they were not traced.
+
+## 9. Collisions and walls (VERIFIED)
+
+### 9.1 check_collisions `0000:53AC`
+Skipped for action 7 (turn). Otherwise:
+- move_coll_to_prev `0000:5487`: copies last tick's row data to prev arrays (`[4C4E]` room, `[5CDE]` flags), picking the current, above or
+  below row data to match the change of curr_row, then clears the row arrays to -1.
+- Checked columns: left = col_m7(char_x_left_coll) - 1, right = min(col_m7(char_x_right_coll) + 2, 11).
+- get_row_collision_data `0000:552D` for rows curr, curr+1, curr-1. Per column: `tile_left = x_bump[col+5] + 7` (= 65 + 14col, adjusted
+  by ±140 when the tile is in a side room, `0000:57AD`).
+  - left_wall_x = wall_dist_from_left[wt] + tile_left (`0000:55CE`), or 0xFF if wall_type 0.
+  - right_wall_x = tile_left - wall_dist_from_right[wt] + 13 (`0000:5607`), or 0 if wall_type 0.
+  - flags = (left_wall_x < char_x_right_coll ? 0x0F : 0) | (right_wall_x > char_x_left_coll ? 0xF0 : 0).
+- For column 9 down to 0 with the same room as last tick: low nibble went 0 -> non-zero: bump_col_left_of_wall `[436D]` = col;
+  high nibble went 0 -> non-zero: bump_col_right_of_wall `[43AC]` = col. So a bump fires only on the tick the box **starts** overlapping.
+
+### 9.2 check_bumped `0000:5645`
+Skipped when action is 2 or 6 or frame is 135..148 (climbing). If bump_col_left_of_wall >= 0 (`56B2`): only when facing right or sword == 2,
+and is_obstacle at that column (current row): **bumped(left_wall_x - char_x_right_coll, -1)**. Else if bump_col_right_of_wall >= 0 (`567A`):
+facing left or sword == 2, is_obstacle: **bumped(right_wall_x - char_x_left_coll, 0)**.
+
+is_obstacle `0000:5726` (on curr_tile2): potion 10 -> no; gate 4 -> **can_bump_into_gate** (`0000:59FF`: `(modifier >> 2) + 6 < char_height`);
+chomper 18 -> only if modifier == 2; mirror 13 -> when kid (charid 0), frame 39..43 and facing left: the tile becomes 0x56 and `[42E0]` = -1
+(jump through the mirror), not an obstacle. Every other wall_type tile -> obstacle.
+
+### 9.3 bumped `0000:57F0`
+Only if alive and frame != 177. x += delta. Pushing left (dir < 0): if curr_tile2 is wall, look one column left; pushing right: if it is
+doortop 12, doortop-with-floor 7 or wall, look one column right. Then if that tile is floor -> bumped_floor `58C8`, else bumped_fall `588C`.
+- **bumped_fall**: x = forward(-4); if action 4: fall_x = 0, else **seq 45** (bump into wall and fall). Sound 8.
+- **bumped_floor**: if sword != 2 and y_land[row+1] - y >= 15 (unsigned): bumped_fall. Else y = y_land[row+1]; if fall_y >= 22: x = forward(-5)
+  and nothing else; else fall_y = 0 and (alive): sword: same direction -> seq 65 and x = forward(1), otherwise seq 64; no sword:
+  **frame 24, 25, 40..42 or 102..106 -> seq 46 (hard bump)**, else **seq 47 (soft bump: dx-4, f50..f52, stand)**. Then play_seq and sound 8.
+- Running into a wall: the run frames push the box past the wall face -> seq 47 with x pushed back to the face. A running jump that hits a
+  wall high (more than 14 above the floor line) -> seq 45 and a fall. Walking: forward_pressed does a safe step instead of a run when the
+  wall is within 8 (section 2.3), so a walk normally does not bump. A closed gate counts while (modifier>>2)+6 < image height.
+
+### 9.4 dist_from_wall_forward `0000:5DB8` (used by get_edge_distance)
+Argument = tile type (tile_col `[4370]` is the column of the last get_tile). Gate that can_bump_into_gate says no -> -1. wall_type 0 -> -1.
+`tile_left = x_bump[tile_col+5] + 7`. Facing left: `wall_dist_from_right[wt] + char_x_left_coll - tile_left - 13`;
+facing right: `wall_dist_from_left[wt] + tile_left - char_x_right_coll`. **It uses the collision box, not the foot.**
+
+### 9.5 in_wall `0000:7809`
+`d = distance_to_edge_weight`; if d >= 8 or the tile in front is wall 20: d = 6 - d, else d += 4. x = forward(d), redetermine column,
+re-read the tile at the char. Called from check_on_floor (tile at char is wall; afterwards the normal floor test runs on the new tile),
+from do_fall (landing column is a wall) and from start_fall.
+
+## 10. Room change (VERIFIED)
+
+exit_room `0000:3ABB` is called from the main loop (`0000:0948`), after the kid's tick. If exit_room_timer `[5CE8]` != 0 it only decrements it.
+Else loadkid, load_frame_to_obj, set_char_collision, then leave_room `0000:3BF8`:
+1. **Up**: action not 5, 4 or 3, and y as a signed byte in -16..9 (y <= 9 or y >= 240).
+2. Else **down**: y >= 211 (unsigned; so a falling kid with y 241..255 also goes down).
+3. Else no change for frames 135..149 (climb), 110..119 (stand up), 150..162 and 166..168 (sword), or action 7.
+4. Else facing left: char_x_left <= 54 -> **left**; char_x_left >= 198 -> **right**.
+   Facing right: if the tile at (col 9, curr_row) is not 7/12 (doortop) and char_x_right >= 201 -> **right**; else char_x_right <= 57 -> **left**.
+   These use the image box from 7.4 (not the coll copies, not the foot).
+5. Side effects before the move: left: mirror music / level-3 checkpoint / Jaffar exit; right: sword disappears / meet Jaffar (`3D74`, `3DA2`);
+   down on level 6 in room 1 returns -2 (falls to the next level) without moving.
+Then goto_other_room(dir), savekid, next_room `[4E06]` = Char.room. goto_other_room is also called by the guard version `0000:3A92`
+and by set_start_pos (level 7).
+
+## 11. Jump up, grab, hang, climb (VERIFIED)
+
+Helpers: get_tile_above_char `0000:7D4D` (col, row-1), get_tile_behind_above `7D68`, get_tile_front_above `7D91`; through_tile `[4C4C]`.
+back_delta_x `7DBA` = (facing left ? d : -d).
+
+- **can_grab** `0000:7C9D` (target = curr_tile2, through = through_tile): false if through is wall 20, or through is doortop 12 and facing right,
+  or through **is floor**, or target is loose floor 11 with modifier != 0, or target is 7 and facing left, or target is not floor. Else true.
+- **check_jump_up** `0000:66A2` (from up_pressed): control_up = release. through = tile above; target = tile front-above:
+  can_grab -> grab_up_with_floor_behind. Else through = tile behind-above, target = tile above: can_grab -> jump_up_or_grab, else jump_up.
+- **jump_up_or_grab** `66E7`: d = distance_to_edge_weight. d < 6 -> jump_up. Else tile behind not floor -> grab_up_no_floor_behind.
+  Else x = forward(d - 14), redetermine column, grab_up_with_floor_behind.
+- **grab_up_no_floor_behind** `6733`: x = forward(distance_to_edge_weight - 10), **seq 16**.
+- **jump_up** `6752`: control_up = release. d = get_edge_distance; if d < 4 and edge_type == 1: x = forward(d - 3).
+  Tile at (col = get_tile_div_mod(dx_weight - 6), row - 1): if it is not wall and not floor -> **seq 28** (jump up, nothing to grab),
+  else **seq 14** (jump up and bump the ceiling, knock up, then seq 11).
+- **grab_up_with_floor_behind** `6914`: d = distance_to_edge_weight. If d < 4 and get_edge_distance < 4 and edge_type != 1:
+  x = forward(d), **seq 8**. Else x = forward(d - 4), **seq 24**. Both end in seq 9 (hang, action 2).
+- **check_grab** `0000:7755` (action 3, frames 102..105, and do_fall while y < y_land[row+1]): needs **raw Shift held** `[4E04] < 0`,
+  fall_y < 32, alive, and y_land[row+1] <= y + 25. Then x = forward(-8), redetermine column; if can_grab (through = above, target = front-above)
+  fails, restore x. Else x = forward(distance_to_edge_weight), y = y_land[row+1], fall_y = 0, **seq 15**, play_seq, **grab_timer = 12**, sound 9.
+  grab_timer is decremented once per tick in control_kid (`0000:7A39`).
+- **control_hanging** `0000:67D4` (frames 87..99): dead -> hang_fall. grab_timer == 0 and control_y == -1 (up) -> can_climb_up.
+  Else raw Shift held: if action != 6 and (tile at char is wall, or facing left and it is 7/12): sound 8 if grab_timer == 0, **seq 25**
+  (hang against the wall, action 6). Otherwise keep hanging while the tile above is floor, else hang_fall. Shift released -> hang_fall.
+- **can_climb_up** `684B`: control_up = shift2 = release. Tile above: (mirror or chomper and facing right) or (gate, facing left, (modifier>>2) < 6)
+  -> **seq 73** (climb up into a closed gate and drop back, dx-7, then seq 11); else **seq 10** (climb up: up op, ends standing, seq 2).
+- **hang_fall** `68B2`: control_down = release. Tile behind and tile at char both not floor -> **seq 23** (drop, fall(0,12), seq 12).
+  Else if the tile at char is wall, or facing left and it is 7/12: x = forward(-7). Then **seq 11** (drop and land standing).
+- Seq 9 (hang) swings f91..f99 and back; if nothing happens it ends in seq 11 (drop). Climb down is seq 68 (section 2.3, down_pressed),
+  which ends inside seq 9 (`ds:1CB8`).
+
+## 12. Errors found in crates/ (round 2; not fixed here)
+
+1. `pop-app/src/kid.rs` render: the mesh is drawn with scale.x = -w when `facing_left` and extends **left** of the anchor; the original
+   draws facing-left images **unmirrored, extending right** of obj_x, and mirrors only facing right, extending left (7.3). Unless the
+   camera or the mesh UVs flip x, both the mirroring and the anchor side are reversed. The 0x80 parity (+1 in obj_x) is not applied.
+2. `pop-core/src/kid.rs` `spawn`: x should be 72 + 14*col (not 75 + 14*col), direction = NOT start_dir, and the first sequence is seq 5
+   (levels other than 1 and 13), seq 7 on level 1 (so the fall seen in level 1 is correct, but it should be seq 7 and land in seq 17), seq 84 on level 13.
+3. `dist_from_wall`: uses the foot and `58 + 14col`; the original uses the collision box edges and `65 + 14col` (9.4).
+4. `check_on_floor` / `do_fall` / `start_fall`: a wall tile must call in_wall (9.5), not count as floor or be skipped.
+5. `check_room_change`: the trigger is leave_room (section 10: box edges 54/198/201/57, y <= 9 or >= 240 for up unless action 3/4/5,
+   y >= 211 for down, skipped for climb/stand-up/turn frames), and the original moves even when the link is 0.

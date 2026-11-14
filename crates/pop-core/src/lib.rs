@@ -120,7 +120,7 @@ mod tests {
         }
         b[2112] = 1;
         b[2113] = (start.1 * 10 + start.0) as u8;
-        b[2114] = 0;
+        b[2114] = 255; // start_dir 255 => direction right
         Level::parse(&b).unwrap()
     }
 
@@ -147,7 +147,7 @@ mod tests {
     fn kid_stands_idle() {
         let r = Rig::new(["", "##########", "##########"], (3, 1));
         let env = r.env();
-        let mut k = Kid::spawn(&env);
+        let mut k = Kid::spawn_standing(&env);
         let x0 = k.x;
         for _ in 0..10 {
             k.tick(&env, NONE);
@@ -161,7 +161,7 @@ mod tests {
     fn kid_runs_and_stops() {
         let r = Rig::new(["", "##########", "##########"], (1, 1));
         let env = r.env();
-        let mut k = Kid::spawn(&env);
+        let mut k = Kid::spawn_standing(&env);
         k.tick(&env, RIGHT);
         assert_eq!((k.seq, k.frame, k.action), (1, 1, 1)); // control runs before play_seq: first frame in the same tick
         let x0 = k.x;
@@ -182,7 +182,7 @@ mod tests {
     fn kid_turns() {
         let r = Rig::new(["", "##########", "##########"], (3, 1));
         let env = r.env();
-        let mut k = Kid::spawn(&env);
+        let mut k = Kid::spawn_standing(&env);
         let left = Keys { left: true, ..NONE };
         k.tick(&env, left);
         assert_eq!(k.seq, 5);
@@ -197,7 +197,7 @@ mod tests {
     fn standing_jump_travels_39_units() {
         let r = Rig::new(["", "##########", "##########"], (2, 1));
         let env = r.env();
-        let mut k = Kid::spawn(&env);
+        let mut k = Kid::spawn_standing(&env);
         let x0 = k.x as i32;
         k.tick(&env, Keys { right: true, up: true, ..NONE });
         assert_eq!(k.seq, 3);
@@ -213,7 +213,7 @@ mod tests {
         // row 1 floor only on columns 0..=4, row 2 floor everywhere below
         let r = Rig::new(["", "#####", "##########"], (3, 1));
         let env = r.env();
-        let mut k = Kid::spawn(&env);
+        let mut k = Kid::spawn_standing(&env);
         let (mut fell, mut ticks) = (false, 0);
         while ticks < 300 {
             k.tick(&env, if fell { NONE } else { RIGHT });
@@ -227,5 +227,31 @@ mod tests {
         assert_eq!(k.row, 2);
         assert_eq!(k.y, 181);
         assert!(k.alive);
+    }
+}
+
+#[cfg(test)]
+mod start_tests {
+    use super::{dat::Dat, kid::*, level::*};
+
+    #[test]
+    fn level1_starts_with_a_fall() {
+        let d = "../../Original_data/";
+        let exe = super::exe::Exe::open(format!("{d}PRINCE.EXE")).unwrap();
+        let frames = exe.kid_frames();
+        let lv = Dat::open(format!("{d}LEVELS.DAT")).unwrap();
+        let level = Level::parse(lv.get(2001).unwrap()).unwrap();
+        let env = Env { exe: &exe, frames: &frames, level: &level };
+        let mut k = Kid::spawn(&env, 1);
+        assert_eq!((k.seq, k.room, k.facing_left), (7, 1, false)); // level 1: seq 7, facing right
+        let none = Keys::default();
+        let mut soft = false;
+        for _ in 0..40 {
+            k.tick(&env, none);
+            soft |= k.seq == 17; // soft landing, as worked out in docs/mechanics.md section 8
+        }
+        assert!(soft, "level 1 start should end in a soft landing (seq 17)");
+        assert_eq!((k.row, k.y), (1, 118));
+        assert_eq!(k.hp, 3);
     }
 }
