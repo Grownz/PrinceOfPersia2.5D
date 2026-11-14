@@ -64,6 +64,7 @@ pub struct Guard {
     pub dir: u8,
 }
 
+#[derive(Clone)]
 pub struct Level {
     pub fg: [u8; N],
     pub bg: [u8; N],
@@ -126,7 +127,7 @@ impl Level {
     }
 
     /// Follow room links for out-of-range columns/rows; `None` = outside the level (room 0 counts as a wall).
-    fn wrap(&self, mut room: i32, mut col: i32, mut row: i32) -> Option<(usize, usize)> {
+    pub fn wrap(&self, mut room: i32, mut col: i32, mut row: i32) -> Option<(usize, usize)> {
         for _ in 0..8 {
             if !(1..=ROOMS as i32).contains(&room) {
                 return None;
@@ -159,6 +160,35 @@ impl Level {
     /// Modifier byte of the tile (0 outside the level).
     pub fn modifier_wrapped(&self, room: i32, col: i32, row: i32) -> u8 {
         self.wrap(room, col, row).map_or(0, |(r, i)| self.tile_at(r, i).modifier)
+    }
+
+    /// Index into `fg`/`bg` of tile `idx` (0..30) of 1-based `room`.
+    fn at(room: usize, idx: usize) -> usize {
+        (room - 1) * TILES_PER_ROOM + idx
+    }
+
+    /// Runtime change of a tile type. The original writes whole bytes, which clears the 3 flag bits.
+    pub fn set_tile(&mut self, room: usize, idx: usize, t: Tile) {
+        self.fg[Self::at(room, idx)] = t as u8;
+    }
+
+    pub fn set_modifier(&mut self, room: usize, idx: usize, m: u8) {
+        self.bg[Self::at(room, idx)] = m;
+    }
+
+    /// Raw fg byte (type + flag bits); bit 0x20 on a loose floor means it never falls.
+    pub fn fg_byte(&self, room: usize, idx: usize) -> u8 {
+        self.fg[Self::at(room, idx)]
+    }
+
+    /// Button timer of a door-link entry (low 5 bits of doorlinks2, shared by all buttons with this link index).
+    pub fn link_timer(&self, idx: u8) -> u8 {
+        self.doorlinks2[idx as usize] & 0x1f
+    }
+
+    pub fn set_link_timer(&mut self, idx: u8, t: u8) {
+        let d = &mut self.doorlinks2[idx as usize];
+        *d = (*d & 0xe0) | (t & 0x1f);
     }
 
     /// Tiles a button (`modifier` = its link index) triggers: the chain runs until an entry with bit 7 set.

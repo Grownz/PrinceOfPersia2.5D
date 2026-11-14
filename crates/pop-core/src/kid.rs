@@ -20,6 +20,25 @@ pub struct Keys {
     pub shift: bool,
 }
 
+/// Things the kid does to the level; `sim::World` applies them right after the kid tick (docs/tiles.md).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Event {
+    /// kid (or its body when `dead`) is on a button tile
+    Button { room: u8, tilepos: u8, dead: bool },
+    /// make_loose_fall(1)
+    LooseFall { room: u8, tilepos: u8 },
+    /// do_knock(room, row): shake the loose floors of a row
+    Knock { room: u8, row: i32 },
+    StartSpike { room: u8, tilepos: u8 },
+    /// spikes impaled the kid: the spike tile gets modifier 255
+    Spiked { room: u8, tilepos: u8 },
+    /// chomper closed on the kid: modifier |= 0x80
+    Chomped { room: u8, tilepos: u8 },
+    StartChompers { room: u8, row: i32 },
+    /// sound id (docs/tiles.md section 9; sequence sound ops are mapped to ids)
+    Sound(u8),
+}
+
 /// Everything the kid needs to look at besides itself.
 pub struct Env<'a> {
     pub exe: &'a Exe,
@@ -90,6 +109,13 @@ pub struct Kid {
     bump_right: i32,
     /// false = only play the current sequence (sequence viewer)
     pub controlled: bool,
+    /// set by sequence ops 0xF4 (-1) / 0xF5 (+1), consumed by check_knock
+    knock: i8,
+    /// collision flags of the current row this tick / last tick (0 = unknown)
+    coll_now: RowFlags,
+    coll_prev: RowFlags,
+    /// effects on the level, drained by `sim::World`
+    pub events: Vec<Event>,
 }
 
 fn floor_div(a: i32, b: i32) -> i32 {
@@ -321,7 +347,13 @@ impl Kid {
         }
         self.check_collisions(env);
         self.check_bumped(env);
+        self.check_gate_push(env);
         self.check_action(env);
+        self.check_press(env);
+        self.check_spike_below(env);
+        self.check_spiked(env);
+        self.check_chomped_kid(env);
+        self.check_knock();
         self.check_room_change(env);
     }
 
@@ -673,14 +705,28 @@ impl Kid {
                     self.fall_x = x;
                     self.fall_y = y;
                 }
-                Op::Up => self.row -= 1,
-                Op::Down => self.row += 1,
+                Op::Up => {
+                    self.row -= 1;
+                    self.events.push(Event::StartChompers { room: self.room, row: self.row });
+                }
+                Op::Down => {
+                    self.row += 1;
+                    self.events.push(Event::StartChompers { room: self.room, row: self.row });
+                }
+                Op::KnockDown => self.knock = -1,
+                Op::KnockUp => self.knock = 1,
+                Op::Sound(n) => {
+                    // F2 arg: 1 = footstep (23), 2 = bump (8), 3 = drink (18); 0 and 4 (music) have no effect id here
+                    if let Some(id) = match n { 1 => Some(23), 2 => Some(8), 3 => Some(18), _ => None } {
+                        self.events.push(Event::Sound(id));
+                    }
+                }
                 Op::Jmp(t) => {
                     self.cur = env.exe.ops_from(t).unwrap_or_default();
                     self.pc = 0;
                 }
-                // feather fall is never active; sounds, items, knock and level end are not simulated yet
-                Op::JmpIfFeather(_) | Op::Sound(_) | Op::GetItem(_) | Op::KnockDown | Op::KnockUp | Op::EndLevel | Op::Nop => {}
+                // feather fall is never active; items and level end are not simulated yet
+                Op::JmpIfFeather(_) | Op::GetItem(_) | Op::EndLevel | Op::Nop => {}
             }
         }
     }
@@ -701,6 +747,7 @@ impl Kid {
     fn check_collisions(&mut self, env: &Env) {
         self.bump_left = -1;
         self.bump_right = -1;
+        self.coll_prev = [0; 10];
         if self.action == 7 {
             return;
         }
@@ -719,6 +766,7 @@ impl Kid {
             let idx = self.row - prow + 1;
             if *proom == self.room && (0..3).contains(&idx) {
                 let (p, n) = (&prev[idx as usize], &now[1]);
+                self.coll_prev = *p;
                 for col in (0..10).rev() {
                     if p[col] & 0x0F == 0 && n[col] & 0x0F != 0 {
                         self.bump_left = col as i32;
@@ -729,6 +777,7 @@ impl Kid {
                 }
             }
         }
+        self.coll_now = now[1];
         self.prev_coll = Some((self.room, self.row, now));
     }
 
@@ -806,6 +855,167 @@ impl Kid {
         self.forward(d);
     }
 
+    // ---------------------------------------------------------------- tile interaction (docs/tiles.md)
+
+    /// (room, tilepos) of a tile relative to the kid room, following room links.
+    fn locate(&self, env: &Env, col: i32, row: i32) -> Option<(u8, u8)> {
+        env.level.wrap(self.room as i32, col, row).map(|(r, i)| (r as u8, i as u8))
+    }
+
+    /// check_gate_push (0000:5BDB): a gate closing on the kid pushes it 5 units per tick.
+    fn check_gate_push(&mut self, env: &Env) {
+        if !(self.action == 7 || self.frame == 15 || (108..=110).contains(&self.frame)) {
+            return;
+        }
+        let col0 = self.col(env);
+        let mut tc = col0;
+        if self.tile(env, tc, self.row) != Tile::Gate {
+            tc -= 1;
+            if self.tile(env, tc, self.row) != Tile::Gate {
+                return;
+            }
+        }
+        let c = tc.clamp(0, 9) as usize;
+        let b = self.coll_box(env);
+        if self.coll_now[c] & self.coll_prev[c] == 0xFF && self.is_obstacle(env, tc, b.height) {
+            self.events.push(Event::Sound(8));
+            self.x = (self.x as i32 + 5 - 10 * (col0 <= tc) as i32) as u8;
+        }
+    }
+
+    /// check_press (0000:7E2E): standing on / hanging from / jumping under tiles that react.
+    fn check_press(&mut self, env: &Env) {
+        let (col, row) = (self.col(env), self.row);
+        let (c, r) = if (87..100).contains(&self.frame) || (135..141).contains(&self.frame) {
+            (col, row - 1)
+        } else if matches!(self.action, 7 | 5) || self.action < 2 {
+            if self.frame == 79 && self.tile(env, col, row - 1) == Tile::LooseFloor {
+                if let Some((room, tilepos)) = self.locate(env, col, row - 1) {
+                    self.events.push(Event::LooseFall { room, tilepos });
+                }
+                (col, row - 1)
+            } else if self.frame_rec(env).flags & 0x40 == 0 {
+                return;
+            } else {
+                (col, row)
+            }
+        } else {
+            return;
+        };
+        let Some((room, tilepos)) = self.locate(env, c, r) else { return };
+        match self.tile(env, c, r) {
+            Tile::DropButton | Tile::RaiseButton => self.events.push(Event::Button { room, tilepos, dead: !self.alive }),
+            Tile::LooseFloor => self.events.push(Event::LooseFall { room, tilepos }),
+            _ => {}
+        }
+    }
+
+    /// check_spike_below (0000:7EE1): spikes under the image box of the kid start to rise.
+    fn check_spike_below(&mut self, env: &Env) {
+        let b = self.coll_box(env);
+        let m7 = |x: i32| floor_div(x - 7 - X0, COL_W);
+        let (lo, hi) = (m7(b.left), m7(b.right));
+        if hi < 0 {
+            return;
+        }
+        for col in lo..=hi {
+            let mut row = self.row;
+            while row <= 2 {
+                let t = self.tile(env, col, row);
+                if t == Tile::Spikes {
+                    if let Some((room, tilepos)) = self.locate(env, col, row) {
+                        self.events.push(Event::StartSpike { room, tilepos });
+                    }
+                    break;
+                } else if !is_floor(t) {
+                    row += 1;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// is_spike_harmful (0000:9B4E)
+    fn spike_harm(m: u8) -> u8 {
+        if m == 0 || m == 255 {
+            0
+        } else if (m as i8) < 0 {
+            1
+        } else if m >= 5 {
+            0
+        } else {
+            2
+        }
+    }
+
+    /// check_spiked (0000:7394)
+    fn check_spiked(&mut self, env: &Env) {
+        if !self.alive {
+            return;
+        }
+        let (col, row) = (self.col(env), self.row);
+        if self.tile(env, col, row) != Tile::Spikes {
+            return;
+        }
+        let h = Self::spike_harm(self.tile_mod(env, col, row));
+        let f = self.frame;
+        if (h >= 2 && ((7..=14).contains(&f) || (34..=39).contains(&f))) || ((f == 43 || f == 26) && h != 0) {
+            self.spiked(env, col, row);
+        }
+    }
+
+    /// spiked (0000:601F)
+    fn spiked(&mut self, env: &Env, col: i32, row: i32) {
+        if let Some((room, tilepos)) = self.locate(env, col, row) {
+            self.events.push(Event::Spiked { room, tilepos });
+        }
+        self.y = Y_LAND[(self.row + 1).clamp(0, 4) as usize] as u8;
+        self.x = (X0 + COL_W * col + 10) as u8;
+        self.forward(8);
+        self.fall_y = 0;
+        self.events.push(Event::Sound(48));
+        self.hp = 0;
+        self.alive = false;
+        self.start_seq(env, 51);
+        self.play_seq(env);
+    }
+
+    /// check_chomped_kid (0000:5B13)
+    fn check_chomped_kid(&mut self, env: &Env) {
+        if !self.alive {
+            return;
+        }
+        for col in 0..10i32 {
+            if self.coll_now[col as usize] != 0xFF || self.tile(env, col, self.row) != Tile::Chomper || self.tile_mod(env, col, self.row) & 0x7F != 2 {
+                continue;
+            }
+            if let Some((room, tilepos)) = self.locate(env, col, self.row) {
+                self.events.push(Event::Chomped { room, tilepos });
+            }
+            if self.frame != 178 {
+                self.x = (X0 + COL_W * col + 7) as u8;
+                self.forward(7 - (!self.facing_left) as i32);
+                self.y = Y_LAND[(self.row + 1).clamp(0, 4) as usize] as u8;
+                self.hp = 0;
+                self.alive = false;
+                self.events.push(Event::Sound(46));
+                self.start_seq(env, 54);
+                self.play_seq(env);
+            }
+            return;
+        }
+    }
+
+    /// check_knock (0000:4F7A): landings shake the row of the kid, bumping the ceiling shakes the row above.
+    fn check_knock(&mut self) {
+        if self.knock != 0 {
+            let row = self.row - (self.knock > 0) as i32;
+            self.events.push(Event::Knock { room: self.room, row });
+            self.knock = 0;
+        }
+    }
+
     // ---------------------------------------------------------------- floor checks and falling
 
     /// check_action (0000:7309)
@@ -835,6 +1045,7 @@ impl Kid {
     /// start_fall (0000:75F5)
     fn start_fall(&mut self, env: &Env) {
         self.row += 1;
+        self.events.push(Event::StartChompers { room: self.room, row: self.row });
         let seq = match self.frame {
             9 => 7,
             13 => 19,
@@ -872,6 +1083,22 @@ impl Kid {
         if t == Tile::Wall {
             self.in_wall(env);
         } else if is_floor(t) {
+            // land (0000:5EF8): spikes at the foot (or just behind it) kill if they are not retracted
+            let (col, row, d) = (self.col(env), self.row, self.dir());
+            let spike_col = if t == Tile::Spikes {
+                Some(col)
+            } else if self.alive && self.dist_weight(env) >= 12 && self.tile(env, col - d, row) == Tile::Spikes {
+                Some(col - d)
+            } else {
+                None
+            };
+            if let Some(sc) = spike_col {
+                if Self::spike_harm(self.tile_mod(env, sc, row)) != 0 {
+                    self.spiked(env, sc, row);
+                    return;
+                }
+            }
+            self.events.push(Event::StartChompers { room: self.room, row: self.row });
             self.y = land as u8;
             let fy = self.fall_y;
             let seq = if fy < 22 {
@@ -932,5 +1159,6 @@ impl Kid {
             }
         }
         self.prev_coll = None;
+        self.events.push(Event::StartChompers { room: self.room, row: self.row });
     }
 }
