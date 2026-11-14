@@ -46,6 +46,7 @@ Done: runtime tile state and the original tick machine in `pop-core::sim` (`Worl
 Loose floors, pressure plates + gates, spikes, chompers, exit doors, raise/drop buttons, mirror, skeletons, flame/torch events.
 
 ### M5 - Enemies and combat
+Analysis done: docs/combat.md (guard level-tail fields: x 2167, seq_lo 2191, skill 2215, seq_hi 2239, colour 2263; HP, AI decision tree and per-skill tables, sword fight timing, damage, shadow/skeleton/Jaffar events, HP and level flow). `Level` guards now carry skill and colour. Porting is next: guards/Opp swap, autocontrol, control_with_sword, hit detection, HP. Note from the analysis: fights run at about 10 Hz in real time while the kid's sword is drawn (6 timer units per frame instead of 5).
 Guard AI per skill level, sword fighting states (advance, retreat, block, strike), health and damage, shadow, skeleton, Vizier. Cutscenes/level events (level 3 mirror, level 12 etc.).
 
 ### M6 - Game flow

@@ -286,6 +286,8 @@ start_chompers `950B`, release_arrows `7B48`, room change `3B7A`, seq setters `5
 
 Tile mechanics (trobs, mobs, gates, buttons, loose floors, spikes, chompers, exit door, potions; check_press, check_spike_below,
 check_spiked, spiked, check_chomped_kid, check_gate_push, check_knock, start_chompers, trigger_button) are in `docs/tiles.md`.
+Guards, sword fighting, shadow/skeleton/Jaffar/mouse, hit points, death and level flow (control_with_sword, guard control `857B`,
+bump_into_opponent, take_hp, the level-tail guard fields 2119..2286) are in `docs/combat.md`.
 
 ## 6. Not verified
 
