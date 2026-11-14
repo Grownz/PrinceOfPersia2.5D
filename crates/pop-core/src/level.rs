@@ -1,4 +1,4 @@
-//! Level resource (LEVELS.DAT; 2304 bytes after the checksum byte, ids 2000 + level number).
+//! Level resource (LEVELS.DAT; 2305 bytes, ids 2000 + level number).
 //! Layout (verified against the shipped data, see tests):
 //!   0    fg[720]        tile type (low 5 bits) + flag bits (high 3)
 //!   720  bg[720]        tile modifier (door-link index for buttons, gate state, potion kind, ...)
@@ -17,7 +17,7 @@ const ROOMLINKS: usize = DOORLINKS + 512;
 const START: usize = 2112;
 const GUARD_TILE: usize = 2119;
 const GUARD_DIR: usize = GUARD_TILE + ROOMS;
-const MIN_LEN: usize = GUARD_DIR + ROOMS; // level 15 is 1 byte shorter than the rest
+const MIN_LEN: usize = GUARD_DIR + ROOMS; // resource 2015 is 1 byte shorter than the rest
 
 /// Tile types (low 5 bits of the fg byte).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -9,6 +9,7 @@ Original assets are read at runtime from `Original_data/` (not committed; overri
 - [x] Workspace, `.DAT` archive reader, level parser (tiles + room links), Bevy window drawing room 5 of level 1 as placeholder blocks.
 - [x] Test: level 1 loads, room links match the original data.
 - [x] M1.1-1.3 done: level start (room/tile/dir), guards (room/tile/dir), full tile-type enum, typed button -> gate/exit door links. Verified by tests against all shipped levels (every button resolves to a gate or exit door).
+- [x] M1.4 done: image decoder (`pop-core::image`: raw / RLE / LZG, left-right and up-down, 1 and 4 bpp) and VGA palettes. All 1300+ image resources in the shipped DATs decode; title frame, kid sprite and the intro text were checked visually. `cargo run -p pop-core --example dump_image` writes a PPM for inspection.
 - Known gaps: guard skill/colour and the other tail bytes (2115-2118, 2167+, room coordinates at 2048) are unparsed; resource 2015 has a deviating layout (room links padded with 255); tile flag bits (high 3 bits of fg) have no meaning assigned yet; start tile semantics (which tile the kid stands on) are unchecked visually.
 
 ## Milestones
