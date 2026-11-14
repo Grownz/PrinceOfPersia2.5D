@@ -119,9 +119,8 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef) {
         }
         Gate => {
             floor(b, &stone);
-            // Data only contains modifiers 0, 1, 2 (mostly 2) and 188; 188 = fully open at runtime.
-            // Treating 0 and 188 as open, 1 and 2 as closed is a guess.
-            let open = if matches!(t.modifier, 0 | 188) { 1.0 } else { 0.0 };
+            // runtime gate modifier: 0 = closed, 188 = open (docs/tiles.md)
+            let open = (t.modifier as f32 / 188.0).clamp(0.0, 1.0);
             for i in 0..5 {
                 let sx = x + 0.1 + i as f32 * 0.2;
                 b.put(&metal, Vec3::new(sx, y + open * TILE_H * 0.8, -0.05), Vec3::new(sx + 0.05, y + TILE_H * 0.95, 0.05));

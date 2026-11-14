@@ -94,6 +94,15 @@ impl Level {
             start_dir: b[START + 2],
             guards: Vec::new(),
         };
+        // load_alter_mod (0000:B656, docs/tiles.md section 1): raw modifiers -> runtime values
+        for i in 0..N {
+            l.bg[i] = match Tile::from_u8(l.fg[i]) {
+                Tile::Gate => if l.bg[i] == 1 { 188 } else { 0 }, // 188 = open, 0 = closed
+                Tile::LooseFloor => 0,
+                Tile::Potion => l.bg[i] << 5,
+                _ => l.bg[i],
+            };
+        }
         for (r, link) in l.links.iter_mut().enumerate() {
             link.copy_from_slice(&b[ROOMLINKS + r * 4..][..4]);
         }
