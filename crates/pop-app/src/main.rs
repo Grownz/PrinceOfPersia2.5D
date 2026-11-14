@@ -33,11 +33,11 @@ fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<
     let wall_mat = mats.add(Color::srgb(0.4, 0.35, 0.3));
     for row in 0..ROWS {
         for col in 0..COLS {
-            let (t, _) = g.level.tile(room, col, row);
+            let t = g.level.tile(room, col, row).kind;
             let (x, y) = (col as f32, -(row as f32) * 3.0);
             match t {
-                0 => {}                                                                            // empty
-                20 => { cmds.spawn((Mesh3d(wall.clone()), MeshMaterial3d(wall_mat.clone()), Transform::from_xyz(x, y + 1.5, 0.0))); } // wall
+                Tile::Empty => {}                                                                            // empty
+                Tile::Wall => { cmds.spawn((Mesh3d(wall.clone()), MeshMaterial3d(wall_mat.clone()), Transform::from_xyz(x, y + 1.5, 0.0))); } // wall
                 _ => { cmds.spawn((Mesh3d(cube.clone()), MeshMaterial3d(floor_mat.clone()), Transform::from_xyz(x, y, 0.0))); }       // floor-like
             }
         }
