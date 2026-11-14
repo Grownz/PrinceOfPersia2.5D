@@ -6,6 +6,8 @@ pub mod image;
 pub mod kid;
 pub mod level;
 pub mod sim;
+#[cfg(test)]
+mod world_tests;
 
 #[cfg(test)]
 mod tests {

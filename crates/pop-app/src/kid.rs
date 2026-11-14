@@ -6,15 +6,15 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use pop_core::kid::{Env, Keys, Kid};
+use pop_core::kid::{Keys, Kid};
+use pop_core::sim::{Data, World};
+use std::sync::Arc;
 use pop_core::{dat::Dat, exe::{Exe, Frame, SEQUENCES}, image, level::TILE_H_PX};
 use std::collections::HashMap;
 
 #[derive(Resource)]
 pub struct KidAssets {
-    pub exe: Exe,
-    pub frames: Vec<Frame>,
-    pub sizes: Vec<(u16, u16)>,
+    pub data: Arc<Data>,
     dat: Dat,
     pal: Vec<[u8; 3]>,
     /// image number -> (material, width px, height px)
@@ -33,7 +33,8 @@ impl KidAssets {
         let exe = Exe::open(format!("{dir}/PRINCE.EXE")).expect("cannot open PRINCE.EXE (set POP_DATA)");
         let dat = Dat::open(format!("{dir}/KID.DAT")).expect("cannot open KID.DAT");
         let pal = image::palette(dat.get(400).unwrap()).unwrap();
-        KidAssets { frames: exe.kid_frames(), sizes: image::image_sizes(&dat, 401, 220), exe, dat, pal, cache: HashMap::new() }
+        let data = Arc::new(Data { frames: exe.kid_frames(), sizes: image::image_sizes(&dat, 401, 220), exe });
+        KidAssets { data, dat, pal, cache: HashMap::new() }
     }
 }
 
@@ -97,10 +98,9 @@ fn world_pos(k: &Kid, frames: &[Frame]) -> Vec2 {
 }
 
 fn respawn(g: &mut Game, a: &KidAssets) {
-    let env = Env { exe: &a.exe, frames: &a.frames, level: &g.levels[g.level], sizes: &a.sizes };
-    g.kid = Kid::spawn(&env, g.level);
-    g.room = g.kid.room as usize;
-    g.kid_prev = (world_pos(&g.kid, &a.frames), g.kid.room);
+    g.world = World::new(a.data.clone(), g.levels[g.level].clone(), g.level);
+    g.room = g.world.kid.room as usize;
+    g.kid_prev = (world_pos(&g.world.kid, &a.data.frames), g.world.kid.room);
 }
 
 /// Sequence viewer and respawn keys.
@@ -112,38 +112,37 @@ pub fn keys(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAssets>
     }
     let step = k.just_pressed(KeyCode::Period) as i32 - k.just_pressed(KeyCode::Comma) as i32;
     if step != 0 {
-        g.kid.seq = ((g.kid.seq as i32 - 1 + step).rem_euclid(SEQUENCES as i32) + 1) as usize;
+        g.world.kid.seq = ((g.world.kid.seq as i32 - 1 + step).rem_euclid(SEQUENCES as i32) + 1) as usize;
     }
     if k.just_pressed(KeyCode::KeyF) {
-        g.kid.facing_left = !g.kid.facing_left;
+        g.world.kid.facing_left = !g.world.kid.facing_left;
     }
     if step != 0 || k.just_pressed(KeyCode::Space) {
-        let seq = g.kid.seq.max(1);
-        let Game { kid, levels, level, .. } = &mut *g;
-        let env = Env { exe: &a.exe, frames: &a.frames, level: &levels[*level], sizes: &a.sizes };
-        kid.controlled = false;
-        kid.start_seq(&env, seq);
+        let seq = g.world.kid.seq.max(1);
+        g.world.kid_start_seq(seq);
     }
 }
 
-/// Logic tick for the kid (called from the fixed-step system when a logic tick ran).
-pub fn tick(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: &ButtonInput<KeyCode>) {
+/// 60 Hz step of the world; on logic ticks the latched keys are consumed (or the test script is played).
+pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: &ButtonInput<KeyCode>) {
+    if g.world.next_is_tick() {
+        g.kid_prev = (world_pos(&g.world.kid, &a.data.frames), g.world.kid.room);
+    }
     let mut keys = latch.0;
-    latch.0 = pressed(held);
     if let Some(sc) = script() {
         keys = sc.get(g.world.tick as usize).copied().unwrap_or_default();
     }
-    g.kid_prev = (world_pos(&g.kid, &a.frames), g.kid.room);
-    let Game { kid, levels, level, .. } = &mut *g;
-    let env = Env { exe: &a.exe, frames: &a.frames, level: &levels[*level], sizes: &a.sizes };
-    kid.tick(&env, keys);
-    if g.kid.controlled {
-        if (1..=pop_core::level::ROOMS as u8).contains(&g.kid.room) {
-            g.room = g.kid.room as usize; // room 0 = outside the level: keep showing the last room
+    if g.world.step(keys) {
+        latch.0 = pressed(held);
+        g.world.sounds.clear(); // audio comes later
+        if g.world.kid.controlled {
+            if (1..=pop_core::level::ROOMS as u8).contains(&g.world.kid.room) {
+                g.room = g.world.kid.room as usize; // room 0 = outside the level: keep showing the last room
+            }
+        } else if g.world.kid.x < 20 || g.world.kid.x > 200 {
+            g.world.kid.x = 100; // sequence viewer: keep the kid in view
+            g.kid_prev.0.x = world_pos(&g.world.kid, &a.data.frames).x;
         }
-    } else if g.kid.x < 20 || g.kid.x > 200 {
-        g.kid.x = 100; // sequence viewer: keep the kid in view
-        g.kid_prev.0.x = world_pos(&g.kid, &a.frames).x;
     }
 }
 
@@ -156,18 +155,18 @@ pub fn render(
 ) {
     let mut a = a;
     let Ok((mut t, mut vis, mut mat)) = q.single_mut() else { return };
-    let img_no = a.frames.get(g.kid.frame as usize).map_or(255, |f| f.image);
+    let img_no = a.data.frames.get(g.world.kid.frame as usize).map_or(255, |f| f.image);
     let Some((m, w, h)) = (img_no != 255).then(|| material_for(&mut a, &mut imgs, &mut mats, img_no)).flatten() else {
         *vis = Visibility::Hidden;
         return;
     };
     *vis = Visibility::Inherited;
     mat.0 = m;
-    let cur = world_pos(&g.kid, &a.frames);
-    let p = if g.kid_prev.1 == g.kid.room { g.kid_prev.0.lerp(cur, g.world.alpha()) } else { cur };
+    let cur = world_pos(&g.world.kid, &a.data.frames);
+    let p = if g.kid_prev.1 == g.world.kid.room { g.kid_prev.0.lerp(cur, g.world.alpha()) } else { cur };
     let (sw, sh) = (w / 32.0, h * crate::room::TILE_H / TILE_H_PX as f32);
     // facing left: p.x is the left edge, image as stored; facing right: p.x is the right edge and the image is mirrored
-    let (cx, flip) = if g.kid.facing_left { (p.x + sw / 2.0, 1.0) } else { (p.x - sw / 2.0, -1.0) };
+    let (cx, flip) = if g.world.kid.facing_left { (p.x + sw / 2.0, 1.0) } else { (p.x - sw / 2.0, -1.0) };
     t.translation = Vec3::new(cx, p.y + sh / 2.0, 0.6);
     t.scale = Vec3::new(flip * sw, sh, 1.0);
 }

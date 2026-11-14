@@ -42,7 +42,7 @@ Status: the flat-ground controller is in (`pop-core::kid`, rules from docs/mecha
 5. Headless replay tests: recorded input sequences must give identical positions each run (determinism); compare against published reference behaviour (e.g. jump distances).
 
 ### M4 - Tile mechanics
-Analysis done: docs/tiles.md (runtime tile state, tick order, gates, buttons, loose floors, spikes, chompers, sound ids, RNG). Level::parse now applies the original load-time modifier conversion (gate 1 -> 188 open, else 0). Porting (a `Tiles` runtime state in pop-core::sim with trob/mob lists) is next; torches/potions/shake sounds draw from the same RNG as the guards, so the port must keep call order.
+Done: runtime tile state and the original tick machine in `pop-core::sim` (`World`: trobs, mobs, event queue from the kid; order mobs -> trobs -> kid). Gates (open/close/hold/push), buttons with shared link timers and chain triggers, loose floors (shake, fall in 10 ticks, mob physics, landing effects, hit on the kid), spikes (23-tick cycle, harm rules, impaling), chompers (staggered start, kill), exit door timing, knocks, sound ids logged in `World::sounds`. Tests: button -> gate, loose floor timing, spike cycle and kill, chomper stagger, all 15 levels run 400 ticks. App renders the runtime level (gates, spikes, falling floors move). Not simulated: torch/potion/sword animation (they also use the shared RNG in the original), guards/shadow, entering the level door, skeleton, mirror, potion effects, pressed-button and chomper drawing.
 Loose floors, pressure plates + gates, spikes, chompers, exit doors, raise/drop buttons, mirror, skeletons, flame/torch events.
 
 ### M5 - Enemies and combat

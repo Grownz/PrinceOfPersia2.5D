@@ -14,7 +14,6 @@ struct Game {
     level: usize,
     /// 1-based
     room: usize,
-    kid: pop_core::kid::Kid,
     /// kid position (world units) and room at the start of the last logic tick, for interpolation
     kid_prev: (Vec2, u8),
     kid_respawn: bool,
@@ -29,7 +28,9 @@ fn main() {
     let levels: Vec<Level> = (2000..=2014).map(|id| Level::parse(dat.get(id).expect("level")).expect("bad level")).collect();
     let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<usize>().ok());
     let level = env("POP_LEVEL").filter(|&l| l < levels.len()).unwrap_or(1);
-    let room = env("POP_ROOM").filter(|r| (1..=ROOMS).contains(r)).unwrap_or(levels[level].start_room as usize);
+    let assets = kid::KidAssets::load(&dir);
+    let world = sim::World::new(assets.data.clone(), levels[level].clone(), level);
+    let room = env("POP_ROOM").filter(|r| (1..=ROOMS).contains(r)).unwrap_or(world.kid.room as usize);
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -38,14 +39,12 @@ fn main() {
         }))
         .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
         .insert_resource(Time::<Fixed>::from_hz(sim::STEP_HZ))
-        .insert_resource(Game { world: sim::World::default(), levels, level, room, kid: default(), kid_prev: (Vec2::ZERO, 0), kid_respawn: true })
+        .insert_resource(Game { world, levels, level, room, kid_prev: (Vec2::ZERO, 0), kid_respawn: false })
         .insert_resource(kid::Latch::default())
-        .insert_resource(kid::KidAssets::load(&dir))
+        .insert_resource(assets)
         .add_systems(Startup, (setup, kid::setup)) // first room is built by room::rebuild_on_change
         .add_systems(FixedUpdate, |mut g: ResMut<Game>, a: Res<kid::KidAssets>, mut latch: ResMut<kid::Latch>, keys: Res<ButtonInput<KeyCode>>| {
-            if g.world.step() {
-                kid::tick(&mut g, &a, &mut latch, &keys);
-            }
+            kid::fixed_step(&mut g, &a, &mut latch, &keys);
         })
         .add_systems(Update, (kid::latch_keys, navigate, kid::keys, room::rebuild_on_change, kid::render, debug_text, screenshot_and_quit).chain())
         .run();
@@ -81,7 +80,6 @@ fn navigate(keys: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, mut text: Quer
     let step = keys.just_pressed(KeyCode::PageUp) as i32 - keys.just_pressed(KeyCode::PageDown) as i32;
     if step != 0 {
         g.level = (g.level as i32 + step).rem_euclid(g.levels.len() as i32) as usize;
-        g.room = g.levels[g.level].start_room as usize;
         g.kid_respawn = true;
     }
     if keys.just_pressed(KeyCode::Tab) {
@@ -92,12 +90,12 @@ fn navigate(keys: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, mut text: Quer
 }
 
 fn debug_text(g: Res<Game>, mut q: Query<&mut Text, With<DebugText>>) {
-    let l = &g.levels[g.level];
+    let l = &g.world.level;
     let [left, right, up, down] = l.links[g.room - 1];
     for mut t in &mut q {
         t.0 = format!(
             "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}  kid: seq {} frame {} action {} x {} y {} room {} row {} fall {} hp {}\narrows+Shift kid  Ctrl+arrows room  PgUp/PgDn level  , . sequence viewer  Space restart  F flip  C control  Tab text",
-            g.level, g.room, left, right, up, down, l.start_room, l.start_tile, g.world.tick, g.kid.seq, g.kid.frame, g.kid.action, g.kid.x, g.kid.y, g.kid.room, g.kid.row, g.kid.fall_y, g.kid.hp
+            g.level, g.room, left, right, up, down, l.start_room, l.start_tile, g.world.tick, g.world.kid.seq, g.world.kid.frame, g.world.kid.action, g.world.kid.x, g.world.kid.y, g.world.kid.room, g.world.kid.row, g.world.kid.fall_y, g.world.kid.hp
         );
     }
 }

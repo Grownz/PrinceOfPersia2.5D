@@ -60,11 +60,11 @@ impl B<'_, '_, '_> {
 }
 
 pub fn build_room(mut cmds: Commands, g: Res<Game>, p: Res<Palette>) {
-    spawn_room(&mut cmds, &g.levels[g.level], g.room, Vec3::ZERO, &p);
+    spawn_room(&mut cmds, &g.world.level, &g.world.mobs, g.room, Vec3::ZERO, &p);
 }
 
 /// Spawn `room` (1-based) with its left/bottom corner at `origin`; neighbours can be drawn with other origins.
-pub fn spawn_room(cmds: &mut Commands, level: &Level, room: usize, origin: Vec3, p: &Palette) {
+pub fn spawn_room(cmds: &mut Commands, level: &Level, mobs: &[pop_core::sim::Mob], room: usize, origin: Vec3, p: &Palette) {
     let mut b = B { cmds, p, origin };
     // back wall
     b.put(&p.dark, Vec3::new(-0.5, -SLAB, -1.0), Vec3::new(10.5, 3.0 * TILE_H, -0.9));
@@ -73,6 +73,11 @@ pub fn spawn_room(cmds: &mut Commands, level: &Level, room: usize, origin: Vec3,
             let t = level.tile(room, col, row);
             tile(&mut b, col as f32, (ROWS - 1 - row) as f32 * TILE_H, t);
         }
+    }
+    // falling loose floors: mob y is a screen line, 65 + 63 * row = floor line of that row
+    for m in mobs.iter().filter(|m| m.room as usize == room) {
+        let (x, y) = ((m.xh >> 2) as f32, (191.0 - m.y as f32) * TILE_H / 63.0);
+        b.put(&p.wood, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y, 0.5));
     }
 }
 
@@ -100,9 +105,11 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef) {
         LooseFloor => floor(b, &wood),
         Spikes => {
             floor(b, &stone);
+            // modifier: 0 retracted, 1..=4 rising, >= 0x80 or 255 out, 5..=9 retracting
+            let h = match t.modifier { 0 => 0.04, 255 => 0.45, m if m & 0x80 != 0 => 0.45, m => (m as f32 * 0.11).min(0.45) };
             for i in 0..4 {
                 let sx = x + 0.15 + i as f32 * 0.23;
-                b.put(&metal, Vec3::new(sx, y, -0.05), Vec3::new(sx + 0.06, y + 0.45, 0.05));
+                b.put(&metal, Vec3::new(sx, y, -0.05), Vec3::new(sx + 0.06, y + h, 0.05));
             }
         }
         Pillar | BigPillarBottom | BigPillarTop | LatticePillar | LatticeSupport => {
@@ -162,11 +169,11 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef) {
 }
 
 /// Despawn and rebuild whenever level or room changed.
-pub fn rebuild_on_change(mut cmds: Commands, g: Res<Game>, old: Query<Entity, With<RoomEntity>>, p: Res<Palette>, mut last: Local<(usize, usize)>) {
-    if *last == (g.level, g.room) {
+pub fn rebuild_on_change(mut cmds: Commands, g: Res<Game>, old: Query<Entity, With<RoomEntity>>, p: Res<Palette>, mut last: Local<(usize, usize, u32)>) {
+    if *last == (g.level, g.room, g.world.version) {
         return;
     }
-    *last = (g.level, g.room);
+    *last = (g.level, g.room, g.world.version);
     for e in &old {
         cmds.entity(e).despawn();
     }
