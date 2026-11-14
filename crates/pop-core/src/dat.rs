@@ -1,11 +1,11 @@
 //! Reader for Prince of Persia `.DAT` archives.
 //! Layout: u32 index offset, then u16 index size; at the index offset: u16 count, count * {u16 id, u32 offset, u16 size}.
-//! Each resource starts with a 1-byte checksum (compressed images additionally have a type byte; handled later).
+//! Each resource is a 1-byte checksum followed by `size` payload bytes.
 use std::{collections::BTreeMap, fs, io, path::Path};
 
 pub struct Dat {
     data: Vec<u8>,
-    /// resource id -> (offset, size) of the payload (checksum byte excluded)
+    /// resource id -> (offset, size) of the payload (the checksum byte before it is excluded)
     index: BTreeMap<u16, (usize, usize)>,
 }
 
@@ -31,11 +31,11 @@ impl Dat {
         for i in 0..count {
             let e = idx + 2 + i * 8;
             let (id, off, size) = (u16le(&data, e)?, u32le(&data, e + 2)? as usize, u16le(&data, e + 6)? as usize);
-            // size includes the checksum byte
-            if size == 0 || off + size > data.len() {
+            // the size field counts the payload only; a 1-byte checksum precedes it
+            if off + 1 + size > data.len() {
                 return Err(bad());
             }
-            index.insert(id, (off + 1, size - 1));
+            index.insert(id, (off + 1, size));
         }
         Ok(Self { data, index })
     }

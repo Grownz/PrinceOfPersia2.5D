@@ -1,6 +1,7 @@
 //! Engine-independent core: original data formats and (later) the game simulation.
 //! No graphics/audio deps, so mechanics can be tested headless against the original.
 pub mod dat;
+pub mod image;
 pub mod level;
 pub mod sim;
 
@@ -48,5 +49,29 @@ mod tests {
         for (_, l) in levels().into_iter().take(15) {
             assert!(l.links.iter().flatten().all(|&r| r as usize <= ROOMS));
         }
+    }
+
+    #[test]
+    fn all_images_decode() {
+        let mut n = 0;
+        for e in std::fs::read_dir(DIR).unwrap().map(|e| e.unwrap().path()) {
+            let name = e.file_name().unwrap().to_string_lossy().to_uppercase();
+            if !name.ends_with(".DAT") || name.contains("SND") || name.starts_with("LEVELS") {
+                continue;
+            }
+            let d = Dat::open(&e).unwrap();
+            for id in d.ids() {
+                let r = d.get(id).unwrap();
+                let w = |o: usize| r.get(o..o + 2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]) as usize);
+                let (h, wd, fl) = (w(0), w(2), w(4));
+                // header filter: plausible size, 1 or 4 bpp, compression 0..=4
+                if (1..=400).contains(&h) && (1..=400).contains(&wd) && matches!(fl >> 12, 0 | 0xb) && (fl >> 8) & 15 <= 4 {
+                    let im = super::image::decode(r).unwrap_or_else(|| panic!("{name} resource {id} failed"));
+                    assert_eq!(im.pixels.len(), wd * h);
+                    n += 1;
+                }
+            }
+        }
+        assert!(n >= 1300, "only {n} images");
     }
 }
