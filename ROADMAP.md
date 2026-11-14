@@ -33,6 +33,8 @@ Each milestone ends in something runnable and, where possible, a headless test i
 4. Debug overlay: room/tile coordinates, tick counter.
 
 ### M3 - Player mechanics (core of fidelity)
+Status: kid sequence player (`pop-core::kid`) and a sequence viewer with the original KID.DAT sprites in the app (, . = choose sequence, Space = restart, F = flip) exist, so extracted sequences/frames can be checked by eye. Movement units/placement are provisional. The control/physics logic is being analysed from the EXE code (docs/mechanics.md, tools/disasm) before the real controller is written.
+
 1. Simulation steps at 60 Hz; original logic runs every 5th step (12 ticks/s, `sim::World`), `World::alpha()` drives render interpolation. Done in the skeleton, the interpolation itself comes with the kid.
 2. Input -> action mapping (keyboard + gamepad) matching original controls.
 3. Kid state machine from the original sequence tables: stand, run, turn, jump (standing/running), climb, hang, drop, crouch, fall damage, death.

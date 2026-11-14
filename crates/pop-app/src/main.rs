@@ -1,5 +1,6 @@
 //! Room viewer: draws one room of a level as procedural 3D geometry (placeholder art).
 //! Keys: arrows = neighbouring room, PageUp/PageDown = level, Tab = debug text.
+mod kid;
 mod room;
 
 use bevy::prelude::*;
@@ -13,6 +14,8 @@ struct Game {
     level: usize,
     /// 1-based
     room: usize,
+    kid: pop_core::kid::Kid,
+    kid_prev: (i32, i32),
 }
 
 #[derive(Component)]
@@ -33,12 +36,17 @@ fn main() {
         }))
         .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
         .insert_resource(Time::<Fixed>::from_hz(sim::STEP_HZ))
-        .insert_resource(Game { world: sim::World::default(), levels, level, room })
-        .add_systems(Startup, setup) // first room is built by room::rebuild_on_change
-        .add_systems(FixedUpdate, |mut g: ResMut<Game>| {
-            g.world.step();
+        .insert_resource(Game { world: sim::World::default(), levels, level, room, kid: default(), kid_prev: (0, 0) })
+        .insert_resource(kid::KidAssets::load(&dir))
+        .add_systems(Startup, (setup, kid::setup)) // first room is built by room::rebuild_on_change
+        .add_systems(FixedUpdate, |mut g: ResMut<Game>, a: Option<Res<kid::KidAssets>>| {
+            if g.world.step() {
+                if let Some(a) = a {
+                    kid::tick(&mut g, &a);
+                }
+            }
         })
-        .add_systems(Update, (navigate, room::rebuild_on_change, debug_text, screenshot_and_quit).chain())
+        .add_systems(Update, (navigate, kid::keys, room::rebuild_on_change, kid::render, debug_text, screenshot_and_quit).chain())
         .run();
 }
 
@@ -85,8 +93,8 @@ fn debug_text(g: Res<Game>, mut q: Query<&mut Text, With<DebugText>>) {
     let [left, right, up, down] = l.links[g.room - 1];
     for mut t in &mut q {
         t.0 = format!(
-            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}\narrows room   PgUp/PgDn level   Tab text",
-            g.level, g.room, left, right, up, down, l.start_room, l.start_tile, g.world.tick
+            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}  kid: seq {} frame {} action {} x {} y {}\narrows room  PgUp/PgDn level  , . sequence  Space restart  F flip  Tab text",
+            g.level, g.room, left, right, up, down, l.start_room, l.start_tile, g.world.tick, g.kid.seq, g.kid.frame, g.kid.action, g.kid.x, g.kid.y
         );
     }
 }

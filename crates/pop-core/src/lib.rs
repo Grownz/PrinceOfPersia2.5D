@@ -3,6 +3,7 @@
 pub mod dat;
 pub mod exe;
 pub mod image;
+pub mod kid;
 pub mod level;
 pub mod sim;
 
@@ -103,5 +104,19 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn kid_plays_start_run() {
+        use super::{exe::Exe, kid::Kid};
+        let e = Exe::open(format!("{DIR}PRINCE.EXE")).unwrap();
+        let frames = e.kid_frames();
+        let mut k = Kid::default();
+        k.start(&e, 1);
+        let seen: Vec<u8> = (0..6).map(|_| { k.tick(&e, &frames); k.frame }).collect();
+        assert_eq!(&seen[..4], &[1, 2, 3, 4]);
+        assert_eq!(k.action, 1);
+        assert!(k.x > 0);
+        for _ in 0..200 { k.tick(&e, &frames); } // loops without hanging
     }
 }
