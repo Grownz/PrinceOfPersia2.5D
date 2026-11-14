@@ -73,8 +73,25 @@ impl Ctrl {
     }
 }
 
-/// Collision data of one tile column for the "box starts overlapping a wall" test (check_collisions).
-type RowFlags = [u8; 10];
+/// The original keeps all collision data in 10-byte arrays, one byte per tile column; columns of neighbouring rooms are
+/// stored at their normalised index together with the room they were read from (docs/collisions.md 1.3).
+#[derive(Clone, Debug)]
+struct CollData {
+    /// rows: 0 = curr_row, 1 = curr_row + 1, 2 = curr_row - 1 (flags are never cleared, rooms are reset to -1 each tick)
+    flags: [[u8; 10]; 3],
+    rooms: [[i8; 10]; 3],
+    /// previous tick, matched to curr_row by move_coll_to_prev
+    prev_flags: [u8; 10],
+    prev_rooms: [i8; 10],
+    coll_row: i8,
+    prev_coll_row: i8,
+}
+
+impl Default for CollData {
+    fn default() -> Self {
+        CollData { flags: [[0; 10]; 3], rooms: [[-1; 10]; 3], prev_flags: [0; 10], prev_rooms: [-1; 10], coll_row: 0, prev_coll_row: -1 }
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct Kid {
@@ -103,23 +120,64 @@ pub struct Kid {
     /// raw shift key, read by check_grab
     shift: bool,
     grab_timer: i32,
-    /// collision data of last tick for rows (row-1, row, row+1): (room, row, flags)
-    prev_coll: Option<(u8, i32, [RowFlags; 3])>,
+    cd: CollData,
     bump_left: i32,
     bump_right: i32,
+    /// Frame record, tile column and collision box as the original last loaded them (0000:0F25..0F2F, in_wall, start_fall).
+    /// Bumps and gate pushes change x/frame without reloading these: the rest of the tick sees the old values (4.6).
+    snap_rec: Frame,
+    snap_col: i32,
+    snap_box: CollBox,
+    /// the obstacle tile found by check_bumped: (room, normalised col, row), and coll_tile_left_x
+    ot: (i32, i32, i32),
+    coll_tile_left_x: i32,
     /// false = only play the current sequence (sequence viewer)
     pub controlled: bool,
     /// set by sequence ops 0xF4 (-1) / 0xF5 (+1), consumed by check_knock
     knock: i8,
-    /// collision flags of the current row this tick / last tick (0 = unknown)
-    coll_now: RowFlags,
-    coll_prev: RowFlags,
     /// effects on the level, drained by `sim::World`
     pub events: Vec<Event>,
 }
 
 fn floor_div(a: i32, b: i32) -> i32 {
     a.div_euclid(b)
+}
+
+/// get_tile normalisation (0000:6D99): out-of-range columns/rows move into the neighbour room; room 0 stays 0.
+fn norm(level: &Level, mut room: i32, mut col: i32, mut row: i32) -> (i32, i32, i32) {
+    for _ in 0..8 {
+        let l = if (1..=24).contains(&room) { level.links[room as usize - 1] } else { [0; 4] };
+        if col < 0 {
+            col += 10;
+            room = l[0] as i32;
+        } else if col >= 10 {
+            col -= 10;
+            room = l[1] as i32;
+        } else if row < 0 {
+            row += 3;
+            room = l[2] as i32;
+        } else if row >= 3 {
+            row -= 3;
+            room = l[3] as i32;
+        } else {
+            break;
+        }
+    }
+    (room, col, row)
+}
+
+/// Tile at a normalised position; room 0 (outside the level) reads as a wall.
+fn tile_n(level: &Level, room: i32, col: i32, row: i32) -> Tile {
+    if (1..=24).contains(&room) { level.tile_at(room as usize, (row * 10 + col) as usize).kind } else { Tile::Wall }
+}
+
+fn mod_n(level: &Level, room: i32, col: i32, row: i32) -> u8 {
+    if (1..=24).contains(&room) { level.tile_at(room as usize, (row * 10 + col) as usize).modifier } else { 0 }
+}
+
+/// can_bump_into_gate (0000:59FF)
+fn gate_bumpable(modifier: u8, height: i32) -> bool {
+    (modifier as i32 >> 2) + 6 < height
 }
 
 /// tile_is_floor (0000:7364)
@@ -148,6 +206,7 @@ fn row_from_y(y: u8) -> i32 {
 }
 
 /// Collision box (set_char_collision, 0000:745F). All x in logic units.
+#[derive(Clone, Copy, Debug, Default)]
 struct CollBox {
     left: i32,
     right: i32,
@@ -227,10 +286,6 @@ impl Kid {
         env.level.modifier_wrapped(self.room as i32, col, row)
     }
 
-    fn here(&self, env: &Env) -> Tile {
-        self.tile(env, self.col(env), self.row)
-    }
-
     /// distance_to_edge(x) (0000:78D0): distance from x to the tile edge in front, 0..=13.
     fn distance_to_edge(&self, x: i32) -> i32 {
         let m = (x - 7 - X0).rem_euclid(COL_W);
@@ -258,20 +313,6 @@ impl Kid {
         CollBox { left, right, left_coll: left + thin, right_coll: right - thin, height: h as i32 }
     }
 
-    /// is_obstacle (0000:5726) for the tile at `col` in the current row.
-    fn is_obstacle(&self, env: &Env, col: i32, height: i32) -> bool {
-        use Tile::*;
-        let t = self.tile(env, col, self.row);
-        let m = self.tile_mod(env, col, self.row) as i32;
-        match t {
-            Potion => false,
-            Gate => (m >> 2) + 6 < height, // can_bump_into_gate (0000:59FF)
-            Chomper => m == 2,
-            Mirror => !(self.frame >= 39 && self.frame <= 43 && self.facing_left), // jumping through the mirror is not simulated
-            _ => wall_type(t) != 0,
-        }
-    }
-
     /// dist_from_wall_forward (0000:5DB8): uses the collision box, not the foot. -1 = no wall.
     fn dist_from_wall(&self, env: &Env, col: i32, t: Tile) -> i32 {
         let wt = wall_type(t);
@@ -279,7 +320,7 @@ impl Kid {
             return -1;
         }
         let b = self.coll_box(env);
-        if t == Tile::Gate && !self.is_obstacle(env, col, b.height) {
+        if t == Tile::Gate && !gate_bumpable(self.tile_mod(env, col, self.row), b.height) {
             return -1;
         }
         let tile_left = X0 + COL_W * col + 7;
@@ -345,6 +386,7 @@ impl Kid {
         if self.action == 4 {
             self.forward(self.fall_x as i32);
         }
+        self.refresh_snap(env); // 0000:0F25..0F2F: load_frame_to_obj, load_fram_det_col, set_char_collision
         self.check_collisions(env);
         self.check_bumped(env);
         self.check_gate_push(env);
@@ -651,31 +693,6 @@ impl Kid {
         }
     }
 
-    fn running_jump(&mut self, env: &Env, c: &mut Ctrl) {
-        if self.frame < 7 {
-            return;
-        }
-        let dir = self.dir();
-        let x4 = self.x as i32 + dir * 4;
-        let col0 = floor_div(x4 - 7 - X0, COL_W);
-        for i in 1..=2 {
-            let t = self.tile(env, col0 + dir * i, self.row);
-            if t == Tile::Spikes || !is_floor(t) {
-                let mut adj = (self.distance_to_edge(x4) + COL_W * i - COL_W) as u8;
-                if adj.wrapping_add(8) >= 10 {
-                    if adj < 128 {
-                        return;
-                    }
-                    adj = (-3i8) as u8;
-                }
-                self.forward(adj as i8 as i32 + 4);
-                break;
-            }
-        }
-        c.up = c.release_arrows();
-        self.start_seq(env, 4);
-    }
-
     fn control_crouched(&mut self, env: &Env, c: &mut Ctrl) {
         if c.y != 1 {
             self.start_seq(env, 49);
@@ -733,101 +750,207 @@ impl Kid {
 
     // ---------------------------------------------------------------- wall collisions (docs 9)
 
-    /// left_wall_x / right_wall_x of the tile at `col` in `row` (0000:55CE / 0000:5607).
-    fn wall_xs(&self, env: &Env, col: i32, row: i32) -> (i32, i32) {
-        let wt = wall_type(self.tile(env, col, row));
-        if wt == 0 {
-            return (0xFF, 0);
-        }
-        let tile_left = X0 + COL_W * col + 7;
-        (WALL_DIST_FROM_LEFT[wt] + tile_left, tile_left - WALL_DIST_FROM_RIGHT[wt] + 13)
+
+    // ---------------------------------------------------------------- snapshot helpers
+
+    /// 0000:0F25..0F2F: reload frame record, tile column and box.
+    fn refresh_snap(&mut self, env: &Env) {
+        self.snap_rec = self.frame_rec(env);
+        self.snap_col = self.col(env);
+        self.snap_box = self.coll_box(env);
     }
 
-    /// check_collisions (0000:53AC): remember which tile columns the box overlaps; a bump fires on the tick the overlap starts.
+    /// load_fram_det_col (0000:6E80): reload record and column, not the box.
+    fn load_fram_det_col(&mut self, env: &Env) {
+        self.snap_rec = self.frame_rec(env);
+        self.snap_col = self.col(env);
+    }
+
+    /// distance_to_edge_weight with the stored frame record (dx_weight reads `rec`).
+    fn dist_weight_snap(&self) -> i32 {
+        let f = self.snap_rec;
+        self.distance_to_edge(self.x as i32 + self.dir() * (f.dx as i32 - (f.flags & 0x1f) as i32))
+    }
+
+    fn tile_at_char(&self, env: &Env) -> Tile {
+        self.tile(env, self.snap_col, self.row)
+    }
+
+    // ---------------------------------------------------------------- wall collisions (docs/collisions.md)
+
+    /// move_coll_to_prev (0000:5487)
+    fn move_coll_to_prev(&mut self) {
+        let (r, p) = (self.cd.coll_row as i32, self.cd.prev_coll_row as i32);
+        let src = if r == p || r + 3 == p || r - 3 == p { 0 } else if r + 1 == p || r - 2 == p { 2 } else { 1 };
+        self.cd.prev_flags = self.cd.flags[src];
+        self.cd.prev_rooms = self.cd.rooms[src];
+        self.cd.rooms = [[-1; 10]; 3];
+    }
+
+    /// get_row_collision_data (0000:552D) for `row`, stored in slot `k`.
+    fn row_collision_data(&mut self, env: &Env, row: i32, k: usize, left: i32, right: i32) {
+        let b = self.snap_box;
+        let mut tile_left = X0 + COL_W * left + 7;
+        for col in left..=right {
+            let (room, c, r) = norm(env.level, self.room as i32, col, row);
+            let wt = wall_type(tile_n(env.level, room, c, r));
+            let lw = if wt != 0 { WALL_DIST_FROM_LEFT[wt] + tile_left } else { 0xFF };
+            let rw = if wt != 0 { tile_left - WALL_DIST_FROM_RIGHT[wt] + 13 } else { 0 };
+            self.cd.flags[k][c as usize] = (if lw < b.right_coll { 0x0F } else { 0 }) | (if rw > b.left_coll { 0xF0 } else { 0 });
+            self.cd.rooms[k][c as usize] = room as i8;
+            tile_left += COL_W;
+        }
+    }
+
+    /// check_collisions (0000:53AC): a bump fires on the tick on which a column's overlap bit turns on and the column
+    /// was filled from the same room last tick.
     fn check_collisions(&mut self, env: &Env) {
         self.bump_left = -1;
         self.bump_right = -1;
-        self.coll_prev = [0; 10];
         if self.action == 7 {
-            return;
+            return; // arrays and prev_coll_row stay as they are
         }
-        let b = self.coll_box(env);
+        let b = self.snap_box;
+        self.cd.coll_row = self.row as i8;
+        self.move_coll_to_prev();
+        self.cd.prev_coll_row = self.cd.coll_row;
         let m7 = |x: i32| floor_div(x - 7 - X0, COL_W);
-        let (lo, hi) = (m7(b.left_coll) - 1, (m7(b.right_coll) + 2).min(11));
-        let mut now = [[0u8; 10]; 3];
-        for (ri, rows) in now.iter_mut().enumerate() {
-            let r = self.row - 1 + ri as i32;
-            for col in lo.max(0)..=hi.min(9) {
-                let (lw, rw) = self.wall_xs(env, col, r);
-                rows[col as usize] = (if lw < b.right_coll { 0x0F } else { 0 }) | (if rw > b.left_coll { 0xF0 } else { 0 });
+        let (left, right) = (m7(b.left_coll) - 1, (m7(b.right_coll) + 2).min(11));
+        for (k, row) in [(0, self.row), (1, self.row + 1), (2, self.row - 1)] {
+            self.row_collision_data(env, row, k, left, right);
+        }
+        for col in (0..10).rev() {
+            let (r, pr) = (self.cd.rooms[0][col], self.cd.prev_rooms[col]);
+            if r < 0 || pr != r {
+                continue;
+            }
+            let (p, n) = (self.cd.prev_flags[col], self.cd.flags[0][col]);
+            if p & 0x0F == 0 && n & 0x0F != 0 {
+                self.bump_left = col as i32;
+            }
+            if p & 0xF0 == 0 && n & 0xF0 != 0 {
+                self.bump_right = col as i32;
             }
         }
-        if let Some((proom, prow, prev)) = &self.prev_coll {
-            let idx = self.row - prow + 1;
-            if *proom == self.room && (0..3).contains(&idx) {
-                let (p, n) = (&prev[idx as usize], &now[1]);
-                self.coll_prev = *p;
-                for col in (0..10).rev() {
-                    if p[col] & 0x0F == 0 && n[col] & 0x0F != 0 {
-                        self.bump_left = col as i32;
-                    }
-                    if p[col] & 0xF0 == 0 && n[col] & 0xF0 != 0 {
-                        self.bump_right = col as i32;
-                    }
-                }
-            }
+    }
+
+    /// xpos_in_drawn_room (0000:57AD): tiles of side rooms are shifted by 140 (drawn room = the kid's room).
+    fn xpos_in_drawn_room(&self, env: &Env, room: i32, x: i32) -> i32 {
+        let link = |r: i32, d: usize| if (1..=24).contains(&r) { env.level.links[r as usize - 1][d] as i32 } else { 0 };
+        let drawn = self.room as i32;
+        if room == drawn {
+            return x;
         }
-        self.coll_now = now[1];
-        self.prev_coll = Some((self.room, self.row, now));
+        let (l, r, b) = (link(drawn, 0), link(drawn, 1), link(drawn, 3));
+        let bl = if b != 0 { link(b, 0) } else { link(l, 3) };
+        let br = if b != 0 { link(b, 1) } else { link(r, 3) };
+        if room == l || room == bl {
+            x - 140
+        } else if room == r || room == br {
+            x + 140
+        } else {
+            x
+        }
+    }
+
+    /// is_obstacle_at_col (0000:56EB) + is_obstacle (0000:5726): reads the tile of the room stored for that column.
+    fn obstacle_at_col(&mut self, env: &Env, col: i32) -> bool {
+        let mut row = self.row;
+        if row < 0 {
+            row += 3;
+        }
+        if row >= 3 {
+            row -= 3;
+        }
+        let room = self.cd.rooms[0][col as usize] as i32;
+        let (r, c, rw) = norm(env.level, room, col, row);
+        self.ot = (r, c, rw);
+        let (t, m) = (tile_n(env.level, r, c, rw), mod_n(env.level, r, c, rw));
+        let obstacle = match t {
+            Tile::Potion => false,
+            Tile::Gate => gate_bumpable(m, self.snap_box.height),
+            Tile::Chomper => m == 2,
+            // jumping through the mirror (frames 39..43 facing left) is not simulated: it only skips the bump
+            Tile::Mirror => !((39..44).contains(&self.frame) && self.facing_left),
+            _ => true,
+        };
+        if obstacle {
+            self.coll_tile_left_x = self.xpos_in_drawn_room(env, r, X0 + COL_W * c) + 7;
+        }
+        obstacle
+    }
+
+    /// left_wall_x / right_wall_x of the obstacle tile found by `obstacle_at_col`.
+    fn obstacle_wall_x(&self, env: &Env, left: bool) -> i32 {
+        let wt = wall_type(tile_n(env.level, self.ot.0, self.ot.1, self.ot.2));
+        if left {
+            if wt != 0 { WALL_DIST_FROM_LEFT[wt] + self.coll_tile_left_x } else { 0xFF }
+        } else if wt != 0 {
+            self.coll_tile_left_x - WALL_DIST_FROM_RIGHT[wt] + 13
+        } else {
+            0
+        }
     }
 
     /// check_bumped (0000:5645)
     fn check_bumped(&mut self, env: &Env) {
-        if self.action == 2 || self.action == 6 || (135..=148).contains(&self.frame) {
+        if self.action == 2 || self.action == 6 || (135..149).contains(&self.frame) {
             return;
         }
-        let b = self.coll_box(env);
+        let b = self.snap_box;
         if self.bump_left >= 0 {
-            if !self.facing_left && self.is_obstacle(env, self.bump_left, b.height) {
-                let (lw, _) = self.wall_xs(env, self.bump_left, self.row);
-                self.bumped(env, lw - b.right_coll, true, self.bump_left);
+            // kid left of the obstacle, moving right (sword == 2 would also qualify)
+            if !self.facing_left && self.obstacle_at_col(env, self.bump_left) {
+                let delta = self.obstacle_wall_x(env, true) - b.right_coll;
+                self.bumped(env, delta, true);
             }
-        } else if self.bump_right >= 0 && self.facing_left && self.is_obstacle(env, self.bump_right, b.height) {
-            let (_, rw) = self.wall_xs(env, self.bump_right, self.row);
-            self.bumped(env, rw - b.left_coll, false, self.bump_right);
+        } else if self.bump_right >= 0 && self.facing_left && self.obstacle_at_col(env, self.bump_right) {
+            let delta = self.obstacle_wall_x(env, false) - b.left_coll;
+            self.bumped(env, delta, false);
         }
     }
 
-    /// bumped (0000:57F0). The "look one column further" step is our reading of the disassembly summary (INFERRED).
-    fn bumped(&mut self, env: &Env, delta: i32, push_left: bool, col: i32) {
+    /// bumped (0000:57F0): push back, then decide by the tile on the kid's side of the obstacle.
+    fn bumped(&mut self, env: &Env, delta: i32, push_left: bool) {
         if !self.alive || self.frame == 177 {
             return;
         }
         self.x = (self.x as i32 + delta) as u8;
-        let t = self.tile(env, col, self.row);
-        let tc = if push_left {
-            if t == Tile::Wall { col - 1 } else { col }
+        let (mut room, mut col, row) = self.ot;
+        let mut t = tile_n(env.level, room, col, row);
+        if push_left {
+            if t == Tile::Wall {
+                let (r, c, rw) = norm(env.level, room, col - 1, row);
+                t = tile_n(env.level, r, c, rw);
+            }
         } else if matches!(t, Tile::Doortop | Tile::DoortopWithFloor | Tile::Wall) {
-            col + 1
-        } else {
-            col
-        };
-        if is_floor(self.tile(env, tc, self.row)) { self.bumped_floor(env) } else { self.bumped_fall(env) }
+            col += 1;
+            if room == 0 && col == 10 {
+                room = self.room as i32;
+                col = 0;
+            }
+            let (r, c, rw) = norm(env.level, room, col, row);
+            t = tile_n(env.level, r, c, rw);
+        }
+        if is_floor(t) { self.bumped_floor(env) } else { self.bumped_fall(env) }
     }
 
+    /// bumped_fall (0000:588C)
     fn bumped_fall(&mut self, env: &Env) {
-        let _ = env;
         self.forward(-4);
         if self.action == 4 {
             self.fall_x = 0;
         } else {
             self.start_seq(env, 45);
+            self.play_seq(env);
         }
+        self.events.push(Event::Sound(8)); // bumped_sound, both branches
     }
 
+    /// bumped_floor (0000:58C8), kid without sword
     fn bumped_floor(&mut self, env: &Env) {
         let land = Y_LAND[(self.row + 1).clamp(0, 4) as usize];
-        if (land - self.y as i32) as u8 >= 15 {
+        if (land as u16).wrapping_sub(self.y as u16) >= 15 {
             self.bumped_fall(env);
             return;
         }
@@ -837,22 +960,102 @@ impl Kid {
             return;
         }
         self.fall_y = 0;
-        if self.alive {
-            let hard = matches!(self.frame, 24 | 25 | 40..=42 | 102..=106);
-            self.start_seq(env, if hard { 46 } else { 47 });
-            self.play_seq(env);
-        }
+        let hard = matches!(self.frame, 24 | 25 | 40..=42 | 102..=106);
+        self.start_seq(env, if hard { 46 } else { 47 });
+        self.play_seq(env);
+        self.events.push(Event::Sound(8));
     }
 
-    /// in_wall (0000:7809): push the kid out of a wall tile.
+    /// in_wall (0000:7809): push the kid out of a wall tile, then reload record and column.
     fn in_wall(&mut self, env: &Env) {
-        let mut d = self.dist_weight(env);
-        if d >= 8 || self.tile(env, self.col(env) + self.dir(), self.row) == Tile::Wall {
+        let mut d = self.dist_weight_snap();
+        if d >= 8 || self.tile(env, self.snap_col + self.dir(), self.row) == Tile::Wall {
             d = 6 - d;
         } else {
             d += 4;
         }
         self.forward(d);
+        self.load_fram_det_col(env);
+    }
+
+    /// check_gate_push (0000:5BDB): a gate closing on the kid pushes it 5 units per tick.
+    fn check_gate_push(&mut self, env: &Env) {
+        if !(self.action == 7 || self.frame == 15 || (108..111).contains(&self.frame)) {
+            return;
+        }
+        let (mut room, mut col, mut row) = norm(env.level, self.room as i32, self.snap_col, self.row);
+        let orig = col;
+        if tile_n(env.level, room, col, row) != Tile::Gate {
+            (room, col, row) = norm(env.level, room, col - 1, row);
+            if tile_n(env.level, room, col, row) != Tile::Gate {
+                return;
+            }
+        }
+        let c = col as usize;
+        let m = mod_n(env.level, room, col, row);
+        if self.cd.flags[0][c] & self.cd.prev_flags[c] == 0xFF && gate_bumpable(m, self.snap_box.height) {
+            self.events.push(Event::Sound(8));
+            self.x = (self.x as i32 + if orig <= col { -5 } else { 5 }) as u8;
+        }
+    }
+
+    /// check_chomped_kid (0000:5B13): uses the same flag arrays, no early exit.
+    fn check_chomped_kid(&mut self, env: &Env) {
+        if !self.alive {
+            return;
+        }
+        let row = self.row;
+        for col in 0..10usize {
+            if self.cd.flags[0][col] != 0xFF || self.cd.rooms[0][col] < 0 {
+                continue;
+            }
+            let (room, c, r) = norm(env.level, self.cd.rooms[0][col] as i32, col as i32, row);
+            if tile_n(env.level, room, c, r) != Tile::Chomper || mod_n(env.level, room, c, r) & 0x7F != 2 {
+                continue;
+            }
+            if (1..=24).contains(&room) {
+                self.events.push(Event::Chomped { room: room as u8, tilepos: (r * 10 + c) as u8 });
+            }
+            if self.frame == 178 || room != self.room as i32 {
+                continue;
+            }
+            self.x = (X0 + COL_W * c + 7) as u8;
+            self.forward(7 - (!self.facing_left) as i32);
+            self.y = Y_LAND[(self.row + 1).clamp(0, 4) as usize] as u8;
+            self.hp = 0;
+            self.alive = false;
+            self.events.push(Event::Sound(46));
+            self.start_seq(env, 54);
+            self.play_seq(env);
+        }
+    }
+
+    /// running_jump (0000:6963): decides where a running jump starts relative to a pit or spikes ahead.
+    fn running_jump(&mut self, env: &Env, c: &mut Ctrl) {
+        if self.frame < 7 {
+            return;
+        }
+        let dir = self.dir();
+        let x4 = self.x as i32 + dir * 4;
+        let mut col = floor_div(x4 - 7 - X0, COL_W);
+        for i in 0..2 {
+            col += dir;
+            let t = self.tile(env, col, self.row);
+            if t == Tile::Spikes || !is_floor(t) {
+                let mut adj = self.distance_to_edge(x4) + COL_W * i - COL_W;
+                // the unsigned compare of the original accepts only -8..=-1; too close (< -8) becomes -3, >= 0 returns
+                if !(-8..=-1).contains(&adj) {
+                    if adj >= 0 {
+                        return;
+                    }
+                    adj = -3;
+                }
+                self.forward(adj + 4);
+                break;
+            }
+        }
+        c.up = c.release_arrows();
+        self.start_seq(env, 4);
     }
 
     // ---------------------------------------------------------------- tile interaction (docs/tiles.md)
@@ -862,30 +1065,9 @@ impl Kid {
         env.level.wrap(self.room as i32, col, row).map(|(r, i)| (r as u8, i as u8))
     }
 
-    /// check_gate_push (0000:5BDB): a gate closing on the kid pushes it 5 units per tick.
-    fn check_gate_push(&mut self, env: &Env) {
-        if !(self.action == 7 || self.frame == 15 || (108..=110).contains(&self.frame)) {
-            return;
-        }
-        let col0 = self.col(env);
-        let mut tc = col0;
-        if self.tile(env, tc, self.row) != Tile::Gate {
-            tc -= 1;
-            if self.tile(env, tc, self.row) != Tile::Gate {
-                return;
-            }
-        }
-        let c = tc.clamp(0, 9) as usize;
-        let b = self.coll_box(env);
-        if self.coll_now[c] & self.coll_prev[c] == 0xFF && self.is_obstacle(env, tc, b.height) {
-            self.events.push(Event::Sound(8));
-            self.x = (self.x as i32 + 5 - 10 * (col0 <= tc) as i32) as u8;
-        }
-    }
-
     /// check_press (0000:7E2E): standing on / hanging from / jumping under tiles that react.
     fn check_press(&mut self, env: &Env) {
-        let (col, row) = (self.col(env), self.row);
+        let (col, row) = (self.snap_col, self.row);
         let (c, r) = if (87..100).contains(&self.frame) || (135..141).contains(&self.frame) {
             (col, row - 1)
         } else if matches!(self.action, 7 | 5) || self.action < 2 {
@@ -894,7 +1076,7 @@ impl Kid {
                     self.events.push(Event::LooseFall { room, tilepos });
                 }
                 (col, row - 1)
-            } else if self.frame_rec(env).flags & 0x40 == 0 {
+            } else if self.snap_rec.flags & 0x40 == 0 {
                 return;
             } else {
                 (col, row)
@@ -912,7 +1094,7 @@ impl Kid {
 
     /// check_spike_below (0000:7EE1): spikes under the image box of the kid start to rise.
     fn check_spike_below(&mut self, env: &Env) {
-        let b = self.coll_box(env);
+        let b = self.snap_box;
         let m7 = |x: i32| floor_div(x - 7 - X0, COL_W);
         let (lo, hi) = (m7(b.left), m7(b.right));
         if hi < 0 {
@@ -954,7 +1136,7 @@ impl Kid {
         if !self.alive {
             return;
         }
-        let (col, row) = (self.col(env), self.row);
+        let (col, row) = (self.snap_col, self.row);
         if self.tile(env, col, row) != Tile::Spikes {
             return;
         }
@@ -981,32 +1163,6 @@ impl Kid {
         self.play_seq(env);
     }
 
-    /// check_chomped_kid (0000:5B13)
-    fn check_chomped_kid(&mut self, env: &Env) {
-        if !self.alive {
-            return;
-        }
-        for col in 0..10i32 {
-            if self.coll_now[col as usize] != 0xFF || self.tile(env, col, self.row) != Tile::Chomper || self.tile_mod(env, col, self.row) & 0x7F != 2 {
-                continue;
-            }
-            if let Some((room, tilepos)) = self.locate(env, col, self.row) {
-                self.events.push(Event::Chomped { room, tilepos });
-            }
-            if self.frame != 178 {
-                self.x = (X0 + COL_W * col + 7) as u8;
-                self.forward(7 - (!self.facing_left) as i32);
-                self.y = Y_LAND[(self.row + 1).clamp(0, 4) as usize] as u8;
-                self.hp = 0;
-                self.alive = false;
-                self.events.push(Event::Sound(46));
-                self.start_seq(env, 54);
-                self.play_seq(env);
-            }
-            return;
-        }
-    }
-
     /// check_knock (0000:4F7A): landings shake the row of the kid, bumping the ceiling shakes the row above.
     fn check_knock(&mut self) {
         if self.knock != 0 {
@@ -1029,94 +1185,109 @@ impl Kid {
         }
     }
 
-    /// check_on_floor (0000:7551): only for frames with flag 0x40.
+
+    /// check_on_floor (0000:7551): only for frames with flag 0x40 (stored record, stale after a bump).
     fn check_on_floor(&mut self, env: &Env) {
-        if self.frame_rec(env).flags & 0x40 == 0 {
+        if self.snap_rec.flags & 0x40 == 0 {
             return;
         }
-        if self.here(env) == Tile::Wall {
+        let mut t = self.tile_at_char(env);
+        if t == Tile::Wall {
             self.in_wall(env);
+            t = self.tile_at_char(env);
         }
-        if !is_floor(self.here(env)) && self.here(env) != Tile::Wall {
-            self.start_fall(env);
+        if !is_floor(t) {
+            self.start_fall(env); // (the level 12 hidden floor is not simulated)
         }
     }
 
     /// start_fall (0000:75F5)
     fn start_fall(&mut self, env: &Env) {
+        let f0 = self.frame;
         self.row += 1;
         self.events.push(Event::StartChompers { room: self.room, row: self.row });
-        let seq = match self.frame {
+        let seq = match f0 {
             9 => 7,
             13 => 19,
             26 => 18,
             44 => 21,
             81..=85 => {
                 self.forward(5);
+                self.load_fram_det_col(env);
                 19
             }
-            _ => 7,
+            _ => 7, // frames 150..179 (sword) are not simulated
         };
         self.start_seq(env, seq);
         self.play_seq(env);
-        if self.here(env) == Tile::Wall {
+        self.load_fram_det_col(env);
+        if self.tile_at_char(env) == Tile::Wall {
             self.in_wall(env);
+            return;
         }
-        let front = self.tile(env, self.col(env) + self.dir(), self.row);
-        if front == Tile::Wall {
-            if self.frame == 44 && self.dist_weight(env) < 6 {
+        if self.tile(env, self.snap_col + self.dir(), self.row) == Tile::Wall {
+            if f0 == 44 && self.dist_weight_snap() < 6 {
                 self.start_seq(env, 104);
+                self.play_seq(env);
             } else {
                 self.forward(-1);
             }
+            self.load_fram_det_col(env);
         }
     }
 
     /// do_fall (0000:5E98) and land (0000:5EF8)
     fn do_fall(&mut self, env: &Env) {
         let land = Y_LAND[(self.row + 1).clamp(0, 4) as usize];
-        if (self.y as i32) < land {
+        // unsigned 16-bit compare: row -1 (y_land -8) never lands
+        if land as u16 > self.y as u16 {
             self.check_grab(env);
             return;
         }
-        let t = self.here(env);
+        let mut t = self.tile_at_char(env);
         if t == Tile::Wall {
             self.in_wall(env);
-        } else if is_floor(t) {
-            // land (0000:5EF8): spikes at the foot (or just behind it) kill if they are not retracted
-            let (col, row, d) = (self.col(env), self.row, self.dir());
-            let spike_col = if t == Tile::Spikes {
-                Some(col)
-            } else if self.alive && self.dist_weight(env) >= 12 && self.tile(env, col - d, row) == Tile::Spikes {
-                Some(col - d)
-            } else {
-                None
-            };
-            if let Some(sc) = spike_col {
-                if Self::spike_harm(self.tile_mod(env, sc, row)) != 0 {
-                    self.spiked(env, sc, row);
-                    return;
-                }
-            }
-            self.events.push(Event::StartChompers { room: self.room, row: self.row });
-            self.y = land as u8;
-            let fy = self.fall_y;
-            let seq = if fy < 22 {
-                17
-            } else if fy < 33 {
-                self.hp -= 1;
-                if self.hp <= 0 { self.alive = false; 22 } else { 20 }
-            } else {
-                self.hp = 0;
-                self.alive = false;
-                22
-            };
-            self.start_seq(env, seq);
-            self.play_seq(env);
-            self.fall_y = 0;
-        } else {
-            self.row += 1;
+            t = self.tile_at_char(env);
         }
+        if !is_floor(t) {
+            self.row += 1;
+            return;
+        }
+        self.y = land as u8;
+        // spikes at the foot (or just behind it) kill if they are not retracted
+        let (col, row, d) = (self.snap_col, self.row, self.dir());
+        let spike_col = if t == Tile::Spikes {
+            Some(col)
+        } else if self.alive && self.dist_weight_snap() >= 12 && self.tile(env, col - d, row) == Tile::Spikes {
+            Some(col - d)
+        } else {
+            None
+        };
+        if let Some(sc) = spike_col {
+            if Self::spike_harm(self.tile_mod(env, sc, row)) != 0 {
+                self.spiked(env, sc, row);
+                return;
+            }
+        }
+        // a wall or empty tile in front, close by: step back
+        if !is_floor(self.tile(env, col + d, row)) && self.dist_weight_snap() < 3 {
+            self.forward(-3);
+        }
+        self.events.push(Event::StartChompers { room: self.room, row: self.row });
+        let fy = self.fall_y;
+        let seq = if fy < 22 {
+            17
+        } else if fy < 33 {
+            self.hp -= 1;
+            if self.hp <= 0 { self.alive = false; 22 } else { 20 }
+        } else {
+            self.hp = 0;
+            self.alive = false;
+            22
+        };
+        self.start_seq(env, seq);
+        self.play_seq(env);
+        self.fall_y = 0;
     }
 
     // ---------------------------------------------------------------- room change (docs 10)
@@ -1158,7 +1329,17 @@ impl Kid {
                 self.row = row_from_y(self.y);
             }
         }
-        self.prev_coll = None;
         self.events.push(Event::StartChompers { room: self.room, row: self.row });
+    }
+}
+
+#[cfg(test)]
+impl Kid {
+    /// Put the kid into a given state (docs/collisions.md test vectors).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn force(&mut self, env: &Env, x: u8, y: u8, row: i32, facing_left: bool, frame: u8, action: u8, seq: usize, fall: (i8, i8)) {
+        (self.x, self.y, self.row, self.facing_left, self.frame, self.action) = (x, y, row, facing_left, frame, action);
+        (self.fall_x, self.fall_y) = fall;
+        self.start_seq(env, seq);
     }
 }
