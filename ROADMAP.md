@@ -26,14 +26,14 @@ Each milestone ends in something runnable and, where possible, a headless test i
 4. Decode image resources (`KID.DAT`, `GUARD.DAT`, `VIZIER.DAT`, tile sets `*PALACE.DAT`/`*DUNGEON.DAT`): palette + compressed bitmap formats. Used as reference/layout data for the modern assets, not as final art.
 5. Extract the animation/frame tables and sequence scripts (in `PRINCE.EXE`), the basis for M3.
 
-### M2 - Room rendering (`pop-app`)
+### M2 - Room rendering (`pop-app`) - partly done: M2.1 (placeholder geometry per tile type, torch lights), M2.4 (debug text), room/level navigation; open: smooth scroll with neighbour rooms (`room::spawn_room` takes an origin for this), live tile state from the sim, real art
 1. Real tile geometry per tile type (3D models, simple at first), palace and dungeon themes.
 2. Room-to-room camera: screen-flip like the original, optionally smooth scroll with neighbour rooms visible.
 3. Lighting: torches, ambient, shadows; modern look decided here (art direction doc).
 4. Debug overlay: room/tile coordinates, tick counter.
 
 ### M3 - Player mechanics (core of fidelity)
-1. Fixed 12 ticks/s simulation (`sim::World`), render interpolation for smooth motion.
+1. Simulation steps at 60 Hz; original logic runs every 5th step (12 ticks/s, `sim::World`), `World::alpha()` drives render interpolation. Done in the skeleton, the interpolation itself comes with the kid.
 2. Input -> action mapping (keyboard + gamepad) matching original controls.
 3. Kid state machine from the original sequence tables: stand, run, turn, jump (standing/running), climb, hang, drop, crouch, fall damage, death.
 4. Collision and tile interaction: floors, walls, edge grabbing, falling between rooms.

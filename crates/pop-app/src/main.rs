@@ -1,47 +1,105 @@
+//! Room viewer: draws one room of a level as procedural 3D geometry (placeholder art).
+//! Keys: arrows = neighbouring room, PageUp/PageDown = level, Tab = debug text.
+mod room;
+
 use bevy::prelude::*;
 use pop_core::{dat::Dat, level::*, sim};
 
 #[derive(Resource)]
 struct Game {
     world: sim::World,
-    level: Level,
+    /// index = level number (0 = demo level)
+    levels: Vec<Level>,
+    level: usize,
+    /// 1-based
+    room: usize,
 }
+
+#[derive(Component)]
+struct DebugText;
 
 fn main() {
     let dir = std::env::var("POP_DATA").unwrap_or_else(|_| "Original_data".into());
     let dat = Dat::open(format!("{dir}/LEVELS.DAT")).expect("cannot open LEVELS.DAT (set POP_DATA)");
-    let level = Level::parse(dat.get(2001).expect("level 1")).expect("bad level");
+    let levels: Vec<Level> = (2000..=2014).map(|id| Level::parse(dat.get(id).expect("level")).expect("bad level")).collect();
+    let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<usize>().ok());
+    let level = env("POP_LEVEL").filter(|&l| l < levels.len()).unwrap_or(1);
+    let room = env("POP_ROOM").filter(|r| (1..=ROOMS).contains(r)).unwrap_or(levels[level].start_room as usize);
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window { title: "Prince of Persia x64".into(), ..default() }),
             ..default()
         }))
-        .insert_resource(Time::<Fixed>::from_hz(sim::TICKS_PER_SEC))
-        .insert_resource(Game { world: sim::World::default(), level })
-        .add_systems(Startup, setup)
-        .add_systems(FixedUpdate, |mut g: ResMut<Game>| g.world.step())
+        .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
+        .insert_resource(Time::<Fixed>::from_hz(sim::STEP_HZ))
+        .insert_resource(Game { world: sim::World::default(), levels, level, room })
+        .add_systems(Startup, setup) // first room is built by room::rebuild_on_change
+        .add_systems(FixedUpdate, |mut g: ResMut<Game>| {
+            g.world.step();
+        })
+        .add_systems(Update, (navigate, room::rebuild_on_change, debug_text, screenshot_and_quit).chain())
         .run();
 }
 
-/// Draw the start room as 3D blocks (placeholder for real tile models).
-fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>, g: Res<Game>) {
-    let room = g.level.start_room as usize;
-    let cube = meshes.add(Cuboid::new(1.0, 0.2, 1.0));
-    let wall = meshes.add(Cuboid::new(1.0, 3.0, 1.0));
-    let floor_mat = mats.add(Color::srgb(0.7, 0.6, 0.4));
-    let wall_mat = mats.add(Color::srgb(0.4, 0.35, 0.3));
-    for row in 0..ROWS {
-        for col in 0..COLS {
-            let t = g.level.tile(room, col, row).kind;
-            let (x, y) = (col as f32, -(row as f32) * 3.0);
-            match t {
-                Tile::Empty => {}                                                                            // empty
-                Tile::Wall => { cmds.spawn((Mesh3d(wall.clone()), MeshMaterial3d(wall_mat.clone()), Transform::from_xyz(x, y + 1.5, 0.0))); } // wall
-                _ => { cmds.spawn((Mesh3d(cube.clone()), MeshMaterial3d(floor_mat.clone()), Transform::from_xyz(x, y, 0.0))); }       // floor-like
+fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>) {
+    cmds.insert_resource(room::Palette::new(&mut meshes, &mut mats));
+    // The room is 10 wide and 3 * TILE_H tall; look at its centre with a slight downward tilt for depth.
+    let centre = Vec3::new(5.0, 3.0, 0.0);
+    cmds.spawn((
+        Camera3d::default(),
+        Transform::from_xyz(5.0, 4.2, 13.5).looking_at(centre, Vec3::Y),
+        AmbientLight { color: Color::srgb(0.6, 0.65, 0.9), brightness: 150.0, ..default() },
+    ));
+    cmds.spawn((DirectionalLight { illuminance: 4000.0, ..default() }, Transform::from_xyz(-4.0, 9.0, 10.0).looking_at(centre, Vec3::Y)));
+    cmds.spawn((
+        Text::new(""),
+        Node { position_type: PositionType::Absolute, left: Val::Px(8.0), top: Val::Px(8.0), ..default() },
+        DebugText,
+    ));
+}
+
+fn navigate(keys: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, mut text: Query<&mut Visibility, With<DebugText>>) {
+    for (key, dir) in [(KeyCode::ArrowLeft, 0), (KeyCode::ArrowRight, 1), (KeyCode::ArrowUp, 2), (KeyCode::ArrowDown, 3)] {
+        if keys.just_pressed(key) {
+            let to = g.levels[g.level].links[g.room - 1][dir] as usize;
+            if (1..=ROOMS).contains(&to) {
+                g.room = to;
             }
         }
     }
-    cmds.spawn((Camera3d::default(), Transform::from_xyz(4.5, -3.0, 14.0).looking_at(Vec3::new(4.5, -3.0, 0.0), Vec3::Y)));
-    cmds.spawn((DirectionalLight::default(), Transform::from_xyz(3.0, 5.0, 8.0).looking_at(Vec3::new(4.5, -3.0, 0.0), Vec3::Y)));
+    let step = keys.just_pressed(KeyCode::PageUp) as i32 - keys.just_pressed(KeyCode::PageDown) as i32;
+    if step != 0 {
+        g.level = (g.level as i32 + step).rem_euclid(g.levels.len() as i32) as usize;
+        g.room = g.levels[g.level].start_room as usize;
+    }
+    if keys.just_pressed(KeyCode::Tab) {
+        for mut v in &mut text {
+            *v = if *v == Visibility::Hidden { Visibility::Inherited } else { Visibility::Hidden };
+        }
+    }
+}
+
+fn debug_text(g: Res<Game>, mut q: Query<&mut Text, With<DebugText>>) {
+    let l = &g.levels[g.level];
+    let [left, right, up, down] = l.links[g.room - 1];
+    for mut t in &mut q {
+        t.0 = format!(
+            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}\narrows room   PgUp/PgDn level   Tab text",
+            g.level, g.room, left, right, up, down, l.start_room, l.start_tile, g.world.tick
+        );
+    }
+}
+
+/// Test hook (shaders compile asynchronously, so wait a few hundred frames): with `POP_SHOT=file.png` (and optionally `POP_ROOM`, `POP_LEVEL`) save a screenshot after a few frames and quit.
+fn screenshot_and_quit(mut cmds: Commands, mut frame: Local<u32>, mut exit: MessageWriter<AppExit>) {
+    // shortcut: fixed frame count, depends on how fast shaders compile; upgrade to waiting for pipelines if flaky
+    let Ok(path) = std::env::var("POP_SHOT") else { return };
+    *frame += 1;
+    if *frame == 400 {
+        cmds.spawn(bevy::render::view::screenshot::Screenshot::primary_window())
+            .observe(bevy::render::view::screenshot::save_to_disk(path));
+    } else if *frame == 460 {
+        exit.write(AppExit::Success);
+    }
 }
