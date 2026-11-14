@@ -7,17 +7,17 @@ const DS_BASE: usize = 112832;
 const VERSION_AT: usize = 112986;
 const VERSION: &[u8] = b"PRINCE OF PERSIA  V1.1";
 // Frame records are 5 bytes: image, sword, dx, dy, flags.
-const KID_FRAMES_AT: usize = 116921;
+const KID_FRAMES_AT: usize = 116916; // verified in the EXE's load_frame (see docs/mechanics.md)
 pub const KID_FRAMES: usize = 241;
-const GUARD_FRAMES_AT: usize = 118127;
+const GUARD_FRAMES_AT: usize = 118122;
 pub const GUARD_FRAMES: usize = 41;
-const CUT_FRAMES_AT: usize = 118333;
+const CUT_FRAMES_AT: usize = 118328;
 pub const CUT_FRAMES: usize = 86;
 const SEQ_OFFSETS_AT: usize = 119134;
 pub const SEQUENCES: usize = 114;
 
-/// One animation frame (5 bytes in the file). Used for the kid (images in KID.DAT, id = 400 + image),
-/// for the guard-type characters (GUARD/FAT/VIZIER.DAT, id = 750 + image) and for cutscenes (see `cutscene_frames`).
+/// One animation frame (5 bytes in the file). Kid: image `i` is KID.DAT resource 401 + i; guard-type characters:
+/// GUARD/FAT/VIZIER.DAT resource 751 + i. Image 255 = none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Frame {
     /// 255 = no image
@@ -26,14 +26,12 @@ pub struct Frame {
     pub sword: u8,
     pub dx: i8,
     pub dy: i8,
-    /// low 5 bits: foot offset; 0x40: needs floor; 0x80: thin (all three unverified guesses).
-    /// Whether this byte belongs to its own record or to the previous one is also inferred, not proven.
+    /// low 5 bits: foot offset (x weight); 0x20 thin (collision box 4 narrower each side); 0x40 needs floor;
+    /// 0x80 x-parity (half step when drawing). Verified in the EXE code.
     pub flags: u8,
 }
 
-/// Sequence instruction. Frame numbers index the frame table. Names of `KnockUp`, `KnockDown`,
-/// `EndLevel`, `GetItem`, `Die` are best guesses (their opcodes and argument sizes are verified,
-/// their effects are not yet).
+/// Sequence instruction (opcode meanings verified in the EXE code, see docs/mechanics.md). Frame numbers index the frame table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Op {
     Frame(u8),
@@ -47,12 +45,15 @@ pub enum Op {
     /// jump to data-segment offset (also used as sequence-local label)
     Jmp(u16),
     JmpIfFeather(u16),
-    KnockUp,
+    /// 0xF4 / 0xF5
     KnockDown,
+    KnockUp,
     Sound(u8),
-    EndLevel,
     GetItem(u8),
-    Die,
+    /// 0xF1: increments next_level (level-end sequence)
+    EndLevel,
+    /// 0xF6: no effect
+    Nop,
 }
 
 pub struct Exe(Vec<u8>);
@@ -110,12 +111,12 @@ impl Exe {
                 0xF9 => (Op::Action(a(1)?), 2),
                 0xF8 => (Op::SetFall(a(1)? as i8, a(2)? as i8), 3),
                 0xF7 => (Op::JmpIfFeather(u16::from_le_bytes([a(1)?, a(2)?])), 3),
-                0xF6 => (Op::KnockUp, 1),
-                0xF5 => (Op::KnockDown, 1),
-                0xF4 => (Op::EndLevel, 1),
+                0xF6 => (Op::Nop, 1),
+                0xF5 => (Op::KnockUp, 1),
+                0xF4 => (Op::KnockDown, 1),
                 0xF3 => (Op::GetItem(a(1)?), 2),
                 0xF2 => (Op::Sound(a(1)?), 2),
-                0xF1 => (Op::Die, 1),
+                0xF1 => (Op::EndLevel, 1),
                 f => (Op::Frame(f), 1),
             };
             out.push(op);

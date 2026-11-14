@@ -83,16 +83,17 @@ mod tests {
         let e = Exe::open(format!("{DIR}PRINCE.EXE")).unwrap();
         let f = e.kid_frames();
         assert_eq!(f.len(), KID_FRAMES);
-        assert_eq!(f[1], Frame { image: 1, sword: 0, dx: 1, dy: 0, flags: 0x44 }); // first start-run frame
+        assert_eq!(f[0].image, 255);
+        assert_eq!(f[1], Frame { image: 0, sword: 0, dx: 1, dy: 0, flags: 0xc4 }); // first start-run frame
         let ids = |file: &str| -> Vec<u16> {
             let d = Dat::open(format!("{DIR}{file}")).unwrap();
             d.ids().collect()
         };
         let (kid, guard) = (ids("KID.DAT"), ids("GUARD.DAT"));
-        let has = |t: &[Frame], base: u16, ids: &[u16]| t.iter().filter(|f| f.image != 0 && f.image != 255).all(|f| ids.contains(&(base + f.image as u16)));
-        assert!(has(&f, 400, &kid));
+        let has = |t: &[Frame], base: u16, ids: &[u16]| t.iter().filter(|f| f.image != 255).all(|f| ids.contains(&(base + f.image as u16)));
+        assert!(has(&f, 401, &kid));
         assert_eq!(e.guard_frames().len(), GUARD_FRAMES);
-        assert!(has(&e.guard_frames(), 750, &guard));
+        assert!(has(&e.guard_frames(), 751, &guard));
         assert_eq!(e.cutscene_frames().len(), CUT_FRAMES);
         // sequence 1 = start run: action 1 (run), frames 1..=4
         let s1 = e.sequence(1).unwrap();

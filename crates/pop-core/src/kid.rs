@@ -47,7 +47,7 @@ impl Kid {
                     self.cur = exe.ops_from(t).unwrap_or_default();
                     self.pc = 0;
                 }
-                // not yet implemented: Up/Down, SetFall, JmpIfFeather, Knock*, Sound, EndLevel, GetItem, Die
+                // not yet implemented: Up/Down, SetFall, JmpIfFeather, Knock*, Sound, GetItem, EndLevel
                 _ => {}
             }
         }
