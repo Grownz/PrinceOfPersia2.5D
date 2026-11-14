@@ -108,7 +108,7 @@ mod tests {
     }
 
     /// Synthetic level: room 1 only. `floor[row]` = columns that have a floor tile; the kid starts at (col, row) facing right.
-    fn test_level(floor: [&str; 3], start: (usize, usize)) -> Level {
+    fn test_bytes(floor: [&str; 3], start: (usize, usize)) -> Vec<u8> {
         let mut b = vec![0u8; 2305];
         for (r, row) in floor.iter().enumerate() {
             for (c, ch) in row.chars().enumerate() {
@@ -121,22 +121,30 @@ mod tests {
         b[2112] = 1;
         b[2113] = (start.1 * 10 + start.0) as u8;
         b[2114] = 255; // start_dir 255 => direction right
-        Level::parse(&b).unwrap()
+        b
+    }
+    fn test_level(floor: [&str; 3], start: (usize, usize)) -> Level {
+        Level::parse(&test_bytes(floor, start)).unwrap()
     }
 
     struct Rig {
         exe: super::exe::Exe,
         frames: Vec<super::exe::Frame>,
         level: Level,
+        sizes: Vec<(u16, u16)>,
     }
     impl Rig {
         fn new(floor: [&str; 3], start: (usize, usize)) -> Rig {
+            Rig::with_level(test_level(floor, start))
+        }
+        fn with_level(level: Level) -> Rig {
             let exe = super::exe::Exe::open(format!("{DIR}PRINCE.EXE")).unwrap();
             let frames = exe.kid_frames();
-            Rig { exe, frames, level: test_level(floor, start) }
+            let sizes = super::image::image_sizes(&Dat::open(format!("{DIR}KID.DAT")).unwrap(), 401, 220);
+            Rig { exe, frames, level, sizes }
         }
         fn env(&self) -> super::kid::Env<'_> {
-            super::kid::Env { exe: &self.exe, frames: &self.frames, level: &self.level }
+            super::kid::Env { exe: &self.exe, frames: &self.frames, level: &self.level, sizes: &self.sizes }
         }
     }
     use super::kid::{Keys, Kid};
@@ -228,6 +236,69 @@ mod tests {
         assert_eq!(k.y, 181);
         assert!(k.alive);
     }
+
+    #[test]
+    fn kid_bumps_into_wall_and_does_not_pass() {
+        let mut b = test_bytes(["", "##########", "##########"], (2, 1));
+        b[16] = 20; // wall at col 6, row 1
+        let r = Rig::with_level(Level::parse(&b).unwrap());
+        let env = r.env();
+        let mut k = Kid::spawn_standing(&env);
+        let mut seqs = std::collections::HashSet::new();
+        for _ in 0..100 {
+            k.tick(&env, RIGHT);
+            seqs.insert(k.seq);
+            assert!(k.col(&env) <= 5, "kid got into the wall column: x {}", k.x);
+        }
+        assert!(seqs.contains(&47) || seqs.contains(&46) || seqs.contains(&45), "no bump sequence: {seqs:?}");
+        assert!(k.alive);
+    }
+
+    #[test]
+    fn kid_runs_into_next_room() {
+        let mut b = test_bytes(["", "##########", "##########"], (6, 1));
+        b[1952 + 1] = 2; // room 1: right neighbour = room 2
+        for c in 0..10 {
+            b[30 + 10 + c] = 1; // room 2, row 1 floor
+        }
+        let r = Rig::with_level(Level::parse(&b).unwrap());
+        let env = r.env();
+        let mut k = Kid::spawn_standing(&env);
+        for _ in 0..35 {
+            k.tick(&env, RIGHT);
+        }
+        assert_eq!(k.room, 2);
+        assert!(k.alive && k.row == 1);
+        assert!((58..198).contains(&(k.x as i32)), "x {}", k.x);
+    }
+
+    #[test]
+    fn kid_jumps_up_grabs_ledge_and_climbs() {
+        let mut b = test_bytes(["", "##########", "##########"], (4, 1));
+        for c in 5..10 {
+            b[c] = 1; // ledge: row 0, columns 5..9
+        }
+        let r = Rig::with_level(Level::parse(&b).unwrap());
+        let env = r.env();
+        let mut k = Kid::spawn_standing(&env);
+        let up = Keys { up: true, ..NONE };
+        k.tick(&env, up);
+        assert!(matches!(k.seq, 8 | 24), "grab sequence expected, got {}", k.seq);
+        let hold = Keys { up: true, shift: true, ..NONE };
+        let mut hung = false;
+        let mut trace = vec![];
+        for _ in 0..80 {
+            k.tick(&env, if k.row == 0 { NONE } else { hold }); // (holding up after the climb would jump up again, as in the original)
+            hung |= k.action == 2;
+            if trace.last() != Some(&(k.seq, k.row)) {
+                trace.push((k.seq, k.row));
+            }
+        }
+        assert!(trace.iter().any(|t| t.0 == 10), "climb sequence 10 not played: {trace:?}");
+        assert!(hung, "never hung");
+        assert_eq!((k.row, k.y, k.frame), (0, 55, 15));
+        assert!(k.alive);
+    }
 }
 
 #[cfg(test)]
@@ -239,9 +310,10 @@ mod start_tests {
         let d = "../../Original_data/";
         let exe = super::exe::Exe::open(format!("{d}PRINCE.EXE")).unwrap();
         let frames = exe.kid_frames();
+        let sizes = super::image::image_sizes(&Dat::open(format!("{d}KID.DAT")).unwrap(), 401, 220);
         let lv = Dat::open(format!("{d}LEVELS.DAT")).unwrap();
         let level = Level::parse(lv.get(2001).unwrap()).unwrap();
-        let env = Env { exe: &exe, frames: &frames, level: &level };
+        let env = Env { exe: &exe, frames: &frames, level: &level, sizes: &sizes };
         let mut k = Kid::spawn(&env, 1);
         assert_eq!((k.seq, k.room, k.facing_left), (7, 1, false)); // level 1: seq 7, facing right
         let none = Keys::default();

@@ -103,3 +103,10 @@ fn lzg(src: &[u8], len: usize) -> Option<Vec<u8>> {
     out.truncate(len);
     Some(out)
 }
+
+/// (height, width) in pixels of every image resource `base + i` (i = 0..count) of a character DAT, read from the image headers.
+pub fn image_sizes(dat: &crate::dat::Dat, base: u16, count: usize) -> Vec<(u16, u16)> {
+    (0..count as u16)
+        .map(|i| dat.get(base + i).and_then(|r| Some((rd16(r, 0)? as u16, rd16(r, 2)? as u16))).unwrap_or((0, 0)))
+        .collect()
+}
