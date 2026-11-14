@@ -42,6 +42,7 @@ Status: the flat-ground controller is in (`pop-core::kid`, rules from docs/mecha
 5. Headless replay tests: recorded input sequences must give identical positions each run (determinism); compare against published reference behaviour (e.g. jump distances).
 
 ### M4 - Tile mechanics
+Analysis done: docs/tiles.md (runtime tile state, tick order, gates, buttons, loose floors, spikes, chompers, sound ids, RNG). Level::parse now applies the original load-time modifier conversion (gate 1 -> 188 open, else 0). Porting (a `Tiles` runtime state in pop-core::sim with trob/mob lists) is next; torches/potions/shake sounds draw from the same RNG as the guards, so the port must keep call order.
 Loose floors, pressure plates + gates, spikes, chompers, exit doors, raise/drop buttons, mirror, skeletons, flame/torch events.
 
 ### M5 - Enemies and combat

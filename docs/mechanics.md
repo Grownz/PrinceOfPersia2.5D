@@ -284,6 +284,9 @@ check_gate_push `5BDB`, check_press `7E2E`, check_spike_below `7EE1`, check_spik
 bump_into_opponent `5122`, control_with_sword `6AD3`, draw_sword `6A89`, guard control `857B`, get_item `65AA`, take_hp `73F9`, play_sound `12F0`,
 start_chompers `950B`, release_arrows `7B48`, room change `3B7A`, seq setters `5E72` (Char) / `5E85` (Opp).
 
+Tile mechanics (trobs, mobs, gates, buttons, loose floors, spikes, chompers, exit door, potions; check_press, check_spike_below,
+check_spiked, spiked, check_chomped_kid, check_gate_push, check_knock, start_chompers, trigger_button) are in `docs/tiles.md`.
+
 ## 6. Not verified
 
 - The 12 Hz tick rate (taken from the brief, not from the timer code).
