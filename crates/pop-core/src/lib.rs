@@ -107,17 +107,125 @@ mod tests {
         }
     }
 
+    /// Synthetic level: room 1 only. `floor[row]` = columns that have a floor tile; the kid starts at (col, row) facing right.
+    fn test_level(floor: [&str; 3], start: (usize, usize)) -> Level {
+        let mut b = vec![0u8; 2305];
+        for (r, row) in floor.iter().enumerate() {
+            for (c, ch) in row.chars().enumerate() {
+                b[r * 10 + c] = if ch == '#' { 1 } else { 0 };
+            }
+        }
+        for g in 2119..2143 {
+            b[g] = 30; // no guards
+        }
+        b[2112] = 1;
+        b[2113] = (start.1 * 10 + start.0) as u8;
+        b[2114] = 0;
+        Level::parse(&b).unwrap()
+    }
+
+    struct Rig {
+        exe: super::exe::Exe,
+        frames: Vec<super::exe::Frame>,
+        level: Level,
+    }
+    impl Rig {
+        fn new(floor: [&str; 3], start: (usize, usize)) -> Rig {
+            let exe = super::exe::Exe::open(format!("{DIR}PRINCE.EXE")).unwrap();
+            let frames = exe.kid_frames();
+            Rig { exe, frames, level: test_level(floor, start) }
+        }
+        fn env(&self) -> super::kid::Env<'_> {
+            super::kid::Env { exe: &self.exe, frames: &self.frames, level: &self.level }
+        }
+    }
+    use super::kid::{Keys, Kid};
+    const RIGHT: Keys = Keys { left: false, right: true, up: false, down: false, shift: false };
+    const NONE: Keys = Keys { left: false, right: false, up: false, down: false, shift: false };
+
     #[test]
-    fn kid_plays_start_run() {
-        use super::{exe::Exe, kid::Kid};
-        let e = Exe::open(format!("{DIR}PRINCE.EXE")).unwrap();
-        let frames = e.kid_frames();
-        let mut k = Kid::default();
-        k.start(&e, 1);
-        let seen: Vec<u8> = (0..6).map(|_| { k.tick(&e, &frames); k.frame }).collect();
-        assert_eq!(&seen[..4], &[1, 2, 3, 4]);
-        assert_eq!(k.action, 1);
-        assert!(k.x > 0);
-        for _ in 0..200 { k.tick(&e, &frames); } // loops without hanging
+    fn kid_stands_idle() {
+        let r = Rig::new(["", "##########", "##########"], (3, 1));
+        let env = r.env();
+        let mut k = Kid::spawn(&env);
+        let x0 = k.x;
+        for _ in 0..10 {
+            k.tick(&env, NONE);
+        }
+        assert_eq!((k.frame, k.action, k.x, k.y), (15, 0, x0, 118));
+        println!("spawn col {} foot {} x {}", k.col(&env), k.foot_x(&env), k.x);
+        assert_eq!(k.col(&env), 3);
+    }
+
+    #[test]
+    fn kid_runs_and_stops() {
+        let r = Rig::new(["", "##########", "##########"], (1, 1));
+        let env = r.env();
+        let mut k = Kid::spawn(&env);
+        k.tick(&env, RIGHT);
+        assert_eq!((k.seq, k.frame, k.action), (1, 1, 1)); // control runs before play_seq: first frame in the same tick
+        let x0 = k.x;
+        for _ in 0..10 {
+            k.tick(&env, RIGHT);
+        }
+        assert!(k.x > x0 && k.action == 1);
+        let mut seqs = vec![];
+        for _ in 0..40 {
+            k.tick(&env, NONE);
+            seqs.push(k.seq);
+        }
+        assert!(seqs.contains(&13), "stop sequence 13 not played: {seqs:?}");
+        assert_eq!((k.frame, k.action), (15, 0));
+    }
+
+    #[test]
+    fn kid_turns() {
+        let r = Rig::new(["", "##########", "##########"], (3, 1));
+        let env = r.env();
+        let mut k = Kid::spawn(&env);
+        let left = Keys { left: true, ..NONE };
+        k.tick(&env, left);
+        assert_eq!(k.seq, 5);
+        for _ in 0..12 {
+            k.tick(&env, NONE);
+        }
+        assert!(k.facing_left);
+        assert_eq!(k.frame, 15);
+    }
+
+    #[test]
+    fn standing_jump_travels_39_units() {
+        let r = Rig::new(["", "##########", "##########"], (2, 1));
+        let env = r.env();
+        let mut k = Kid::spawn(&env);
+        let x0 = k.x as i32;
+        k.tick(&env, Keys { right: true, up: true, ..NONE });
+        assert_eq!(k.seq, 3);
+        for _ in 0..40 {
+            k.tick(&env, NONE);
+        }
+        assert_eq!(k.frame, 15);
+        assert_eq!(k.x as i32 - x0, 39); // sum of the dx ops of sequence 3 (docs/mechanics.md)
+    }
+
+    #[test]
+    fn kid_falls_off_ledge_and_lands() {
+        // row 1 floor only on columns 0..=4, row 2 floor everywhere below
+        let r = Rig::new(["", "#####", "##########"], (3, 1));
+        let env = r.env();
+        let mut k = Kid::spawn(&env);
+        let (mut fell, mut ticks) = (false, 0);
+        while ticks < 300 {
+            k.tick(&env, if fell { NONE } else { RIGHT });
+            fell |= k.action == 4;
+            ticks += 1;
+            if fell && k.action != 4 && k.row == 2 {
+                break;
+            }
+        }
+        assert!(fell, "kid never fell");
+        assert_eq!(k.row, 2);
+        assert_eq!(k.y, 181);
+        assert!(k.alive);
     }
 }

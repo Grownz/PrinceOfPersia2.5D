@@ -25,8 +25,8 @@ const MIN_LEN: usize = GUARD_DIR + ROOMS; // resource 2015 is 1 byte shorter tha
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Tile {
-    Empty = 0, Floor, Spikes, Pillar, Gate, StuckButton, DropButton, TapestryFloor,
-    BigPillarBottom, BigPillarTop, Potion, LooseFloor, TapestryTop, Mirror, Debris, RaiseButton,
+    Empty = 0, Floor, Spikes, Pillar, Gate, StuckButton, DropButton, DoortopWithFloor,
+    BigPillarBottom, BigPillarTop, Potion, LooseFloor, Doortop, Mirror, Debris, RaiseButton,
     ExitLeft, ExitRight, Chomper, Torch, Wall, Skeleton, Sword, BalconyLeft,
     BalconyRight, LatticePillar, LatticeSupport, SmallLattice, LatticeLeft, LatticeRight, TorchDebris,
     /// 31 occurs in the data but is unidentified.
@@ -114,6 +114,33 @@ impl Level {
     pub fn tile_at(&self, room: usize, tile: usize) -> TileRef {
         let i = (room - 1) * TILES_PER_ROOM + tile;
         TileRef { kind: Tile::from_u8(self.fg[i]), flags: self.fg[i] >> 5, modifier: self.bg[i] }
+    }
+
+    /// Tile type at `col,row` of `room`, following room links for out-of-range columns/rows.
+    /// Room 0 (outside the level) is a wall, as in the original.
+    pub fn tile_wrapped(&self, mut room: i32, mut col: i32, mut row: i32) -> Tile {
+        for _ in 0..8 {
+            if !(1..=ROOMS as i32).contains(&room) {
+                return Tile::Wall;
+            }
+            let l = &self.links[room as usize - 1];
+            if col < 0 {
+                room = l[0] as i32;
+                col += COLS as i32;
+            } else if col >= COLS as i32 {
+                room = l[1] as i32;
+                col -= COLS as i32;
+            } else if row < 0 {
+                room = l[2] as i32;
+                row += ROWS as i32;
+            } else if row >= ROWS as i32 {
+                room = l[3] as i32;
+                row -= ROWS as i32;
+            } else {
+                return self.tile_at(room as usize, row as usize * COLS + col as usize).kind;
+            }
+        }
+        Tile::Wall
     }
 
     /// Tiles a button (`modifier` = its link index) triggers: the chain runs until an entry with bit 7 set.

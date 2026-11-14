@@ -109,7 +109,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef) {
             floor(b, &stone);
             column(b, &stone, 0.5, TILE_H);
         }
-        TapestryFloor | TapestryTop => {
+        DoortopWithFloor | Doortop => {
             floor(b, &stone);
             b.put(&p.red, Vec3::new(x + 0.1, y, -0.9), Vec3::new(x + 0.9, y + TILE_H * 0.9, -0.85));
         }
