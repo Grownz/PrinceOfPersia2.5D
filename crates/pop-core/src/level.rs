@@ -9,6 +9,8 @@
 pub const ROOMS: usize = 24;
 pub const COLS: usize = 10;
 pub const ROWS: usize = 3;
+/// height of one tile row on the original 320x200 screen
+pub const TILE_H_PX: usize = 63;
 pub const TILES_PER_ROOM: usize = COLS * ROWS;
 
 const N: usize = ROOMS * TILES_PER_ROOM;
