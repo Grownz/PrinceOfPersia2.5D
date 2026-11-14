@@ -62,6 +62,10 @@ pub struct Guard {
     pub tile: u8,
     /// 0 = facing right, 255 = facing left
     pub dir: u8,
+    /// skill level 0..=11 (level tail offset 2215, docs/combat.md)
+    pub skill: u8,
+    /// colour/palette index (offset 2263)
+    pub colour: u8,
 }
 
 #[derive(Clone)]
@@ -110,7 +114,7 @@ impl Level {
         for r in 0..ROOMS {
             let tile = b[GUARD_TILE + r];
             if (tile as usize) < TILES_PER_ROOM {
-                l.guards.push(Guard { room: r as u8 + 1, tile, dir: b[GUARD_DIR + r] });
+                l.guards.push(Guard { room: r as u8 + 1, tile, dir: b[GUARD_DIR + r], skill: b.get(2215 + r).copied().unwrap_or(0), colour: b.get(2263 + r).copied().unwrap_or(0) });
             }
         }
         Some(l)
