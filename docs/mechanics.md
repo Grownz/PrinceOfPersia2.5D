@@ -466,3 +466,5 @@ back_delta_x `7DBA` = (facing left ? d : -d).
 4. `check_on_floor` / `do_fall` / `start_fall`: a wall tile must call in_wall (9.5), not count as floor or be skipped.
 5. `check_room_change`: the trigger is leave_room (section 10: box edges 54/198/201/57, y <= 9 or >= 240 for up unless action 3/4/5,
    y >= 211 for down, skipped for climb/stand-up/turn frames), and the original moves even when the link is 0.
+
+**Status (port):** items 2-5 above are fixed in crates/ (spawn, box-based dist_from_wall, in_wall, leave_room). Item 1 (drawing) was fixed earlier. Two readings remain INFERRED in `pop-core/src/kid.rs`: the column lookup after a bump (9.3) and the climb-down condition (2.3, can_grab target).

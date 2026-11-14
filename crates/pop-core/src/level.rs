@@ -116,12 +116,11 @@ impl Level {
         TileRef { kind: Tile::from_u8(self.fg[i]), flags: self.fg[i] >> 5, modifier: self.bg[i] }
     }
 
-    /// Tile type at `col,row` of `room`, following room links for out-of-range columns/rows.
-    /// Room 0 (outside the level) is a wall, as in the original.
-    pub fn tile_wrapped(&self, mut room: i32, mut col: i32, mut row: i32) -> Tile {
+    /// Follow room links for out-of-range columns/rows; `None` = outside the level (room 0 counts as a wall).
+    fn wrap(&self, mut room: i32, mut col: i32, mut row: i32) -> Option<(usize, usize)> {
         for _ in 0..8 {
             if !(1..=ROOMS as i32).contains(&room) {
-                return Tile::Wall;
+                return None;
             }
             let l = &self.links[room as usize - 1];
             if col < 0 {
@@ -137,10 +136,20 @@ impl Level {
                 room = l[3] as i32;
                 row -= ROWS as i32;
             } else {
-                return self.tile_at(room as usize, row as usize * COLS + col as usize).kind;
+                return Some((room as usize, row as usize * COLS + col as usize));
             }
         }
-        Tile::Wall
+        None
+    }
+
+    /// Tile type at `col,row` of `room`, following room links. Room 0 (outside the level) is a wall, as in the original.
+    pub fn tile_wrapped(&self, room: i32, col: i32, row: i32) -> Tile {
+        self.wrap(room, col, row).map_or(Tile::Wall, |(r, i)| self.tile_at(r, i).kind)
+    }
+
+    /// Modifier byte of the tile (0 outside the level).
+    pub fn modifier_wrapped(&self, room: i32, col: i32, row: i32) -> u8 {
+        self.wrap(room, col, row).map_or(0, |(r, i)| self.tile_at(r, i).modifier)
     }
 
     /// Tiles a button (`modifier` = its link index) triggers: the chain runs until an entry with bit 7 set.

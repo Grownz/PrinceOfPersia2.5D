@@ -14,6 +14,7 @@ use std::collections::HashMap;
 pub struct KidAssets {
     pub exe: Exe,
     pub frames: Vec<Frame>,
+    pub sizes: Vec<(u16, u16)>,
     dat: Dat,
     pal: Vec<[u8; 3]>,
     /// image number -> (material, width px, height px)
@@ -32,7 +33,7 @@ impl KidAssets {
         let exe = Exe::open(format!("{dir}/PRINCE.EXE")).expect("cannot open PRINCE.EXE (set POP_DATA)");
         let dat = Dat::open(format!("{dir}/KID.DAT")).expect("cannot open KID.DAT");
         let pal = image::palette(dat.get(400).unwrap()).unwrap();
-        KidAssets { frames: exe.kid_frames(), exe, dat, pal, cache: HashMap::new() }
+        KidAssets { frames: exe.kid_frames(), sizes: image::image_sizes(&dat, 401, 220), exe, dat, pal, cache: HashMap::new() }
     }
 }
 
@@ -96,7 +97,7 @@ fn world_pos(k: &Kid, frames: &[Frame]) -> Vec2 {
 }
 
 fn respawn(g: &mut Game, a: &KidAssets) {
-    let env = Env { exe: &a.exe, frames: &a.frames, level: &g.levels[g.level] };
+    let env = Env { exe: &a.exe, frames: &a.frames, level: &g.levels[g.level], sizes: &a.sizes };
     g.kid = Kid::spawn(&env, g.level);
     g.room = g.kid.room as usize;
     g.kid_prev = (world_pos(&g.kid, &a.frames), g.kid.room);
@@ -119,7 +120,7 @@ pub fn keys(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAssets>
     if step != 0 || k.just_pressed(KeyCode::Space) {
         let seq = g.kid.seq.max(1);
         let Game { kid, levels, level, .. } = &mut *g;
-        let env = Env { exe: &a.exe, frames: &a.frames, level: &levels[*level] };
+        let env = Env { exe: &a.exe, frames: &a.frames, level: &levels[*level], sizes: &a.sizes };
         kid.controlled = false;
         kid.start_seq(&env, seq);
     }
@@ -134,10 +135,12 @@ pub fn tick(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: &ButtonInput<K
     }
     g.kid_prev = (world_pos(&g.kid, &a.frames), g.kid.room);
     let Game { kid, levels, level, .. } = &mut *g;
-    let env = Env { exe: &a.exe, frames: &a.frames, level: &levels[*level] };
+    let env = Env { exe: &a.exe, frames: &a.frames, level: &levels[*level], sizes: &a.sizes };
     kid.tick(&env, keys);
     if g.kid.controlled {
-        g.room = g.kid.room as usize;
+        if (1..=pop_core::level::ROOMS as u8).contains(&g.kid.room) {
+            g.room = g.kid.room as usize; // room 0 = outside the level: keep showing the last room
+        }
     } else if g.kid.x < 20 || g.kid.x > 200 {
         g.kid.x = 100; // sequence viewer: keep the kid in view
         g.kid_prev.0.x = world_pos(&g.kid, &a.frames).x;
