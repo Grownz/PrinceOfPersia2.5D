@@ -40,7 +40,7 @@ fn material_for(a: &mut KidAssets, imgs: &mut Assets<Image>, mats: &mut Assets<S
     if let Some(c) = a.cache.get(&n) {
         return Some(c.clone());
     }
-    let im = image::decode(a.dat.get(400 + n as u16)?)?;
+    let im = image::decode(a.dat.get(401 + n as u16)?)?;
     let mut rgba = Vec::with_capacity(im.pixels.len() * 4);
     for &p in &im.pixels {
         let c = a.pal.get(p as usize).copied().unwrap_or([255, 0, 255]);
@@ -93,7 +93,7 @@ pub fn render(
 ) {
     let (Some(mut a), Ok((mut t, mut vis, mut mat))) = (a, q.single_mut()) else { return };
     let img_no = a.frames.get(g.kid.frame as usize).map_or(0, |f| f.image);
-    let Some((m, w, h)) = (img_no != 0 && img_no != 255).then(|| material_for(&mut a, &mut imgs, &mut mats, img_no)).flatten() else {
+    let Some((m, w, h)) = (img_no != 255).then(|| material_for(&mut a, &mut imgs, &mut mats, img_no)).flatten() else {
         *vis = Visibility::Hidden;
         return;
     };
