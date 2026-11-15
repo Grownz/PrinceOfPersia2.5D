@@ -240,7 +240,7 @@ Where sources were thin: DX12 ray-query support in wgpu, Solari's handling of al
 like ours. These are left as spike questions (R3) rather than stated as facts. The 0.20.1 API docs on docs.rs did not build,
 so crate details come from the tagged source.
 
-## 9. Status of R1 and V1 (2026-11-15)
+## 9. Status of R1, V1 and V2 (2026-11-15)
 
 **R1 done (minus the `rt` Cargo feature, which waits for the R3 spike).** `settings.json` keys `render_mode`
 (`classic` default, `enhanced` / `rt_experimental` accepted and run as classic with a log line) and `character_style`
@@ -281,5 +281,39 @@ Shadows: tried shadow maps on the torch point lights in voxel style. Not kept: t
 and shadow it, the lights are at the character plane (z 0.6), the room got much darker and the voxel steps showed
 self-shadow stripes. Needs NotShadowCaster on torch meshes, light placement and bias tuning: belongs to R2.
 
-Open for V2/V3: cutscene actors (princess, Jaffar, mouse from PV.DAT) as voxels, hit flash, an unlit option, greedy
-meshing (not needed for perf), smoothed normals, a 30-degree review of key poses.
+**V2 done: better volume, all characters, cutscene actors.** The V1 profile (2k + 1 voxels, k = 4-neighbour edge
+distance) looked like a thick cut-out from the side. `voxel.rs` now builds a *union of balls*: every pixel is a ball of
+radius = its chamfer distance to the silhouette edge (minus 0.5, capped at 4 px) and a column's front height is the highest
+ball over it, so heads come out sphere-like, limbs as cylinders as thick as they are wide, hands/feet/sword thin, and the
+torso a rounded slab. Colour-aware on top: pixels are classed by colour (neutral cloth, dark, skin, 60-degree hue
+sectors) and each class region adds its own small rounded bump (radius cap 1.5 px, weight 0.6), so arm over torso, sash,
+hair and face separate; darker shades of a region (below 0.8 of its brightest luminance: cloth folds) sit 0.6 px deeper.
+The back is a flatter copy (0.6 of the profile, capped at 2 px). Classes come from the untinted palette (the shadow's dark
+tint would merge them). Voxel grid: `plane` = the sprite-plane layer, depth = deepest back + 1 + highest front (about 8
+layers for the kid). Mesh: still per-face culling with flat normals (no greedy meshing, which per-vertex AO would defeat;
+1393 faces per kid image on average); vertex colours carry baked AO (side/side/corner occluders: 1.0 / 0.8 / 0.66 /
+0.54, quad split along the symmetric diagonal), rear layers darker and greyer by their distance to the column's front
+(-8 % and +7 % grey per pixel, floor 0.55), and a +-6 % per-voxel brightness jitter. Front projection is unchanged by
+construction. Build: 219 kid images in both facings voxelised and meshed in ~118 ms (release, with the projection checks),
+~0.27 ms per image, lazily.
+
+Fine detail (2 x 2 voxels per pixel) was tried and dropped: ~5500 faces per image (4x), ~1.2 ms per image, and from the
+debug camera it read as contour bands rather than chunky cubes, further from the reference; no `voxel_detail` setting.
+
+Cutscenes: with character_style voxel the actors (princess PV 800/900 sets, Jaffar PV 850, kid and mouse from KID.DAT)
+are voxel meshes from the same pipeline (cache per file, image, mirrored), anchored like the sprites (same rectangle, mesh
+origin at its bottom-left). Depth: 0.04 behind the sprite depth so the back clears the bed carpet sprite (z 0.52); the
+hourglass moves from z 0.78 to 0.84 in voxel style so the figures stay behind it as with sprites. Flames, hourglass, sand
+stream and the bed stay sprites (set dressing). The voxel material is created on first use, so sprite style keeps its
+exact asset set. In-game, the mouse (kid-table frames 186..188) and the sword pickup frames already use the kid path.
+
+Screenshots (scratchpad, `POP_CHARS=voxel`, game camera and `POP_DEBUG_CAM=1` with the new `POP_CAM_ANGLE=deg,dist`):
+kid standing / jumping up / running, dungeon guard (level 2) and palace guard (level 5) fights, fat guard (level 6), skeleton
+(level 3, needed the exit door open), Jaffar (level 13), the shadow (level 5, potion room), the mouse (level 8, door counter
+forced by a temporary hook, removed), cutscenes 2, 8, 9, intro, timeout and ending. Not seen on screen: the level-6 and
+level-12 shadows, the sword-raised pickup pose (covered by the projection test only). Sprite style: 0 differing pixels
+against the previous build on level 1 start (4 runs), level 2 room 1 and level 3 start, and the intro cutscene. Perf
+(release, RTX 3090, demo level, `POP_PERF=1`): sprite 1.41-1.57 ms/frame, voxel 1.35-1.41 ms/frame.
+
+Open for V3: hit flash, an unlit option, smoothed normals, softer side lighting on the back terraces (the -x/+x step faces
+away from the torches go very dark under the blue ambient), a turned camera for cutscenes, a 30-degree review of key poses.

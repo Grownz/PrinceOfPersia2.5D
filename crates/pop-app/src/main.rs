@@ -8,7 +8,7 @@
 //! back into the normal flow); POP_SOUND=original uses the game's own sounds; POP_DATA = game data folder;
 //! POP_PERF=1 logs the average frame time (vsync off) and room rebuilds every 300 frames.
 //! POP_RENDER / POP_CHARS override settings.json "render_mode" / "character_style"; F6 toggles sprite / voxel characters,
-//! F7 (debug text on, or POP_DEBUG_CAM=1) a closer, turned camera on the kid.
+//! F7 (debug text on, or POP_DEBUG_CAM=1) a closer, turned camera on the kid (POP_CAM_ANGLE="degrees[,distance]").
 mod audio;
 mod cutscene;
 mod flow;
@@ -250,8 +250,13 @@ fn debug_camera(k: Res<ButtonInput<KeyCode>>, g: Res<Game>, state: Res<State<flo
     *on ^= g.debug && k.just_pressed(KeyCode::F7);
     let (true, Ok(kt), flow::Screen::Playing | flow::Screen::Paused) = (*on, kid.single(), state.get()) else { return };
     let target = kt.translation.with_z(0.6) + Vec3::Y * 0.6;
+    // POP_CAM_ANGLE="degrees[,distance]" (default 34 degrees, 4 units): preset views for screenshots
+    let (deg, dist) = std::env::var("POP_CAM_ANGLE").ok().map_or((34.4, 4.0), |v| {
+        let mut it = v.split(',').map(|x| x.trim().parse::<f32>().ok());
+        (it.next().flatten().unwrap_or(34.4), it.next().flatten().unwrap_or(4.0))
+    });
     for mut t in &mut cam {
-        *t = Transform::from_translation(target + Quat::from_rotation_y(0.6) * Vec3::new(0.0, 1.0, 4.0)).looking_at(target, Vec3::Y);
+        *t = Transform::from_translation(target + Quat::from_rotation_y(deg.to_radians()) * Vec3::new(0.0, dist / 4.0, dist)).looking_at(target, Vec3::Y);
     }
 }
 

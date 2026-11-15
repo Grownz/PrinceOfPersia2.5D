@@ -26,7 +26,7 @@ do nothing. It works alongside the rebindable keys below.
 With the debug text on (F3): Ctrl+arrows = neighbouring room, Ctrl+PageUp / Ctrl+PageDown = previous / next level (plain PageUp is up+right),
 `,` / `.` = previous / next animation sequence (sequence viewer), Space = restart the sequence, F = flip, C = back to the
 controlled kid at the level start. F7 = closer camera turned 35 degrees around the kid (inspect the voxel depth; also
-`POP_DEBUG_CAM=1`).
+`POP_DEBUG_CAM=1`; `POP_CAM_ANGLE="degrees[,distance]"` sets its angle and distance, default 34 degrees, 4 units).
 
 The kid's five keys (left, right, up, down, shift) can be rebound in `settings.json` under `"keys"`, each as a list of
 Bevy `KeyCode` names, for example `"left": ["ArrowLeft", "KeyA"]`. Unknown names are ignored with a warning; an empty

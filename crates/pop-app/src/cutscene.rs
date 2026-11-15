@@ -3,7 +3,9 @@
 //! chamber built with the room builder (room.rs tiles, torch lights). The set stays at `ORIGIN`, away from the level rooms;
 //! the camera moves there for the cutscenes and the title/story screens.
 //! Per element: room, arcade, front pillar, window = tile geometry; actors, flames, hourglass, sand, bed = decoded original
-//! sprites as textured quads (the bed is a flat painted carpet in PV 981, so it stays a sprite).
+//! sprites as textured quads (the bed is a flat painted carpet in PV 981, so it stays a sprite). With character_style voxel
+//! the actors (princess, Jaffar, kid, mouse) are voxel meshes built like the level characters (voxel.rs), anchored the same
+//! way; flames, hourglass, sand and the bed stay sprites (set dressing, not characters).
 use crate::room::{self, Chamber, Palette, TILE_H};
 use crate::Game;
 use bevy::asset::RenderAssetUsages;
@@ -47,6 +49,10 @@ pub struct Cut {
     prince: Option<Dat>,
     /// (file 0 PV / 1 KID / 2 PRINCE, resource) -> (material, width px, height px)
     mats: HashMap<(u8, u16), (Handle<StandardMaterial>, f32, f32)>,
+    /// voxel actors: (file, resource, mirrored) -> mesh (None = did not decode); their shared lit material and the sprite quad
+    vox: HashMap<(u8, u16, bool), Option<Handle<Mesh>>>,
+    voxel_mat: Handle<StandardMaterial>,
+    quad: Handle<Mesh>,
     /// title/story screens: torch animation without a scene
     idle: u32,
 }
@@ -112,7 +118,7 @@ fn chamber_level(base: &pop_core::level::Level) -> pop_core::level::Level {
     l
 }
 
-pub fn setup(mut cmds: Commands, g: Res<Game>, p: Res<Palette>, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>) {
+pub fn setup(mut cmds: Commands, g: Res<Game>, p: Res<Palette>, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>, mut cut: ResMut<Cut>) {
     let level = chamber_level(&g.levels[g.levels.len() - 1]);
     room::spawn_chamber(&mut cmds, &level, 1, ORIGIN, &p);
     let o = ORIGIN;
@@ -140,6 +146,7 @@ pub fn setup(mut cmds: Commands, g: Res<Game>, p: Res<Palette>, mut meshes: ResM
         cmds.spawn((Mesh3d(meshes.add(Rectangle::new(1.0, 1.0))), MeshMaterial3d::<StandardMaterial>::default(), Transform::default(), Visibility::Hidden, FlameSprite(i)));
     }
     let quad = meshes.add(Rectangle::new(1.0, 1.0));
+    cut.quad = quad.clone();
     for s in [Slot::Kid, Slot::Princess] {
         cmds.spawn((Mesh3d(quad.clone()), MeshMaterial3d::<StandardMaterial>::default(), Transform::default(), Visibility::Hidden, ActorSprite(s)));
     }
@@ -180,6 +187,29 @@ fn material(c: &mut Cut, imgs: &mut Assets<Image>, mats: &mut Assets<StandardMat
     c.mats.insert((file, id), e.clone());
     Some(e)
 }
+
+/// Voxel mesh of an actor image (see `material`), mirrored when the actor faces right.
+fn voxel(c: &mut Cut, meshes: &mut Assets<Mesh>, file: u8, id: u16, pal_id: u16, mirrored: bool) -> Option<Handle<Mesh>> {
+    if let Some(m) = c.vox.get(&(file, id, mirrored)) {
+        return m.clone();
+    }
+    let dat = match file { 0 => c.pv.as_ref(), 1 => c.kid.as_ref(), _ => c.prince.as_ref() };
+    let m = dat.and_then(|dat| Some((image::palette(dat.get(pal_id)?)?, image::decode(dat.get(id)?)?))).map(|(pal, im)| {
+        let rgb = |p: u8| pal.get(p as usize).copied().unwrap_or([255, 0, 255]);
+        let model = crate::voxel::VoxelModel::from_image(im.width, im.height, &im.pixels, mirrored, rgb);
+        meshes.add(model.mesh(|p| {
+            let [r, g, b] = rgb(p);
+            Color::srgb_u8(r, g, b).to_linear().to_f32_array()
+        }))
+    });
+    c.vox.insert((file, id, mirrored), m.clone());
+    m
+}
+
+/// Voxel actors stand a little behind the sprite depth would put their centre: their back clears the bed carpet (z 0.52)
+/// and the figure stays behind the hourglass, which moves to `GLASS_Z_VOXEL`.
+const VOXEL_DZ: f32 = 0.04;
+const GLASS_Z_VOXEL: f32 = 0.84;
 
 /// Place a sprite: left edge `x` (world), bottom `y`, mirrored when `flip`.
 fn place(t: &mut Transform, x: f32, y: f32, z: f32, w: f32, h: f32, flip: bool) {
@@ -239,8 +269,10 @@ pub fn render(
     mut mats: ResMut<Assets<StandardMaterial>>,
     star_mats: Res<StarMats>,
     win: Single<&Window, With<bevy::window::PrimaryWindow>>,
+    style: Res<crate::settings::CharacterStyle>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut q: ParamSet<(
-        Query<(&ActorSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>)>,
+        Query<(&ActorSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d)>,
         Query<(&GlassSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>)>,
         Query<(&FlameSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>)>,
         Query<(&StarDot, &mut MeshMaterial3d<StandardMaterial>)>,
@@ -265,13 +297,29 @@ pub fn render(
     let scene = c.cs.take(); // put back below (material() borrows the cache)
     let cs = scene.as_ref().filter(|_| in_scene);
     // actors: kid slot behind the princess (INFERRED draw order, docs/cutscenes.md 1.4)
-    for (ActorSprite(slot), mut t, mut vis, mut mat) in &mut q.p0() {
+    let voxels = *style == crate::settings::CharacterStyle::Voxel;
+    if voxels && c.voxel_mat == Handle::default() {
+        c.voxel_mat = mats.add(StandardMaterial { perceptual_roughness: 0.9, ..default() }); // made on first use: sprite style keeps its assets
+    }
+    for (ActorSprite(slot), mut t, mut vis, mut mat, mut mesh) in &mut q.p0() {
         let a = cs.and_then(|cs| if *slot == Slot::Kid { cs.kid.as_ref() } else { cs.princess.as_ref() }).filter(|_| !cs.unwrap().blank);
         let shown = a.and_then(|a| {
             let cs = cs.unwrap();
             let (file, id, pal) = cs.sprite(a)?;
-            let (m, w, h) = material(c, &mut imgs, &mut mats, if file == SpriteFile::Pv { 0 } else { 1 }, id, pal)?;
+            let file = if file == SpriteFile::Pv { 0 } else { 1 };
+            let (m, w, h) = material(c, &mut imgs, &mut mats, file, id, pal)?;
             actor(cs, a, w, h, if *slot == Slot::Kid { 0.6 } else { 0.62 }, &mut t);
+            // voxel style: the same rectangle, mesh origin at its bottom-left corner, one voxel = one pixel (kid.rs `show`)
+            if let Some(v) = voxels.then(|| voxel(c, &mut meshes, file, id, pal, t.scale.x < 0.0)).flatten() {
+                let half = Vec3::new(t.scale.x.abs(), t.scale.y, 0.0) / 2.0;
+                t.translation = t.translation - half + Vec3::Z * VOXEL_DZ;
+                t.scale = Vec3::new(1.0 / 32.0, TILE_H / pop_core::level::TILE_H_PX as f32, 1.0 / 32.0);
+                mesh.set_if_neq(Mesh3d(v));
+                return Some(c.voxel_mat.clone());
+            }
+            if mesh.0 != c.quad {
+                mesh.0 = c.quad.clone();
+            }
             Some(m)
         });
         set_vis(&mut vis, &mut mat, shown);
@@ -285,7 +333,7 @@ pub fn render(
             if *is_stream {
                 place(&mut t, wx(160.0), wy(164.0), 0.9, w, h, false);
             } else {
-                place(&mut t, wx(152.0), 0.0, 0.58 + 0.2, w, h, false); // ybottom 168: on the floor, a little nearer
+                place(&mut t, wx(152.0), 0.0, if voxels { GLASS_Z_VOXEL } else { 0.58 + 0.2 }, w, h, false); // ybottom 168: on the floor, a little nearer
             }
             Some(m)
         });
