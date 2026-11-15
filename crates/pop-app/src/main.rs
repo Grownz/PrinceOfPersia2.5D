@@ -28,6 +28,8 @@ struct Game {
     banner: (u32, String),
     /// debug text and debug keys (F3)
     debug: bool,
+    /// bumped on every World rebuild (audio resets on it)
+    gen: u32,
 }
 
 pub fn data_dir() -> String {
@@ -57,7 +59,7 @@ fn main() {
         .add_plugins(audio::plugin)
         .insert_resource(ClearColor(BACKGROUND))
         .insert_resource(Time::<Fixed>::from_hz(sim::STEP_HZ))
-        .insert_resource(Game { world, levels, level, room, kid_prev: (Vec2::ZERO, 0), guard_prev: (Vec2::ZERO, 0), kid_respawn: false, banner: (0, String::new()), debug: false })
+        .insert_resource(Game { world, levels, level, room, kid_prev: (Vec2::ZERO, 0), guard_prev: (Vec2::ZERO, 0), kid_respawn: false, banner: (0, String::new()), debug: false, gen: 0 })
         .insert_resource(kid::Latch::default())
         .insert_resource(assets)
         .init_resource::<flow::Flow>()
@@ -69,7 +71,7 @@ fn main() {
         .add_systems(OnExit(flow::Screen::Paused), audio::resume)
         .add_systems(
             FixedUpdate,
-            (|mut g: ResMut<Game>, a: Res<kid::KidAssets>, mut latch: ResMut<kid::Latch>, keys: Res<ButtonInput<KeyCode>>| {
+            (audio::before_step, |mut g: ResMut<Game>, a: Res<kid::KidAssets>, mut latch: ResMut<kid::Latch>, keys: Res<ButtonInput<KeyCode>>| {
                 kid::fixed_step(&mut g, &a, &mut latch, &keys);
             }, audio::fixed)
                 .chain()

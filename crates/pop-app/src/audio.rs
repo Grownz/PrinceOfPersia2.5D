@@ -55,7 +55,7 @@ pub struct Sounds(Vec<Option<(Handle<Pcm>, u32)>>);
 pub struct AudioState {
     /// fixed steps until every started sound has ended ("a sound is playing" in the original)
     pub busy: u32,
-    last_tick: u64,
+    gen: u32,
     volume: f32,
     muted: bool,
 }
@@ -68,19 +68,24 @@ const IDS: u8 = 57;
 
 pub fn plugin(app: &mut App) {
     app.add_audio_source::<Pcm>()
-        .insert_resource(AudioState { busy: 0, last_tick: 0, volume: 0.7, muted: false })
+        .insert_resource(AudioState { busy: 0, gen: 0, volume: 0.7, muted: false })
         .add_systems(Startup, setup);
 }
 
 /// Original sound `id`: digitized (type 1: u16 rate, u16 count, u16 ?, u8 bits = 8, unsigned samples; type bit 7 = flag) or
 /// PC speaker (type 0: u16 tempo, notes {u16 Hz (0/1 rest, 0x12 end), u8 length in 1/tempo s}), rendered as a square wave.
 fn original(dats: &[Dat], id: u8) -> Option<Pcm> {
-    let r = dats.iter().find_map(|d| d.get(10000 + id as u16))?;
+    decode(&dats.iter().find_map(|d| d.get(10000 + id as u16))?)
+}
+
+fn decode(r: &[u8]) -> Option<Pcm> {
     let u16at = |o: usize| r.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
     match r.first()? & 0x7F {
         1 if r.get(7) == Some(&8) => {
             let n = (u16at(3)? as usize).min(r.len() - 8);
-            Some(Pcm { rate: u16at(1)? as u32, samples: r[8..8 + n].iter().map(|&b| (b as f32 - 128.0) / 128.0 * 0.8).collect() })
+            let rate = u16at(1)? as u32;
+            // untrusted header: an implausible rate falls back to the synthesized clip
+            (2000..=48000).contains(&rate).then(|| Pcm { rate, samples: r[8..8 + n].iter().map(|&b| (b as f32 - 128.0) / 128.0 * 0.5).collect() })
         }
         0 => {
             let tempo = u16at(1)?.max(1) as f32;
@@ -135,21 +140,38 @@ fn play(cmds: &mut Commands, s: &Sounds, a: &mut AudioState, id: u8, playing: &Q
     a.busy = a.busy.max(*steps);
 }
 
+impl AudioState {
+    /// Before a step: a new World (gen changed) clears the busy counter; returns (new world, hold_death_counter for this
+    /// step). Then one step of the counter elapses.
+    fn begin_step(&mut self, gen: u32) -> (bool, bool) {
+        let fresh = std::mem::replace(&mut self.gen, gen) != gen;
+        if fresh {
+            self.busy = 0;
+        }
+        let hold = self.busy > 0;
+        self.busy = self.busy.saturating_sub(1);
+        (fresh, hold)
+    }
+}
+
+/// FixedUpdate, before the world step: reset on a new World, set `hold_death_counter` (owned by the app) for this step.
+pub fn before_step(mut cmds: Commands, mut g: ResMut<Game>, mut a: ResMut<AudioState>, playing: Query<(Entity, &Sfx)>) {
+    let (fresh, hold) = a.begin_step(g.gen);
+    if fresh {
+        stop_all(&mut cmds, &mut a, &playing); // a new world (restart, next level): the original stops all sounds
+    }
+    g.world.hold_death_counter = hold;
+}
+
 /// FixedUpdate, after the world step: drain the sound log; hold the death counter while a sound plays (edge_cases.md 3.2).
 /// The timing counts fixed steps (not the audio device), so it is deterministic and independent of mute and volume.
 pub fn fixed(mut cmds: Commands, mut g: ResMut<Game>, s: Res<Sounds>, mut a: ResMut<AudioState>, playing: Query<(Entity, &Sfx)>) {
-    if g.world.tick < a.last_tick {
-        stop_all(&mut cmds, &mut a, &playing); // a new world (restart, next level): the original stops all sounds
-    }
-    a.last_tick = g.world.tick;
     let mut ids = std::mem::take(&mut g.world.sounds);
     ids.sort_unstable();
     ids.dedup();
     for id in ids {
         play(&mut cmds, &s, &mut a, id, &playing);
     }
-    a.busy = a.busy.saturating_sub(1);
-    g.world.hold_death_counter = a.busy > 0;
 }
 
 fn stop_all(cmds: &mut Commands, a: &mut AudioState, playing: &Query<(Entity, &Sfx)>) {
@@ -169,6 +191,7 @@ pub fn enter_card(mut cmds: Commands, s: Res<Sounds>, mut a: ResMut<AudioState>,
     if let Some(id) = f.card_sound {
         play(&mut cmds, &s, &mut a, id, &playing);
     }
+    a.busy = 0; // cards play in real time; only Playing steps count busy
 }
 
 pub fn pause(sinks: Query<&AudioSink, With<Sfx>>) {
@@ -198,6 +221,18 @@ pub fn keys(k: Res<ButtonInput<KeyCode>>, mut a: ResMut<AudioState>, mut g: ResM
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bad_rate_does_not_panic_and_busy_resets() {
+        let mut r = vec![1u8, 0, 0, 4, 0, 0, 0, 8, 128, 128, 128, 128]; // type 1, rate 0, 4 samples
+        assert!(super::decode(&r).is_none());
+        r[1] = 0x2B; r[2] = 0x2B; // 11051 Hz
+        assert_eq!(super::decode(&r).unwrap().samples.len(), 4);
+        let mut a = super::AudioState { busy: 3, gen: 0, volume: 1.0, muted: false };
+        assert_eq!(a.begin_step(0), (false, true)); // busy 3 -> hold, drains
+        assert_eq!(a.begin_step(1), (true, false)); // new World: cleared
+        assert_eq!(a.busy, 0);
+    }
+
     /// The original decoders: digitized footstep-like click (id 0, 11000 Hz) and the PC-speaker death tune (id 24, 2.97 s).
     #[test]
     fn decodes_original_sounds() {

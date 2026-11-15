@@ -161,6 +161,7 @@ pub fn start(g: &mut Game, a: &KidAssets, p: Progress) {
     let p = if p.level < g.levels.len() { p } else { Progress::new_game(0) }; // after the last level: back to the title
     g.level = p.level;
     g.world = World::from_progress(a.data.clone(), g.levels[g.level].clone(), p);
+    g.gen = g.gen.wrapping_add(1);
     g.room = g.world.kid.room as usize;
     let env = mk_env(&a.data, &g.world.level, g.world.guard_type);
     g.kid_prev = (world_pos(&g.world.kid, &env), g.world.kid.room);
