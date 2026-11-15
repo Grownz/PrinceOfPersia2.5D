@@ -475,9 +475,10 @@ fn save_file_round_trip() {
 fn save_file_parsing_is_strict() {
     let ok = "{\"level\": 7, \"hitp_max\": 5, \"rem_min\": 41, \"rem_tick\": 123, \"hitp_beg_lev\": 5}";
     assert!(Progress::from_save(ok).is_some());
-    // the key is matched exactly, not as a substring of another key or value
-    assert!(Progress::from_save("{\"xlevel\": 3, \"level\": 7, \"rem_min\": 41, \"rem_tick\": 123, \"hitp_beg_lev\": 5}").is_none(), "unknown key");
-    assert_eq!(Progress::from_save("{\"hitp_beg_lev\": 5, \"rem_tick\": 123, \"rem_min\": 41, \"level\": 7}").map(|p| p.level), Some(7), "any order");
+    // unknown keys are ignored (forward compatible); the key is matched exactly, not as a substring of another key
+    assert_eq!(Progress::from_save("{\"xlevel\": 3, \"level\": 7, \"rem_min\": 41, \"rem_tick\": 123, \"hitp_beg_lev\": 5}").map(|p| p.level), Some(7), "unknown key");
+    assert!(Progress::from_save("{\"xlevel\": 3, \"rem_min\": 41, \"rem_tick\": 123, \"hitp_beg_lev\": 5}").is_none(), "unknown key does not stand in for level");
+    assert!(Progress::from_save(&ok.replace("\"hitp_max\": 5", "\"extra\": 9x")).is_none(), "junk in an unknown key's value");    assert_eq!(Progress::from_save("{\"hitp_beg_lev\": 5, \"rem_tick\": 123, \"rem_min\": 41, \"level\": 7}").map(|p| p.level), Some(7), "any order");
     assert!(Progress::from_save(&ok.replace("\"rem_min\": 41", "\"rem_min\": 41, \"rem_min\": 42")).is_none(), "duplicate key");
     assert!(Progress::from_save(&ok.replace("41", "41x")).is_none(), "trailing junk in a value");
     assert!(Progress::from_save(&ok.replace("41", "-41")).is_none());
@@ -514,8 +515,8 @@ fn clock_runs_in_the_demo_and_stops_on_level_13_after_jaffar() {
     let mut w = World::new(data(), Level::parse(lv.get(2000).unwrap()).unwrap(), 0);
     tick(&mut w, NONE, 10);
     assert_eq!((w.progress.rem_min, w.progress.rem_tick), (60, 709));
-    // level 13: only while leveldoor_open == 0 (Jaffar's death sets 2, the opened door 1)
-    for (door, runs) in [(0u8, true), (2, false), (1, false)] {
+    // level 13: only while leveldoor_open == 0 (0000:C18D: any non-zero stops it; Jaffar's death sets 2, the opened door 1)
+    for (door, runs) in [(0u8, true), (2, false), (1, false), (0x4D, false)] {
         let mut w = World::new(data(), synth(1, 1..3, 3, 1, &[], &[]), 13);
         w.leveldoor_open = door;
         tick(&mut w, NONE, 5);

@@ -260,8 +260,8 @@ mod tests {
     #[test]
     fn feather_ticks_match_the_speaker_tune() {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Original_data");
-        let Ok(s) = pop_core::dat::Dat::open(format!("{dir}/IBM_SND1.DAT")) else { return };
-        let dats = [s, pop_core::dat::Dat::open(format!("{dir}/IBM_SND2.DAT")).unwrap()];
+        let (Ok(s1), Ok(s2)) = (pop_core::dat::Dat::open(format!("{dir}/IBM_SND1.DAT")), pop_core::dat::Dat::open(format!("{dir}/IBM_SND2.DAT"))) else { return };
+        let dats = [s1, s2];
         let p = super::original(&dats, 39).unwrap();
         let secs = p.samples.len() as f64 / p.rate as f64;
         assert!((secs - 18.61).abs() < 0.02, "{secs}");

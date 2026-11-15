@@ -102,8 +102,8 @@ impl Progress {
         )
     }
 
-    /// Parse `save_text` (a flat object of integer values); `None` if the shape is wrong, a key is unknown, duplicated or
-    /// missing, or a value is out of range (the file is user-editable).
+    /// Parse `save_text` (a flat object of integer values); `None` if the shape is wrong, a key is duplicated or missing,
+    /// or a value is out of range (the file is user-editable). Unknown keys are ignored (forward compatible).
     pub fn from_save(text: &str) -> Option<Progress> {
         let body = text.trim().strip_prefix('{')?.strip_suffix('}')?;
         let mut v = [None; 4];
@@ -116,8 +116,7 @@ impl Progress {
                 "rem_min" => 1,
                 "rem_tick" => 2,
                 "hitp_beg_lev" => 3,
-                "hitp_max" => continue, // informational
-                _ => return None,
+                _ => continue, // hitp_max is informational; unknown keys come from newer versions
             };
             if v[i].replace(num).is_some() {
                 return None;
@@ -588,6 +587,7 @@ impl World {
         let p = &mut self.progress;
         // 0000:C176..C199: alive, rem_min != 0, level <= 13 (13 only while leveldoor_open == 0: Jaffar's death sets 2, the
         // opened door then 1, time stays stopped), level < 15. Level 0 is not excluded: the clock also runs in the demo.
+        // 0000:C18D (VERIFIED): `cmp word [40DC],0; jne skip`, i.e. level 13 stops for any leveldoor_open != 0.
         let runs = self.level_no < 13 || (self.level_no == 13 && self.leveldoor_open == 0);
         if self.kid.alive && p.rem_min != 0 && runs {
             p.rem_tick -= 1;
