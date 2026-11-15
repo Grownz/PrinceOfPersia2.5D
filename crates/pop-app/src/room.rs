@@ -59,8 +59,29 @@ impl B<'_, '_, '_> {
     }
 }
 
+/// The current room plus its 8 neighbours (left/right/up/down and the diagonals via the neighbours' links).
 pub fn build_room(mut cmds: Commands, g: Res<Game>, p: Res<Palette>) {
-    spawn_room(&mut cmds, &g.world.level, &g.world.mobs, g.room, Vec3::ZERO, &p);
+    let level = &g.world.level;
+    let link = |r: u8, d: usize| if (1..=ROOMS as u8).contains(&r) { level.links[r as usize - 1][d] } else { 0 };
+    let [l, r, u, d] = level.links[g.room - 1];
+    // (room, dx, dy) in room units; a diagonal room is reached through whichever neighbour exists
+    let around = [
+        (g.room as u8, 0, 0),
+        (l, -1, 0),
+        (r, 1, 0),
+        (u, 0, 1),
+        (d, 0, -1),
+        (if link(u, 0) != 0 { link(u, 0) } else { link(l, 2) }, -1, 1),
+        (if link(u, 1) != 0 { link(u, 1) } else { link(r, 2) }, 1, 1),
+        (if link(d, 0) != 0 { link(d, 0) } else { link(l, 3) }, -1, -1),
+        (if link(d, 1) != 0 { link(d, 1) } else { link(r, 3) }, 1, -1),
+    ];
+    for (room, dx, dy) in around {
+        if (1..=ROOMS as u8).contains(&room) {
+            let origin = Vec3::new(dx as f32 * COLS as f32, dy as f32 * ROWS as f32 * TILE_H, 0.0);
+            spawn_room(&mut cmds, level, &g.world.mobs, room as usize, origin, &p);
+        }
+    }
 }
 
 /// Spawn `room` (1-based) with its left/bottom corner at `origin`; neighbours can be drawn with other origins.
