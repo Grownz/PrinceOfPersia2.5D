@@ -1,5 +1,5 @@
 //! settings.json next to the exe: window mode and size, volume, mute, sound mode, kid key bindings, data path, render mode,
-//! character style.
+//! character style, tile textures.
 //! Unknown keys are ignored and missing ones take their defaults, so older and newer files both load.
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -27,11 +27,15 @@ pub struct Settings {
     pub shadow_quality: String,
     /// enhanced mode only: screen-space ambient occlusion (turns MSAA off and uses SMAA instead)
     pub ssao: bool,
+    /// "original" (the tile images of VDUNGEON.DAT / VPALACE.DAT on the room pieces) or "procedural" (plain coloured
+    /// boxes); POP_TILES overrides
+    pub tile_textures: String,
 }
 
 pub const RENDER_MODES: [&str; 3] = ["classic", "enhanced", "rt_experimental"];
 pub const CHARACTER_STYLES: [&str; 2] = ["sprite", "voxel"];
 pub const SHADOW_QUALITIES: [&str; 3] = ["off", "low", "high"];
+pub const TILE_TEXTURES: [&str; 2] = ["original", "procedural"];
 
 /// The renderer actually used; `rt_experimental` falls back to `Classic`.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,7 +96,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, tile_textures: "original".into() }
     }
 }
 
@@ -129,6 +133,7 @@ impl Settings {
             character_style: field(&o, "character_style", d.character_style, |s| CHARACTER_STYLES.contains(&s.as_str())),
             shadow_quality: field(&o, "shadow_quality", d.shadow_quality, |s| SHADOW_QUALITIES.contains(&s.as_str())),
             ssao: field(&o, "ssao", d.ssao, |_| true),
+            tile_textures: field(&o, "tile_textures", d.tile_textures, |s| TILE_TEXTURES.contains(&s.as_str())),
         }
     }
 
@@ -136,6 +141,11 @@ impl Settings {
     pub fn render(&self) -> (RenderMode, CharacterStyle) {
         let (m, s) = (std::env::var("POP_RENDER").ok(), std::env::var("POP_CHARS").ok());
         resolve_render(&self.render_mode, &self.character_style, m.as_deref(), s.as_deref())
+    }
+
+    /// Original tile images on the room pieces (settings plus POP_TILES).
+    pub fn tile_textures(&self) -> bool {
+        crate::tiles::use_textures(&self.tile_textures, std::env::var("POP_TILES").ok().as_deref())
     }
 
     pub fn to_json(&self) -> String {
@@ -293,6 +303,17 @@ mod tests {
         assert_eq!(Settings::parse(r#"{"render_mode": "enhanced"}"#).shadow_quality, "high");
         let s = Settings::parse(r#"{"shadow_quality": "ultra", "ssao": "yes", "volume": 0.5}"#);
         assert_eq!((s.shadow_quality, s.ssao, s.volume), (d.shadow_quality, d.ssao, 0.5));
+    }
+
+    #[test]
+    fn tile_textures_parse_and_fall_back() {
+        assert_eq!(Settings::default().tile_textures, "original");
+        let s = Settings::parse(r#"{"tile_textures": "procedural"}"#);
+        assert_eq!(s.tile_textures, "procedural");
+        assert_eq!(Settings::parse(&s.to_json()), s);
+        let s = Settings::parse(r#"{"tile_textures": "hd", "volume": 0.5}"#);
+        assert_eq!((s.tile_textures.as_str(), s.volume), ("original", 0.5));
+        assert_eq!(Settings::parse(r#"{"tile_textures": 1}"#).tile_textures, "original");
     }
 
     #[test]

@@ -38,10 +38,10 @@ F3 debug; F5 classic / enhanced rendering; F6 sprite / voxel characters. Control
 [docs/controls.md](docs/controls.md).
 
 Settings (window mode and size, volume, mute, sound mode, key bindings, data path, `render_mode`, `character_style`,
-`shadow_quality`, `ssao`) live in `settings.json` next to the exe, created on the first run. `render_mode`: `classic`
+`shadow_quality`, `ssao`, `tile_textures`) live in `settings.json` next to the exe, created on the first run. `render_mode`: `classic`
 (default) or `enhanced` (torch and sun shadows, ambient occlusion, bloom; any GPU; F5; `shadow_quality` `off|low|high` and
 `ssao` `true|false` tune it), `rt_experimental` is reserved and falls back to classic; env `POP_RENDER`. `character_style`: `sprite` (default)
-or `voxel` (3D voxel figures built at runtime from your own sprite files, nothing is written to disk), env `POP_CHARS`, F6.
+or `voxel` (3D voxel figures built at runtime from your own sprite files, nothing is written to disk), env `POP_CHARS`, F6. `tile_textures`: `original` (default: the tile images of your VDUNGEON.DAT / VPALACE.DAT on the room pieces, decoded at runtime) or `procedural` (plain coloured boxes), env `POP_TILES`.
 
 ## Package
 

@@ -408,30 +408,29 @@ Use the palette resource from the **same DAT** as the images. Both files have 20
 
 Set choice: the palace flag at `[0FB2]+1CE` picks VPALACE, otherwise VDUNGEON **[V for the name build; I for which levels]**. `crates/pop-app/src/kid.rs` lists palace levels as 4, 5, 6, 10, 11, 14. That list was not re-checked here.
 
-## 5. Mapping to `crates/pop-app/src/room.rs` tile() placeholders
+## 5. Mapping to `crates/pop-app/src/room.rs` tile() placeholders (implemented)
 
-The boxes are the arms of `tile()` (room.rs about lines 130..215). REPLACE = a tile image could replace the box (ids from section 3). KEEP = stays procedural.
+Implemented in `crates/pop-app/src/tiles.rs` (`tile_images` = the pure mapping, tested with the ids below) and `room.rs`; setting `tile_textures` (`original` | `procedural`, env `POP_TILES`). Images come from the set of the level (palace levels 4, 5, 6, 10, 11, 14 = VPALACE), palette 200 (360 for 361..377), nearest sampling, lit `StandardMaterial`. Resource id = `200 + v` if the set has a 4-bit image there, else `1200 + v`; anything missing falls back to the procedural material and is logged. Pixel scale: 32 px = 1 world unit across, 63 px = `TILE_H` up.
 
-| tile() arm | current box | candidate image ids | verdict |
-|---|---|---|---|
-| back wall (`build_room` / `spawn_tiles`, dark slab) | dark slab | none | KEEP |
-| Empty | nothing | none | KEEP |
-| Wall (20) | stone block | 361 / 362 (chtab 7, G); wall routine not decoded | KEEP until the wall routine is traced |
-| Floor, Skeleton, Sword, Debris, BalconyLeft, BalconyRight (`floor(stone)`) | stone slab | Floor: 243 (top 32x3) and 241 (face 32x13) [I]; Debris: 297, 298, 300 [I]; Skeleton: 1230 (dungeon only) [I] | REPLACE the slab with 243 + 241. Keep the overlays of Skeleton, Sword, Debris |
-| LooseFloor | wood slab | record 11 has no image | KEEP (falling floors come from the mob list) |
-| Spikes | stone slab + 4 metal spikes | 243 [I]; spike frames 1327, 1333 [I] | REPLACE the slab; keep the animated spikes |
-| Pillar, BigPillarBottom, BigPillarTop, LatticePillar, LatticeSupport | stone column | Pillar: 292 (32x60), 293, 294, 295 [I]; BigPillar: 1286..1291 [I]; LatticePillar: 292 / 295 [I] | REPLACE |
-| DoortopWithFloor, Doortop | red box | Doortop: 285 (32x4) [I]; DoortopWithFloor: 246 / 249 / 243 [I] | REPLACE |
-| SmallLattice, LatticeLeft, LatticeRight | metal box | chtab 7 candidates 363..365 [G] | KEEP |
-| Gate | 5 bars moving with the modifier | back 246 (32x60), frame 247, 248, bars 249 (8x60), floor 243 [I] | REPLACE the backdrop; bars can use 249 |
-| StuckButton, DropButton | red box | 235 (26x16) + top 236 or 296 [I] | REPLACE |
-| RaiseButton | blue box | 347 (32x14) + top 349 [I] | REPLACE |
-| Potion | red box | 241 / 242 / 243 [I]; the potion item is not in this set | KEEP (item) |
-| Mirror | glass box | 242 / 243 [I]; 1275 and 1277 are palace only [I] | KEEP until the set is known |
-| ExitLeft, ExitRight | dark box | 237 / 238 (left), 239 / 240 (right) [I] | REPLACE the frame; keep the animated door panel |
-| Chomper | metal box | 242 / 243 [G] | KEEP (animated sprite) |
-| Torch, TorchDebris | stone slab, flame, light | 241 / 242 / 243 for the stone [G]; flames are PRINCE.DAT, not in this set | REPLACE the stone only |
-| Unknown31 | blue slab | none (record 31 is not a type record) | KEEP |
+What the images are (checked by eye, sheets from `dump_png` at 6x): 241 / 242 are the floor **top surface** drawn sheared (241 on the tile, 242 its right piece in the next column, with a 5-px end face), 243 is the 3-px **front lip** (not the top). 292 / 293 are the pillar with the floor behind it; 295 is the bare column (the piece in front of the kid). 249 is a door post, not gate bars. 260..267 (20x9) are not gate bars either (they look like small rubble/crack pieces), so the gate keeps its moving procedural bars. 237 / 239 are the exit door posts with floor rows at the bottom, 238 / 240 the lintels. Dungeon 368 / 370 are full brick wall faces (32x60); palace 366..374 are 1-bit mortar overlays.
+
+| tile() arm | textured as | verdict |
+|---|---|---|
+| back wall, Empty | dark slab / nothing | KEEP |
+| Floor, Sword, Balcony, Potion, Torch, Chomper, Mirror, Lattice*, Doortop* floors | floor slab with a 32x16 texture: the unsheared top surface (241 row runs + 242 row runs without the end face) over the lip 243; same texture on top and sides | verified visually (both sets). Doortop (12) has no floor piece in its record (+8 = 285); its floor slab is kept and gets the plain floor: guess |
+| Skeleton | 1230 / 1231 / 243 (dungeon); palace has no 1230 -> plain floor | composite built; not looked at in a screenshot |
+| Debris, TorchDebris | 297 / 298 / 243 | verified visually (rubble on the slab); the procedural dark box is kept on top |
+| Spikes | 1327 / 1333 / 243 (holes in the surface), animated metal spikes kept | verified visually |
+| StuckButton / DropButton / RaiseButton | 241+235+236 / 241+242+296 / 347+242+349; the marker box is dropped | composites built; the difference to a plain floor is subtle (as in the original), not checked closely |
+| LooseFloor | wood slab | KEEP (no record images; falling floors are mobs) |
+| Pillar, LatticePillar | column of 295 (19 px wide dungeon, 16 px palace, cut-out), square, `TILE_H` tall | verified visually |
+| BigPillarBottom / BigPillarTop | 1288 / 1291 columns; the top cell has no floor slab (its record has no +8) | verified visually (level 2 room 5, level 5 room 7) |
+| LatticeSupport | stone column | KEEP (record values are chtab-7 guesses) |
+| Gate, DoortopWithFloor, Doortop | post 249 (8 px) at the right edge of the cell, back half; gate bars stay procedural | post placement is a guess (the 2D post is a fore piece); looks plausible |
+| ExitLeft / ExitRight | frame 237 / 239 cut to 47 rows over a dark doorway, lintel 238 / 240 above | verified visually (both sets); each frame is drawn in its own column (the original draws +3 pieces one column to the right): guess |
+| Wall | dungeon 368 (mod 0) / 370 (mod 1) on the block, one row tall (`TILE_H - SLAB` top, no overlapping faces); palace: procedural | dungeon verified visually; palace KEEP (1-bit overlays need the unknown fill routine) |
+| SmallLattice, LatticeLeft, LatticeRight, Unknown31 | procedural | KEEP |
+| cutscene chamber (`spawn_chamber`) | procedural | KEEP (its own look) |
 
 ## 6. Open questions and limits
 
@@ -442,7 +441,7 @@ The boxes are the arms of `tile()` (room.rs about lines 130..215). REPLACE = a t
 5. Ids in the DAT with no record reference: 232..234, 244, 245, 250..274, 299, 324..326, 344, 346, 348, 350, 351, 361..377, and the other extras. Their use is unknown. 250..267 probably belong to the ds:2780 sequence (section 3).
 6. Palace-only ids (1201..1213, 1275..1283) mean the same record can resolve differently in each set. Re-check when base 1200 is traced.
 7. Prefix letter: the adapter byte `ds:3035` picks the prefix from the `ds:2E0` table. In 105A the value 5 is the VGA case, so the "V" file is assumed. The shipped static value is 0; the runtime value comes from the config (DESKTOP.CFG), not checked.
-8. Visual check: contact sheets exist (`dump_png`). Checked by eye: 241/243 (floor face and top), 292/293/295 and BigPillar 1286..1291 (column shapes), 368/370 (wall brick blocks). Not yet checked well: 246..249 (gate, sizes only), 260..267 (gate frames), 362 (wall face), 1-bit palace images 366..377 (need palette 360). Visual check of roles in section 5 is only partial.
+8. Visual check: contact sheets exist (`dump_png`); see section 5 for the in-game check. Checked by eye: 241/243 (floor top surface and front lip), 292/293/295 and BigPillar 1286..1291 (column shapes), 368/370 (wall brick blocks). Not yet checked well: 246..249 (gate, sizes only), 260..267 (gate frames), 362 (wall face), 1-bit palace images 366..377 (need palette 360). Visual check of roles in section 5 is only partial.
 9. Not every type's piece draw was traced. A299 (types 0, 9, 12 with a gate neighbour) and the other A332 branches were read only partly.
 
 ## 7. Reproduce
