@@ -4,9 +4,11 @@
 //! Keys: arrows + Shift = kid, Esc/P = pause, Ctrl+A = restart, Ctrl+G = save, Ctrl+L = load (title/demo), M = mute,
 //! - / = = volume, F11 = borderless fullscreen, F3 = debug text, controller supported (docs/controls.md)
 //! (with it on: Ctrl+arrows = neighbouring room, Ctrl+PageUp/PageDown = level, sequence viewer keys).
-//! POP_LEVEL / POP_ROOM skip the title; POP_SOUND=original uses the game's own sounds; POP_DATA = game data folder;
+//! POP_LEVEL / POP_ROOM skip the title; POP_CUTSCENE=<level>|end|timeout|intro plays that cutscene at once (then quits
+//! back into the normal flow); POP_SOUND=original uses the game's own sounds; POP_DATA = game data folder;
 //! POP_PERF=1 logs the average frame time (vsync off) and room rebuilds every 300 frames.
 mod audio;
+mod cutscene;
 mod flow;
 mod kid;
 mod room;
@@ -149,9 +151,10 @@ fn main() {
         .insert_resource(assets)
         .init_resource::<flow::Flow>()
         .insert_state(if skip_title { flow::Screen::Playing } else { flow::Screen::Title })
-        .add_systems(Startup, (setup, kid::setup, flow::setup)) // first room is built by room::rebuild_on_change
-        .add_systems(OnEnter(flow::Screen::Title), (flow::reset_idle, audio::enter_title))
-        .add_systems(OnEnter(flow::Screen::Card), audio::enter_card)
+        .insert_resource(cutscene::Cut::load(&dir))
+        .add_systems(Startup, ((setup, cutscene::setup, debug_cutscene).chain(), kid::setup, flow::setup)) // first room is built by room::rebuild_on_change
+        .add_systems(OnEnter(flow::Screen::Title), audio::enter_title)
+        .add_systems(OnEnter(flow::Screen::Cutscene), audio::enter_cutscene)
         .add_systems(OnEnter(flow::Screen::Paused), audio::pause)
         .add_systems(OnExit(flow::Screen::Paused), audio::resume)
         .add_systems(
@@ -162,6 +165,7 @@ fn main() {
                 .chain()
                 .run_if(playing()),
         )
+        .add_systems(FixedUpdate, (audio::drain, cutscene::fixed.run_if(in_state(flow::Screen::Cutscene))).chain().run_if(|s: Res<State<flow::Screen>>| matches!(s.get(), flow::Screen::Title | flow::Screen::Cutscene)))
         .add_systems(
             Update,
             (
@@ -169,11 +173,12 @@ fn main() {
                 flow::pause,
                 audio::keys,
                 flow::title.run_if(in_state(flow::Screen::Title)),
-                flow::card_step.run_if(in_state(flow::Screen::Card)),
+                (cutscene::latch, flow::cutscene_end).run_if(in_state(flow::Screen::Cutscene)),
                 (navigate, kid::keys, flow::playing).chain().run_if(playing()),
                 room::rebuild_on_change,
                 kid::render,
                 flash,
+                cutscene::render,
                 flow::overlay,
                 debug_text,
                 fullscreen,
@@ -221,11 +226,10 @@ fn perf_log(time: Res<Time<Real>>, mut acc: Local<(u32, f32, u32)>) {
 
 fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>) {
     cmds.insert_resource(room::Palette::new(&mut meshes, &mut mats));
-    // The room is 10 wide and 3 * TILE_H tall; look at its centre with a slight downward tilt for depth.
     let centre = Vec3::new(5.0, 3.0, 0.0);
     cmds.spawn((
         Camera3d::default(),
-        Transform::from_xyz(5.0, 4.2, 13.5).looking_at(centre, Vec3::Y),
+        game_camera(),
         AmbientLight { color: Color::srgb(0.6, 0.65, 0.9), brightness: 150.0, ..default() },
     ));
     cmds.spawn((DirectionalLight { illuminance: 4000.0, ..default() }, Transform::from_xyz(-4.0, 9.0, 10.0).looking_at(centre, Vec3::Y)));
@@ -237,6 +241,28 @@ fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<
     ));
     // full-window flash tint, below the HUD and texts
     cmds.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(-1), BackgroundColor(Color::NONE), FlashOverlay));
+}
+
+/// The level view: the room is 10 wide and 3 * TILE_H tall; look at its centre with a slight downward tilt for depth.
+pub fn game_camera() -> Transform {
+    Transform::from_xyz(5.0, 4.2, 13.5).looking_at(Vec3::new(5.0, 3.0, 0.0), Vec3::Y)
+}
+
+/// POP_CUTSCENE=<level>|end|timeout|intro (debugging): start that scene right away (POP_REM_MIN sets the minutes left for the
+/// hourglass and the level-12 branch, default 60). After it the normal flow goes on.
+fn debug_cutscene(mut cut: ResMut<cutscene::Cut>, a: Res<kid::KidAssets>, mut next: ResMut<NextState<flow::Screen>>) {
+    use pop_core::cutscene::Scene;
+    let Ok(v) = std::env::var("POP_CUTSCENE") else { return };
+    let rem = std::env::var("POP_REM_MIN").ok().and_then(|m| m.parse().ok()).unwrap_or(60);
+    let (scene, then) = match v.as_str() {
+        "end" => (Scene::Ending, cutscene::Then::EndPages),
+        "timeout" => (Scene::TimeOut, cutscene::Then::Title),
+        "intro" => (Scene::Intro, cutscene::Then::Title),
+        l => (Scene::Level(l.parse().unwrap_or(2)), cutscene::Then::Play),
+    };
+    if cut.start(a.data.clone(), scene, rem, then) {
+        next.set(flow::Screen::Cutscene);
+    }
 }
 
 #[derive(Component)]

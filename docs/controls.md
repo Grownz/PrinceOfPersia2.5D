@@ -41,7 +41,7 @@ from both are combined.
 | A / Cross (South), X / Square (West) | Shift (action) |
 | Start / Options | Pause / resume |
 | Back / Select / Share | Restart the level (Ctrl+A), while playing |
-| Any button | Title: start a new game; demo: start the game; skip a card |
+| Any button | Title: start a new game; demo: start the game; skip a cutscene |
 
 Save, load, volume, mute and fullscreen stay on the keyboard.
 

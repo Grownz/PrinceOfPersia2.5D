@@ -11,6 +11,10 @@ const SLAB: f32 = 0.3;
 #[derive(Component)]
 pub struct RoomEntity;
 
+/// Geometry of the cutscene set (the princess chamber), kept apart from the room rebuilds.
+#[derive(Component)]
+pub struct Chamber;
+
 #[derive(Resource)]
 pub struct Palette {
     cube: Handle<Mesh>,
@@ -45,17 +49,22 @@ struct B<'a, 'w, 's> {
     cmds: &'a mut Commands<'w, 's>,
     p: &'a Palette,
     origin: Vec3,
+    chamber: bool,
 }
 
 impl B<'_, '_, '_> {
     /// Box from `lo` to `hi` (corner coordinates).
     fn put(&mut self, mat: &Handle<StandardMaterial>, lo: Vec3, hi: Vec3) {
-        self.cmds.spawn((
-            Mesh3d(self.p.cube.clone()),
-            MeshMaterial3d(mat.clone()),
-            Transform::from_translation(self.origin + (lo + hi) / 2.0).with_scale(hi - lo),
-            RoomEntity,
-        ));
+        let e = self.cmds.spawn((Mesh3d(self.p.cube.clone()), MeshMaterial3d(mat.clone()), Transform::from_translation(self.origin + (lo + hi) / 2.0).with_scale(hi - lo))).id();
+        self.tag(e);
+    }
+
+    fn tag(&mut self, e: Entity) {
+        if self.chamber {
+            self.cmds.entity(e).insert(Chamber);
+        } else {
+            self.cmds.entity(e).insert(RoomEntity);
+        }
     }
 }
 
@@ -86,13 +95,28 @@ pub fn build_room(mut cmds: Commands, g: Res<Game>, p: Res<Palette>) {
 
 /// Spawn `room` (1-based) with its left/bottom corner at `origin`; neighbours can be drawn with other origins.
 pub fn spawn_room(cmds: &mut Commands, level: &Level, mobs: &[pop_core::sim::Mob], room: usize, origin: Vec3, p: &Palette) {
-    let mut b = B { cmds, p, origin };
+    spawn_tiles(&mut B { cmds, p, origin, chamber: false }, level, mobs, room);
+}
+
+/// The same builder for the cutscene set: entities carry `Chamber` instead of `RoomEntity`.
+pub fn spawn_chamber(cmds: &mut Commands, level: &Level, room: usize, origin: Vec3, p: &Palette) {
+    spawn_tiles(&mut B { cmds, p, origin, chamber: true }, level, &[], room);
+}
+
+/// A plain box of the room palette in the chamber set (`mat`: "stone", "dark", "wood", "flame"; anything else = metal).
+pub fn chamber_box(cmds: &mut Commands, p: &Palette, mat: &str, lo: Vec3, hi: Vec3) {
+    let m = match mat { "stone" => p.stone.clone(), "dark" => p.dark.clone(), "wood" => p.wood.clone(), "flame" => p.flame.clone(), _ => p.metal.clone() };
+    B { cmds, p, origin: Vec3::ZERO, chamber: true }.put(&m, lo, hi);
+}
+
+fn spawn_tiles(b: &mut B, level: &Level, mobs: &[pop_core::sim::Mob], room: usize) {
+    let p = b.p;
     // back wall
     b.put(&p.dark, Vec3::new(-0.5, -SLAB, -1.0), Vec3::new(10.5, 3.0 * TILE_H, -0.9));
     for row in 0..ROWS {
         for col in 0..COLS {
             let t = level.tile(room, col, row);
-            tile(&mut b, col as f32, (ROWS - 1 - row) as f32 * TILE_H, t);
+            tile(b, col as f32, (ROWS - 1 - row) as f32 * TILE_H, t);
         }
     }
     // falling loose floors: mob y is a screen line, 65 + 63 * row = floor line of that row
@@ -179,14 +203,16 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef) {
             floor(b, &stone);
             let top = Vec3::new(x + 0.5, y + TILE_H * 0.65, -0.8);
             b.put(&p.flame, top - Vec3::new(0.06, 0.0, 0.06), top + Vec3::new(0.06, 0.25, 0.06));
-            b.cmds.spawn((
-                PointLight { color: Color::srgb(1.0, 0.65, 0.3), intensity: 250_000.0, range: 9.0, shadow_maps_enabled: false, ..default() },
-                Transform::from_translation(b.origin + top + Vec3::new(0.0, 0.3, 0.6)),
-                RoomEntity,
-            ));
+            let e = b.cmds.spawn((torch_light(), Transform::from_translation(b.origin + top + Vec3::new(0.0, 0.3, 0.6)))).id();
+            b.tag(e);
         }
         Unknown31 => floor(b, &p.blue),
     }
+}
+
+/// The light of a torch (levels and the cutscene set).
+pub fn torch_light() -> PointLight {
+    PointLight { color: Color::srgb(1.0, 0.65, 0.3), intensity: 250_000.0, range: 9.0, shadow_maps_enabled: false, ..default() }
 }
 
 /// Room rebuilds so far (POP_PERF).

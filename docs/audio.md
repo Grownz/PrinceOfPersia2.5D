@@ -51,19 +51,19 @@ story/title music; their names follow SDLPoP's `sound_ids` (UNVERIFIED against P
 | 23 | footstep (seq op F2 1) | seq | yes | 0.12 s (8200 Hz) | 0.01 s |
 | 24 | death music | `832B` | yes | - | 2.97 s |
 | 25 | shadow appears / mirror music (levels 4, 6) | `37BF`, `3DEA` | yes | - | 1.82 s |
-| 26 | embrace (ending cutscene `2960`) | edge_cases 4.1 | card | - | 11.69 s |
-| 27 | princess waiting (cutscene before 2, 4, 6) | `2B04`, `2AD0` | card | - | 10.73 s |
+| 26 | embrace (ending cutscene `2960`) | edge_cases 4.1 | scene | - | 11.69 s |
+| 27 | princess waiting (cutscene before 2, 4, 6) | `2B04`, `2AD0` | scene | - | 10.73 s |
 | 28 | death music, holding the sword | `8324` | yes | - | 6.45 s |
 | 29 | meet Jaffar | `3DB7` | yes | - | 3.94 s |
 | 30 | life potion | `8249` | yes | - | 2.33 s |
 | 32 | shadow music (death by the shadow; level-4 stairs) | `8316`, F2 4 | yes | - | 4.92 s |
 | 33 | heal potion | `8223` | yes | - | 2.48 s |
-| 35 | princess and the mouse (cutscene before 8, 9) | `2891`, `28FB` | card | - | 9.75 s |
-| 36 | time is up (cutscene `2A1B`) | edge_cases 3.5 | card | - | 12.72 s |
+| 35 | princess and the mouse (cutscene before 8, 9) | `2891`, `28FB` | scene | - | 9.75 s |
+| 36 | time is up (cutscene `2A1B`) | edge_cases 3.5 | scene | - | 12.72 s |
 | 37 | guard killed / sword picked up | `837E`, `81CC` | yes | - | 2.54 s |
 | 38 | blink beep ("Press Button" blink, UNVERIFIED) | `0C83:7198`? | no | - | 0.06 s |
 | 39 | feather potion | `162B` | yes | - | 18.61 s |
-| 40 | cutscene before 12 | `2A71` | card | - | 5.18 s |
+| 40 | cutscene before 12 | `2A71` | scene | - | 5.18 s |
 | 41 | end of level (seq op F2 4) | seq 70 | yes | - | 11.31 s |
 | 43 | Jaffar killed | `8372` | yes | - | 3.38 s |
 | 44 | skeleton wakes | `45F6` | yes | 0.24 s | 0.38 s |
@@ -72,16 +72,16 @@ story/title music; their names follow SDLPoP's `sound_ids` (UNVERIFIED against P
 | 47 | chomper closes | `8A79` | yes | 0.47 s | 0.11 s |
 | 48 | spiked | `605A` | yes | 0.16 s | 0.15 s |
 | 49 | spikes come out | `8F02` | yes | 0.40 s | 0.06 s |
-| 50 | story 2: princess | - | no | - | 9.50 s |
-| 51 | princess door opening | - | no | 0.44 s (14000 Hz) | 0.54 s |
-| 52 | story 4: Jaffar leaves | - | no | - | 27.98 s |
-| 53 | story 3: Jaffar comes | - | no | - | 14.85 s |
-| 54 | intro music | - | no | - | 24.74 s |
-| 55 | story 1: absence | - | no | - | 14.86 s |
-| 56 | ending music | - | no | - | 120.04 s |
+| 50 | story 2: princess | pv_scene `2B38` | scene | - | 9.50 s |
+| 51 | princess door opening | pv_scene | scene | 0.44 s (14000 Hz) | 0.54 s |
+| 52 | story 4: Jaffar leaves | pv_scene | scene | - | 27.98 s |
+| 53 | story 3: Jaffar comes | pv_scene | scene | - | 14.85 s |
+| 54 | intro music | show_title `181D` | title | - | 24.74 s |
+| 55 | story 1: absence | show_title | title | - | 14.86 s |
+| 56 | ending music | end_sequence `2F2F` | title | - | 120.04 s |
 
-31, 34 and 42 are empty everywhere (1-byte resources). "card" = played by the app on the text card that stands in for the
-cutscene (flow.rs). Not modelled: the original's "stop sounds" before the potion sounds and at Ctrl+A/level exits is kept only
+31, 34 and 42 are empty everywhere (1-byte resources). "scene" = started by a cutscene script (`pop_core::cutscene`, queued
+until no sound plays, docs/cutscenes.md 1.3); "title" = the attract loop / ending pages (flow.rs). Not modelled: the original's "stop sounds" before the potion sounds and at Ctrl+A/level exits is kept only
 for world changes (all sounds stop when a new `World` starts).
 
 ## 3. Resource files (VERIFIED by decoding)
@@ -111,7 +111,7 @@ on an AdLib/MIDI setup are UNVERIFIED. The speaker lengths above are the ones us
 
 ## 4. Playback in the remake (pop-app)
 
-- `synth.rs`: every emitted id and the card cues are synthesized at startup (oscillators, filtered noise, envelopes; music cues
+- `synth.rs`: every emitted id and the cutscene/title cues are synthesized at startup (oscillators, filtered noise, envelopes; music cues
   are short original jingles, not the game's melodies), mono 22050 Hz, peak 0.5. No audio files in the repository. Unit test:
   every clip is non-silent, finite, within its length range, not clipped.
 - `POP_SOUND=original`: digitized clip where the game has one, else the PC-speaker tune rendered as a square wave, else the
@@ -120,8 +120,10 @@ on an AdLib/MIDI setup are UNVERIFIED. The speaker lengths above are the ones us
   `bevy_audio`). Polyphonic; the same id again restarts that sound (approximates the single channel for repeated ticks).
 - Headroom instead of a limiter (bevy_audio has no hook on the mixed output): synthesized clips peak at 0.5, digitized ones at
   0.5, speaker tunes at 0.25, and the same id restarts instead of stacking, so typical overlaps stay below 1.0 at full volume.
-- Master volume (`-` / `=`, 10 % steps, default 70 %) and mute (`M`), applied to every playing or just-spawned sound (effects and cues); Paused pauses the playing sounds; Title and cards stop
-  them; a card plays its cue (27 / 35 / 40 cutscenes, 36 time out, 26 the end).
+- Master volume (`-` / `=`, 10 % steps, default 70 %) and mute (`M`), applied to every playing or just-spawned sound (effects and cues); Paused pauses the playing sounds; a fresh title and every
+  cutscene start silent; cutscenes and the title play their cues through the same path. Title music 50..56: own phrases cut or
+  padded to the speaker lengths, because the attract loop and the intro scene wait for them (synth test checks the lengths).
+- Outside Playing (title, cutscenes) `audio::drain` counts `busy` down per fixed step, so "until no sound plays" works there.
 
 ## 5. "A sound is playing": death counter and level end
 
@@ -154,6 +156,6 @@ matching the speaker tune, so effect and music end together.
 
 - The original's sound priority / interruption rules (one channel; which sounds cut which) are not traced.
 - Bit 7 of the type byte; the 2750 Hz rate of digi 15.
-- The MIDI/AdLib lengths of the music cues; title/story music (50..56) is not played.
+- The MIDI/AdLib lengths of the music cues (the cutscene and title timing uses the speaker lengths).
 - Audio output itself was not listened to during development (verified by unit tests and debug logging: `RUST_LOG=pop_app=debug`
   prints every played id).

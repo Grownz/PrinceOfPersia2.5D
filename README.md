@@ -28,7 +28,8 @@ cargo test --workspace               # tests needing Original_data print "skippi
 
 Environment variables: `POP_DATA` (data folder), `POP_LEVEL` / `POP_ROOM` (skip the title), `POP_SOUND=original`
 (the game's own sounds), `POP_PERF=1` (log frame time and room rebuilds every 300 frames, vsync off),
-`POP_SHOT=file.png` (screenshot after `POP_SHOT_FRAME`, default 400 frames, then quit), `POP_SCRIPT` (scripted keys).
+`POP_SHOT=file.png` (screenshot after `POP_SHOT_FRAME`, default 400 frames, then quit), `POP_SCRIPT` (scripted keys),
+`POP_CUTSCENE=<level>|end|timeout|intro` (play that cutscene at once; `POP_REM_MIN` = minutes left for the hourglass).
 
 ## Controls
 

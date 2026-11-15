@@ -185,6 +185,22 @@ pub fn sound(id: u8) -> Option<Vec<f32>> {
         47 => mix(&[(tone(0.12, 900.0, 900.0, Square, 40.0), 0.4, 0.0), (noise(0.08, 5000.0, 5000.0, 60.0, 41), 0.6, 0.0)]), // chomper snaps
         48 => mix(&[(noise(0.3, 4000.0, 600.0, 12.0, 42), 1.0, 0.0), (tone(0.25, 500.0, 150.0, Square, 12.0), 0.4, 0.0)]), // spiked
         49 => mix(&[(tone(0.15, 1800.0, 3000.0, Sine, 20.0), 0.5, 0.0), (noise(0.1, 7000.0, 7000.0, 40.0, 43), 0.4, 0.0)]), // spikes come out
+        51 => mix(&[(swell(noise(0.5, 900.0, 1500.0, 0.0, 44)), 0.8, 0.0), (tone(0.5, 140.0, 180.0, Square, 3.0), 0.2, 0.0)]), // princess door opening
+        // title and story music: own phrases, cut/padded to the PC-speaker lengths (the attract loop and the intro scene wait
+        // for them, docs/cutscenes.md 2)
+        50..=56 => {
+            let (phrase, bpm, secs, root): (&[(i8, f32)], f32, f32, i8) = match id {
+                50 => (&[(12, 1.0), (14, 0.5), (15, 0.5), (14, 1.0), (12, 1.0), (10, 2.0)], 90.0, 9.50, 0), // princess
+                52 => (&[(0, 1.0), (-2, 1.0), (-4, 1.0), (-5, 2.0), (-7, 1.0), (-5, 2.0)], 80.0, 27.98, -12), // Jaffar leaves
+                53 => (&[(-12, 1.0), (-11, 1.0), (-12, 1.0), (-8, 1.0), (-7, 2.0), (-12, 2.0)], 80.0, 14.85, -12), // Jaffar comes
+                54 => (&[(0, 1.0), (7, 1.0), (8, 0.5), (7, 0.5), (5, 1.0), (3, 1.0), (2, 1.0), (0, 2.0)], 100.0, 24.74, 0), // intro
+                55 => (&[(12, 1.5), (10, 0.5), (8, 1.0), (7, 1.0), (5, 1.0), (7, 3.0)], 90.0, 14.86, 0), // story 1
+                _ => (&[(0, 1.0), (4, 1.0), (7, 1.0), (12, 2.0), (11, 1.0), (9, 1.0), (7, 2.0), (5, 1.0), (4, 1.0), (2, 1.0), (0, 2.0)], 100.0, 120.04, 0), // ending
+            };
+            let reps = (secs / beats(phrase, bpm)).ceil() as usize;
+            let notes: Vec<(i8, f32)> = phrase.iter().copied().cycle().take(phrase.len() * reps).collect();
+            jingle(&notes, bpm, Some(secs), root)
+        }
         _ => return None,
     };
     normalize(&mut v, 0.5);
@@ -203,11 +219,11 @@ mod tests {
     #[test]
     fn clips_are_audible_and_bounded() {
         let emitted = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 32, 33, 37, 39, 41, 43, 44, 45, 46, 47, 48, 49];
-        let cards = [26, 27, 35, 36, 40];
+        let cards = [26, 27, 35, 36, 40, 50, 51, 52, 53, 54, 55];
         for id in emitted.into_iter().chain(cards) {
             let v = sound(id).unwrap_or_else(|| panic!("no clip for {id}"));
             let secs = v.len() as f32 / RATE as f32;
-            assert!((0.03..=19.0).contains(&secs), "{id}: {secs} s");
+            assert!((0.03..=30.0).contains(&secs), "{id}: {secs} s");
             let peak = v.iter().fold(0.0f32, |m, x| m.max(x.abs()));
             assert!(peak > 0.45 && peak <= 0.5 + 1e-6, "{id}: peak {peak}");
             assert!(v.iter().all(|x| x.is_finite()));
@@ -219,6 +235,10 @@ mod tests {
             assert_eq!(sound(id).unwrap().len(), len(secs));
         }
         assert!(sound(31).is_none());
+        // title/story music keeps the speaker lengths (the attract loop waits for it); 56 (120 s) is checked by length only
+        for (id, secs) in [(50, 9.50), (52, 27.98), (53, 14.85), (54, 24.74), (55, 14.86), (56, 120.04)] {
+            assert_eq!(sound(id).unwrap().len(), len(secs), "{id}");
+        }
         // overlapping clips at the default volume (0.7) must not clip
         assert!(2.0 * 0.5 * 0.7 < 1.0);
     }
