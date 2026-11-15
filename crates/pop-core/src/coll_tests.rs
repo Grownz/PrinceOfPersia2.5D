@@ -18,7 +18,7 @@ struct Rig {
 
 impl Rig {
     fn env(&self) -> Env<'_> {
-        Env { exe: &self.exe, frames: &self.frames, level: &self.level, sizes: &self.sizes }
+        Env::new(&self.exe, &self.frames, &self.level, &self.sizes)
     }
 }
 

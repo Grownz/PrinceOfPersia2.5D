@@ -13,7 +13,7 @@ fn data() -> Arc<Data> {
     let exe = crate::exe::Exe::open(format!("{DIR}PRINCE.EXE")).unwrap();
     let frames = exe.kid_frames();
     let sizes = crate::image::image_sizes(&Dat::open(format!("{DIR}KID.DAT")).unwrap(), 401, 220);
-    Arc::new(Data { exe, frames, sizes })
+    Arc::new(Data { exe, frames, sizes, gframes: vec![], gsizes: vec![] })
 }
 
 /// Room 1 with floor on rows 1 and 2; the kid starts at (col, 1) facing right. `tiles` = (col, row, type) overrides.

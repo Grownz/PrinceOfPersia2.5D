@@ -8,9 +8,12 @@
 //! Not simulated: torch/potion/sword animation (visual only, they also consume random numbers in the original),
 //! guards, the shadow, level doors (entering), skeleton, mirror, potions.
 use crate::exe::{Exe, Frame};
-use crate::kid::{Env, Event, Keys, Kid, Y_LAND};
+use crate::kid::{Env, Event, Keys, Kid, Rng, Shared, Y_LAND};
 use crate::level::{Level, Tile, COLS, ROWS, TILES_PER_ROOM};
 use std::sync::Arc;
+
+mod combat;
+pub use combat::{GuardSlot, ShadowState, GUARD_TYPE, mk_env};
 
 pub const TICKS_PER_SEC: u32 = 12;
 pub const SUBSTEPS: u32 = 5;
@@ -32,6 +35,10 @@ pub struct Data {
     pub frames: Vec<Frame>,
     /// (height, width) of kid image i (KID.DAT resource 401 + i)
     pub sizes: Vec<(u16, u16)>,
+    /// guard frame table (frames 150..190)
+    pub gframes: Vec<Frame>,
+    /// image sizes of the guard-type files, indexed by guard type (GUARD, FAT, SKEL, VIZIER, SHADOW)
+    pub gsizes: Vec<Vec<(u16, u16)>>,
 }
 
 /// A moving tile ("trob"): `ty` < 0 = finished. Meaning of `ty` depends on the tile type (docs/tiles.md 2.2).
@@ -71,17 +78,49 @@ pub struct World {
     /// bumped whenever tiles, trobs or mobs changed; renderers use it to know when to rebuild
     pub version: u32,
     dirty: bool,
-    seed: u32,
+    rng: Rng,
     last_loose_sound: u8,
+    /// the one active guard (or skeleton, shadow); `None` = no guard (Guard.direction == 0x56)
+    pub guard: Option<Kid>,
+    pub slots: [GuardSlot; 24],
+    /// guard type of this level (tbl_guard_type), -1 = none
+    pub guard_type: i8,
+    pub shared: Shared,
+    pub shadow: ShadowState,
 }
 
 impl World {
     pub fn new(data: Arc<Data>, level: Level, level_no: usize) -> World {
+        let guard_type = GUARD_TYPE[level_no.min(15)];
         let kid = {
-            let env = Env { exe: &data.exe, frames: &data.frames, level: &level, sizes: &data.sizes };
-            Kid::spawn(&env, level_no)
+            let env = mk_env(&data, &level, guard_type);
+            let mut k = Kid::spawn(&env, level_no);
+            k.have_sword = level_no >= 2; // the sword is picked up on level 1
+            k
         };
-        let mut w = World { tick: 0, sub: 0, data, level, level_no, kid, trobs: vec![], mobs: vec![], sounds: vec![], leveldoor_open: 0, version: 0, dirty: true, seed: 0x1234_5678, last_loose_sound: 0 };
+        let slots = World::init_guard_slots(&level, level_no);
+        let shared = Shared { level: level_no, drawn_room: kid.room, ..Shared::default() };
+        let mut w = World {
+            tick: 0,
+            sub: 0,
+            data,
+            level,
+            level_no,
+            kid,
+            trobs: vec![],
+            mobs: vec![],
+            sounds: vec![],
+            leveldoor_open: 0,
+            version: 0,
+            dirty: true,
+            rng: Rng(0x1234_5678),
+            last_loose_sound: 0,
+            guard: None,
+            slots,
+            guard_type,
+            shared,
+            shadow: ShadowState::default(),
+        };
         // level start (do_startpos): level 1 presses the button at room 5 tile 2; the entry door closes; chompers wake up
         if level_no == 1 {
             w.trigger_button(false, 0, -1, 5, 2);
@@ -92,6 +131,7 @@ impl World {
             w.add_trob(room, idx as u8, 3);
         }
         w.start_chompers(room, w.kid.row);
+        w.check_shadow(); // enter_guard / the scripted shadows for the first room
         w.apply_kid_events();
         w
     }
@@ -115,7 +155,7 @@ impl World {
 
     /// Sequence viewer: play sequence `seq` without control and physics.
     pub fn kid_start_seq(&mut self, seq: usize) {
-        let env = Env { exe: &self.data.exe, frames: &self.data.frames, level: &self.level, sizes: &self.data.sizes };
+        let env = mk_env(&self.data, &self.level, self.guard_type);
         self.kid.controlled = false;
         self.kid.start_seq(&env, seq);
     }
@@ -126,23 +166,73 @@ impl World {
     }
 
     fn logic_tick(&mut self, keys: Keys) {
+        // hit point deltas are cleared at the start of the frame and applied at its end (0000:4D7F, 0000:12A6)
+        self.kid.hp_delta = 0;
+        if let Some(g) = self.guard.as_mut() {
+            g.hp_delta = 0;
+        }
         self.do_mobs();
         self.process_trobs();
+        self.check_skel();
+        self.shared.drawn_room = self.kid.room;
+        self.shared.can_see = self.can_guard_see_kid();
+        self.shared.notice_timer = self.shared.notice_timer.saturating_sub(1);
+        self.shadow.united = if self.shadow.united > 0 { self.shadow.united - 1 } else { self.shadow.united };
+        self.kid.opp = self.guard.as_ref().map_or_else(Default::default, crate::kid::Opp::of);
+        self.kid.sh = self.shared;
         {
-            let env = Env { exe: &self.data.exe, frames: &self.data.frames, level: &self.level, sizes: &self.data.sizes };
+            let env = mk_env(&self.data, &self.level, self.guard_type);
             self.kid.tick(&env, keys);
         }
+        self.shared = self.kid.sh;
         self.apply_kid_events();
+        self.play_guard_frame();
+        if self.kid.alive || self.kid.hp > 0 {
+            self.check_sword_hurting();
+            self.check_sword_hurt();
+        }
+        if self.kid.frame == 167 || self.guard.as_ref().is_some_and(|g| g.frame == 167) {
+            self.sounds.push(10); // swords clash
+        }
+        self.do_delta_hp();
+        // exit_room / check_the_end: the kid changed room
+        if let Some(dir) = self.kid.leave_dir.take() {
+            self.on_room_left(dir);
+            self.guard_after_room_change(dir);
+            self.shared.drawn_room = self.kid.room;
+            self.check_shadow();
+        }
         if self.dirty {
             self.dirty = false;
             self.version = self.version.wrapping_add(1);
         }
     }
 
+    /// Level events at a room change (docs/combat.md 7.5): Jaffar is met, the exit door opens after his death.
+    fn on_room_left(&mut self, dir: u8) {
+        if self.level_no == 13 && dir == 1 && self.leveldoor_open == 0 && self.kid.room == 4 {
+            self.sounds.push(29);
+            self.shared.notice_timer = 28;
+        }
+        if self.level_no == 13 && dir == 0 && self.leveldoor_open == 2 {
+            self.trigger_button(false, 0, -1, 24, 0); // opens the exit door through room 24
+        }
+    }
+
     fn apply_kid_events(&mut self) {
         let evs = std::mem::take(&mut self.kid.events);
         for e in evs {
+            self.apply_event(e);
+        }
+    }
+
+    fn apply_event(&mut self, e: Event) {
+        {
             match e {
+                Event::Pickup { room, tilepos } => {
+                    self.set_tile(room, tilepos, Tile::Floor);
+                    self.set_mod(room, tilepos, 0);
+                }
                 Event::Button { room, tilepos, dead } => {
                     if dead { self.died_on_button(room, tilepos) } else { self.trigger_button(true, 0, -1, room, tilepos) }
                 }
@@ -203,8 +293,7 @@ impl World {
 
     /// prandom (0C83:0412)
     fn prandom(&mut self, max: u32) -> u32 {
-        self.seed = self.seed.wrapping_mul(0x343FD).wrapping_add(0x269EC3);
-        (self.seed >> 16) % (max + 1)
+        self.rng.next(max)
     }
 
     /// add_trob (0000:9052): an existing entry only gets its type replaced.
@@ -675,7 +764,7 @@ impl World {
             return;
         }
         let col = {
-            let env = Env { exe: &self.data.exe, frames: &self.data.frames, level: &self.level, sizes: &self.data.sizes };
+            let env = mk_env(&self.data, &self.level, self.guard_type);
             k.col(&env)
         };
         let ky = k.y as i32;
@@ -686,13 +775,12 @@ impl World {
         if !((self.level_no == 13 || f < 5 || f >= 15) && (a < 2 || a == 7)) {
             return;
         }
-        let env = Env { exe: &self.data.exe, frames: &self.data.frames, level: &self.level, sizes: &self.data.sizes };
+        let env = mk_env(&self.data, &self.level, self.guard_type);
         let k = &mut self.kid;
         k.y = Y_LAND[(k.row + 1).clamp(0, 4) as usize] as u8;
-        k.hp -= 1;
+        let died = k.take_hp(1);
         let dir = if k.facing_left { -1 } else { 1 };
-        if k.hp <= 0 {
-            k.alive = false;
+        if died {
             if f == 177 {
                 k.x = (k.x as i32 - 12 * dir) as u8;
             }
@@ -728,7 +816,7 @@ mod tests {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Original_data/");
         let exe = Exe::open(format!("{dir}PRINCE.EXE")).unwrap();
         let frames = exe.kid_frames();
-        let data = Arc::new(Data { exe, frames, sizes: vec![(0, 0); 220] });
+        let data = Arc::new(Data { exe, frames, sizes: vec![(0, 0); 220], gframes: vec![], gsizes: vec![] });
         let lv = crate::dat::Dat::open(format!("{dir}LEVELS.DAT")).unwrap();
         let level = Level::parse(lv.get(2002).unwrap()).unwrap();
         let mut w = World::new(data, level, 2);
