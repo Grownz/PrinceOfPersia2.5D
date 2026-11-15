@@ -204,6 +204,9 @@ pub fn keys(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAssets>
 
 /// 60 Hz step of the world; on logic ticks the latched keys are consumed (or the test script is played).
 pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: &ButtonInput<KeyCode>) {
+    if g.world.exit.is_some() {
+        return; // an exit is pending: Update consumes it before any further tick mutates the carried state
+    }
     if g.world.next_is_tick() {
         let env = mk_env(&a.data, &g.world.level, g.world.guard_type);
         g.kid_prev = (world_pos(&g.world.kid, &env), g.world.kid.room);
