@@ -13,28 +13,35 @@ fn data() -> Arc<Data> {
     let exe = crate::exe::Exe::open(format!("{DIR}PRINCE.EXE")).unwrap();
     let frames = exe.kid_frames();
     let sizes = crate::image::image_sizes(&Dat::open(format!("{DIR}KID.DAT")).unwrap(), 401, 220);
-    Arc::new(Data { exe, frames, sizes, gframes: vec![], gsizes: vec![] })
+    let gsizes = ["GUARD.DAT", "FAT.DAT", "SKEL.DAT", "VIZIER.DAT", "SHADOW.DAT"].iter().map(|f| crate::image::image_sizes(&Dat::open(format!("{DIR}{f}")).unwrap(), 751, 40)).collect();
+    Arc::new(Data { gframes: exe.guard_frames(), exe, frames, sizes, gsizes })
 }
 
 /// Room 1 with floor on rows 1 and 2; the kid starts at (col, 1) facing right. `tiles` = (col, row, type) overrides.
 fn world(start_col: usize, tiles: &[(usize, usize, u8)], links: &[(u8, u8)]) -> World {
+    World::new(data(), synth(1, 1..3, start_col, 1, tiles, links), 2)
+}
+
+/// Level with floor on `rows` of `room`; the kid starts there at (col, row) facing right.
+fn synth(room: usize, rows: std::ops::Range<usize>, start_col: usize, start_row: usize, tiles: &[(usize, usize, u8)], links: &[(u8, u8)]) -> Level {
     let mut b = vec![0u8; 2305];
-    for r in 1..3 {
+    let o = (room - 1) * 30;
+    for r in rows {
         for c in 0..10 {
-            b[r * 10 + c] = 1;
+            b[o + r * 10 + c] = 1;
         }
     }
     for &(c, r, t) in tiles {
-        b[r * 10 + c] = t;
+        b[o + r * 10 + c] = t;
     }
     for g in 2119..2143 {
         b[g] = 30;
     }
-    (b[2112], b[2113], b[2114]) = (1, (10 + start_col) as u8, 255);
+    (b[2112], b[2113], b[2114]) = (room as u8, (10 * start_row + start_col) as u8, 255);
     for &(i, v) in links {
         b[1440 + i as usize] = v; // doorlinks1
     }
-    World::new(data(), Level::parse(&b).unwrap(), 2)
+    Level::parse(&b).unwrap()
 }
 
 fn tick(w: &mut World, keys: Keys, n: usize) {
@@ -194,4 +201,204 @@ fn all_shipped_levels_run_without_panicking() {
         }
         assert!(w.trobs.len() <= 30 && w.mobs.len() <= 14);
     }
+}
+
+// ------------------------------------------------------------ docs/edge_cases.md items 8-13
+
+use crate::sim::{Exit, Progress};
+
+#[test]
+fn death_counter_timeline_and_restart_3_2() {
+    let mut w = world(3, &[], &[]);
+    tick(&mut w, NONE, 3);
+    w.sounds.clear();
+    w.kid.room = 0; // fell out of the level: fell_out sets frame 185, the counter starts in the same tick
+    let mut trace = vec![];
+    for _ in 0..9 {
+        tick(&mut w, NONE, 1);
+        trace.push((w.death_count, w.sounds.contains(&24), w.text_timer));
+        w.restart_input(true, false);
+        if w.death_count <= 6 {
+            assert_eq!(w.exit, None, "Shift/Enter only after the counter passed 6");
+        }
+        w.exit = None;
+    }
+    assert!(!w.kid.alive && w.kid.frame == 185);
+    let counts: Vec<u8> = trace.iter().map(|t| t.0).collect();
+    assert_eq!(counts, [1, 2, 3, 4, 5, 6, 7, 8, 8]);
+    assert!(trace[6].1 && !trace[5].1, "death music (24) when the counter goes 6 -> 7");
+    assert_eq!(trace[7].2, 288, "Press Button to Continue at 7 -> 8");
+    assert!(w.continue_text());
+    w.restart_input(true, false);
+    assert_eq!(w.exit, Some(Exit::Restart));
+    // nobody presses a key: back to the title when the 288-tick timer has run down to 1
+    w.exit = None;
+    tick(&mut w, NONE, 285);
+    assert_eq!(w.exit, None);
+    tick(&mut w, NONE, 1);
+    assert_eq!((w.exit, w.text_timer), (Some(Exit::Title), 1));
+    // Ctrl+A works any time
+    let mut w = world(3, &[], &[]);
+    w.restart_input(false, true);
+    assert_eq!(w.exit, Some(Exit::Restart));
+    // time out
+    let mut w = world(3, &[], &[]);
+    w.progress.rem_min = 0;
+    tick(&mut w, NONE, 1);
+    assert_eq!(w.exit, Some(Exit::Title), "rem_min 0 on level < 13 is a time out");
+}
+
+#[test]
+fn restart_and_next_level_progress_3_4() {
+    let mut w = world(3, &[], &[]);
+    tick(&mut w, NONE, 719);
+    assert_eq!((w.progress.rem_min, w.progress.rem_tick), (59, 719), "720 ticks per minute, starting at 719");
+    tick(&mut w, NONE, 10);
+    w.kid.hp_max = 5; // a life potion drunk on this level
+    w.kid.hp = 4;
+    w.upside = true;
+    let lvl = w.level.clone();
+    // restart: hit points from hitp_beg_lev, time kept
+    let p = w.progress_after(Exit::Restart);
+    assert_eq!((p.level, p.hitp_beg_lev, p.rem_min, p.rem_tick), (2, 3, 59, 709));
+    let r = World::from_progress(w.data.clone(), lvl.clone(), p);
+    assert_eq!((r.kid.hp, r.kid.hp_max, r.kid.have_sword, r.upside, r.progress.rem_tick), (3, 3, true, false, 709));
+    // next level: hitp_beg_lev = hitp_max, checkpoint cleared; seamless keeps the hit points
+    w.progress.checkpoint = true;
+    let p = w.progress_after(Exit::NextLevel { seamless: false });
+    assert_eq!((p.level, p.hitp_beg_lev, p.checkpoint, p.carry_hp), (3, 5, false, None));
+    let n = World::from_progress(w.data.clone(), lvl.clone(), p);
+    assert_eq!((n.kid.hp, n.kid.hp_max), (5, 5));
+    let p = w.progress_after(Exit::NextLevel { seamless: true });
+    let n = World::from_progress(w.data.clone(), lvl.clone(), p);
+    assert_eq!((n.kid.hp, n.kid.hp_max), (4, 5));
+    assert_eq!(w.progress_after(Exit::Title), Progress::new_game(0));
+    assert_eq!(w.progress_after(Exit::NewGame).level, 1);
+    // level 3 checkpoint: start room 2, tile 6, start_dir 0xFF (NOT + turn -> facing left); tile (7, 4, 0) cleared
+    let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
+    let l3 = Level::parse(lv.get(2003).unwrap()).unwrap();
+    let w = World::from_progress(data(), l3.clone(), Progress { checkpoint: true, ..Progress::new_game(3) });
+    assert_eq!((w.kid.room, w.kid.row, w.kid.facing_left, w.level.tile_at(7, 4).kind), (2, 0, true, Tile::Empty));
+}
+
+#[test]
+fn level_exits_4_1() {
+    // the open exit door: up -> seq 70 (go up the stairs), its op F1 ends the level
+    let mut w = world(5, &[(5, 1, 16)], &[]);
+    w.level.start_room = 2;
+    w.leveldoor_open = 1;
+    tick(&mut w, NONE, 6);
+    tick(&mut w, Keys { up: true, ..NONE }, 1);
+    // x = x_bump[col + 5] + 10 = 138, then seq 70's first dx -5 (facing left) in the same tick
+    assert_eq!((w.kid.seq, w.kid.x, w.kid.facing_left), (70, 58 + 14 * 5 + 10 + 5, true));
+    for _ in 0..40 {
+        if w.exit.is_some() {
+            break;
+        }
+        tick(&mut w, NONE, 1);
+    }
+    assert_eq!(w.exit, Some(Exit::NextLevel { seamless: false }));
+    // closed door: no stairs
+    let mut w = world(5, &[(5, 1, 16)], &[]);
+    w.level.start_room = 2;
+    tick(&mut w, NONE, 6);
+    tick(&mut w, Keys { up: true, ..NONE }, 1);
+    assert_ne!(w.kid.seq, 70);
+    // level 6: falling out of room 1 leads to level 7 (no room change)
+    let mut w = World::new(data(), synth(1, 1..3, 3, 1, &[(3, 1, 0), (3, 2, 0)], &[]), 6);
+    for _ in 0..30 {
+        tick(&mut w, NONE, 1);
+        if w.exit.is_some() {
+            break;
+        }
+    }
+    assert_eq!((w.exit, w.kid.room), (Some(Exit::NextLevel { seamless: false }), 1));
+    // level 12 room 23: seamless; level 0 room 24: demo over
+    let mut w = World::new(data(), synth(23, 0..3, 3, 1, &[], &[]), 12);
+    tick(&mut w, NONE, 1);
+    assert_eq!(w.exit, Some(Exit::NextLevel { seamless: true }));
+    let mut w = World::new(data(), synth(24, 0..3, 3, 1, &[], &[]), 0);
+    tick(&mut w, NONE, 1);
+    assert_eq!(w.exit, Some(Exit::Title));
+}
+
+#[test]
+fn mouse_level_8_4_2() {
+    let mut w = World::new(data(), synth(16, 0..3, 2, 1, &[], &[]), 8);
+    w.leveldoor_open = 1; // the exit door just finished opening
+    tick(&mut w, NONE, 148);
+    assert!(w.guard.is_none(), "counter at 149");
+    tick(&mut w, NONE, 1);
+    assert_eq!(w.leveldoor_open, 150);
+    let g = w.guard.as_ref().expect("mouse at 150");
+    assert_eq!((g.charid, g.room, g.row, g.y, g.facing_left, g.hp, g.seq, g.frame, g.x), (24, 16, 0, 55, true, 1, 105, 186, 195));
+    let mut xs = vec![195];
+    let mut seqs = vec![];
+    while let Some(g) = &w.guard {
+        assert!((186..=188).contains(&g.frame));
+        seqs.push(g.seq);
+        tick(&mut w, NONE, 1);
+        if let Some(g) = &w.guard {
+            xs.push(g.x);
+        }
+        assert!(xs.len() < 80, "mouse never left: {xs:?}");
+    }
+    assert_eq!(&xs[..9], &[195, 192, 188, 183, 180, 176, 171, 168, 164], "runs left 12 units per 3 ticks");
+    assert_eq!(xs.iter().filter(|&&x| x == 164).count(), 11, "stops below 166 for 11 ticks: {xs:?}");
+    let back = xs.iter().position(|&x| x == 172).unwrap();
+    assert!(xs[back..].windows(2).all(|p| p[1] > p[0]) && *xs.last().unwrap() >= 200, "runs right and vanishes at 200: {xs:?}");
+    assert!(seqs.contains(&107));
+    assert!(w.leveldoor_open > 150, "the counter runs on and the door stays open");
+}
+
+#[test]
+fn level4_mirror_shadow_4_3() {
+    // room 4, row 0: a mirror at column 4; the kid runs left from column 9 and jumps (try every take-off tick)
+    let mut found = false;
+    'outer: for jump in 2..24 {
+        let mut w = World::new(data(), synth(4, 0..3, 9, 0, &[(4, 0, 13)], &[]), 4);
+        w.kid.facing_left = true;
+        let left = Keys { left: true, ..NONE };
+        for t in 0..40 {
+            let k = if t == jump { Keys { up: true, ..left } } else { left };
+            tick(&mut w, k, 1);
+            if let Some(g) = w.guard.as_ref().filter(|g| g.charid == 1) {
+                assert_eq!(g.x as i32, (2 * (58 + 14 * 4 + 10) - w.kid.x as i32) & 0xFF, "mirror image");
+                assert_eq!((g.facing_left, g.hp, g.hp_max, w.kid.hp), (false, 3, 3, 1));
+                assert!(w.sounds.contains(&45));
+                assert_eq!(w.level.tile_at(4, 4).modifier, 0x56);
+                // autocontrol level 4: x < 80 in room 4 -> gone
+                w.guard.as_mut().unwrap().x = 70;
+                tick(&mut w, NONE, 1);
+                assert!(w.guard.is_none());
+                found = true;
+                break 'outer;
+            }
+        }
+    }
+    assert!(found, "no take-off tick gets the kid through the mirror");
+}
+
+#[test]
+fn demo_level_0_4_4() {
+    let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
+    let mut w = World::new(data(), Level::parse(lv.get(2000).unwrap()).unwrap(), 0);
+    assert!(w.demo && w.kid.hp == 4 && w.kid.have_sword);
+    let mut rooms = vec![w.kid.room];
+    for _ in 0..1500 {
+        tick(&mut w, NONE, 1);
+        if rooms.last() != Some(&w.kid.room) {
+            rooms.push(w.kid.room);
+        }
+        if w.exit.is_some() {
+            break;
+        }
+    }
+    // the move list walks the kid to the guard, the guard AI fights for him, then he runs right into room 24
+    assert_eq!((w.exit, w.kid.room, w.progress.checkpoint, w.kid.alive), (Some(Exit::Title), 24, true, true), "rooms {rooms:?}");
+    assert!(rooms.starts_with(&[1, 2]), "rooms {rooms:?}");
+    // any key ends the demo
+    let mut w = World::new(data(), Level::parse(lv.get(2000).unwrap()).unwrap(), 0);
+    tick(&mut w, RIGHT, 1);
+    assert_eq!(w.exit, Some(Exit::NewGame));
 }
