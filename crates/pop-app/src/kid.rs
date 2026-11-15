@@ -168,7 +168,8 @@ fn voxel_for(a: &mut KidAssets, meshes: &mut Assets<Mesh>, kind: u8, n: u8, shad
         return m.clone();
     }
     let m = decoded(a, kind, n, pal_palace, colour).map(|(im, pal)| {
-        let model = crate::voxel::VoxelModel::from_image(im.width, im.height, &im.pixels, mirrored);
+        // the profile's colour regions come from the untinted palette (the shadow's dark tint would merge them)
+        let model = crate::voxel::VoxelModel::from_image(im.width, im.height, &im.pixels, mirrored, |p| rgb(&pal, p, false));
         meshes.add(model.mesh(|p| {
             let [r, g, b] = rgb(&pal, p, shadow);
             Color::srgb_u8(r, g, b).to_linear().to_f32_array()
@@ -336,7 +337,7 @@ fn draw_char(
 
 /// Depth (world z) of the voxel figures' centre. Tile blocks span z -0.5..0.5 (room.rs), so the figure stands inside the
 /// room's depth instead of in front of the blocks. Not exactly the middle (0.0): pillars and bars are centred there and
-/// would cut through the body; 0.25 keeps the figure (about +-0.11 thick) clear of them and behind the block front faces.
+/// would cut through the body; 0.25 keeps the figure (about 0.08 behind, 0.14 in front) clear of them and behind the block front faces.
 /// The flat sprite quads stay at z 0.6 (in front).
 const VOXEL_Z: f32 = 0.25;
 
