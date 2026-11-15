@@ -14,6 +14,7 @@ mod audio;
 mod cutscene;
 mod enhanced;
 mod flow;
+mod items;
 mod kid;
 mod room;
 mod settings;
@@ -185,6 +186,7 @@ fn main() {
                 (cutscene::latch, flow::cutscene_end).run_if(in_state(flow::Screen::Cutscene)),
                 (navigate, kid::keys, flow::playing).chain().run_if(playing()),
                 room::rebuild_on_change,
+                room::animate,
                 kid::render,
                 flash,
                 cutscene::render,
@@ -402,16 +404,26 @@ time {}:{:03}  death {}  flash {:?}  text timer {}", w.progress.rem_min, w.progr
 }
 
 /// Test hook (shaders compile asynchronously, so wait a few hundred frames): with `POP_SHOT=file.png` (and optionally `POP_ROOM`, `POP_LEVEL`, `POP_SHOT_FRAME`) save a screenshot after a few frames and quit.
-fn screenshot_and_quit(mut cmds: Commands, mut frame: Local<u32>, mut exit: MessageWriter<AppExit>) {
+/// `POP_SHOT_TICK=n` instead waits for logic tick n (the world ticks in real time, so frames do not map to ticks; use with POP_SCRIPT).
+fn screenshot_and_quit(mut cmds: Commands, mut st: Local<(u32, Option<u32>)>, mut exit: MessageWriter<AppExit>, g: Option<Res<Game>>) {
     // shortcut: fixed frame count, depends on how fast shaders compile; upgrade to waiting for pipelines if flaky
     let Ok(path) = std::env::var("POP_SHOT") else { return };
-    *frame += 1;
-    let at = std::env::var("POP_SHOT_FRAME").ok().and_then(|v| v.parse().ok()).unwrap_or(400);
-    if *frame == at {
-        cmds.spawn(bevy::render::view::screenshot::Screenshot::primary_window())
-            .observe(bevy::render::view::screenshot::save_to_disk(path));
-    } else if *frame == at + 60 {
-        exit.write(AppExit::Success);
+    st.0 += 1;
+    let frame = st.0;
+    let due = match (std::env::var("POP_SHOT_TICK").ok().and_then(|v| v.parse::<u64>().ok()), g) {
+        (Some(t), Some(g)) => g.world.tick >= t,
+        _ => frame == std::env::var("POP_SHOT_FRAME").ok().and_then(|v| v.parse().ok()).unwrap_or(400),
+    };
+    match st.1 {
+        None if due => {
+            st.1 = Some(frame);
+            cmds.spawn(bevy::render::view::screenshot::Screenshot::primary_window())
+                .observe(bevy::render::view::screenshot::save_to_disk(path));
+        }
+        Some(at) if frame == at + 60 => {
+            exit.write(AppExit::Success);
+        }
+        _ => {}
     }
 }
 

@@ -29,12 +29,15 @@ pub struct Palette {
     flame: Handle<StandardMaterial>,
     /// original tile images [dungeon, palace] (None: procedural)
     tiles: [Option<TileSet>; 2],
+    /// voxel skeleton and potions (None: procedural)
+    items: Option<crate::items::Items>,
 }
 
 impl Palette {
     /// `tiles_dir`: game data folder to load the tile images from (None = procedural tiles).
     pub fn new(meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>, imgs: &mut Assets<Image>, tiles_dir: Option<&str>) -> Self {
         let tiles = tiles_dir.map_or([None, None], |d| crate::tiles::load_sets(d, imgs, mats));
+        let items = tiles_dir.map(|d| crate::items::Items::load(d, meshes, mats));
         let mut m = |r, g, b| mats.add(StandardMaterial { base_color: Color::srgb(r, g, b), perceptual_roughness: 0.9, ..default() });
         Palette {
             cube: meshes.add(textured_cube()),
@@ -47,6 +50,7 @@ impl Palette {
             glass: m(0.5, 0.75, 0.9),
             flame: mats.add(StandardMaterial { base_color: Color::srgb(1.0, 0.6, 0.1), emissive: LinearRgba::rgb(8.0, 3.0, 0.5), ..default() }),
             tiles,
+            items,
         }
     }
 }
@@ -80,9 +84,19 @@ struct B<'a, 'w, 's> {
     origin: Vec3,
     chamber: bool,
     tiles: Option<&'a TileSet>,
+    /// voxel items and the set index (0 dungeon, 1 palace); None in the chamber and with procedural tiles
+    items: Option<(&'a crate::items::Items, usize)>,
 }
 
 impl B<'_, '_, '_> {
+    /// A voxel item model: bottom-left corner of its image at `lo` (room coordinates), sprite plane at `lo.z`.
+    fn item(&mut self, m: &crate::items::Model, mat: &Handle<StandardMaterial>, lo: Vec3) -> Entity {
+        let px = Vec3::new(1.0 / 32.0, TILE_H / TILE_H_PX as f32, 1.0 / 32.0);
+        let e = self.cmds.spawn((Mesh3d(m.mesh.clone()), MeshMaterial3d(mat.clone()), Transform::from_translation(self.origin + lo).with_scale(px))).id();
+        self.tag(e);
+        e
+    }
+
     /// Box from `lo` to `hi` (corner coordinates).
     fn put(&mut self, mat: &Handle<StandardMaterial>, lo: Vec3, hi: Vec3) {
         self.put_id(mat, lo, hi);
@@ -130,18 +144,19 @@ pub fn build_room(mut cmds: Commands, g: Res<Game>, p: Res<Palette>) {
 
 /// Spawn `room` (1-based) with its left/bottom corner at `origin`; neighbours can be drawn with other origins.
 pub fn spawn_room(cmds: &mut Commands, level: &Level, mobs: &[pop_core::sim::Mob], room: usize, origin: Vec3, p: &Palette, palace: bool) {
-    spawn_tiles(&mut B { cmds, p, origin, chamber: false, tiles: p.tiles[palace as usize].as_ref() }, level, mobs, room);
+    let items = p.items.as_ref().map(|i| (i, palace as usize));
+    spawn_tiles(&mut B { cmds, p, origin, chamber: false, tiles: p.tiles[palace as usize].as_ref(), items }, level, mobs, room);
 }
 
 /// The same builder for the cutscene set: entities carry `Chamber` instead of `RoomEntity`. The set keeps the procedural look.
 pub fn spawn_chamber(cmds: &mut Commands, level: &Level, room: usize, origin: Vec3, p: &Palette) {
-    spawn_tiles(&mut B { cmds, p, origin, chamber: true, tiles: None }, level, &[], room);
+    spawn_tiles(&mut B { cmds, p, origin, chamber: true, tiles: None, items: None }, level, &[], room);
 }
 
 /// A plain box of the room palette in the chamber set (`mat`: "stone", "dark", "wood", "flame"; anything else = metal).
 pub fn chamber_box(cmds: &mut Commands, p: &Palette, mat: &str, lo: Vec3, hi: Vec3) {
     let m = match mat { "stone" => p.stone.clone(), "dark" => p.dark.clone(), "wood" => p.wood.clone(), "flame" => p.flame.clone(), _ => p.metal.clone() };
-    B { cmds, p, origin: Vec3::ZERO, chamber: true, tiles: None }.put(&m, lo, hi);
+    B { cmds, p, origin: Vec3::ZERO, chamber: true, tiles: None, items: None }.put(&m, lo, hi);
 }
 
 fn spawn_tiles(b: &mut B, level: &Level, mobs: &[pop_core::sim::Mob], room: usize) {
@@ -151,21 +166,109 @@ fn spawn_tiles(b: &mut B, level: &Level, mobs: &[pop_core::sim::Mob], room: usiz
     for row in 0..ROWS {
         for col in 0..COLS {
             let t = level.tile(room, col, row);
-            tile(b, col as f32, (ROWS - 1 - row) as f32 * TILE_H, t);
+            let (x, y) = (col as f32, (ROWS - 1 - row) as f32 * TILE_H);
+            if t.kind == Tile::LooseFloor {
+                // its own entity, moved every frame by `animate` (wobble from the trob state)
+                let e = b.put_id(&plain_floor(b), Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y, 0.5));
+                let base = b.origin + Vec3::new(x + 0.5, y - SLAB / 2.0, 0.0);
+                b.cmds.entity(e).insert(Loose { room: room as u8, idx: (row * COLS + col) as u8, base });
+                continue;
+            }
+            let lift = match t.kind { Tile::DropButton | Tile::RaiseButton => plate_lift(level.link_timer(t.modifier)), _ => 0.0 };
+            tile(b, x, y, t, lift, (row * COLS + col) as u8);
         }
     }
-    // falling loose floors: mob y is a screen line, 65 + 63 * row = floor line of that row
+    // falling loose floors: mob y is a screen line, 65 + 63 * row = floor line of that row; drawn one tick behind the sim
+    // and interpolated by `animate` (y of the last tick = y - speed)
     for m in mobs.iter().filter(|m| m.room as usize == room) {
         let (x, y) = ((m.xh >> 2) as f32, (191.0 - m.y as f32) * TILE_H / 63.0);
-        b.put(&p.wood, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y, 0.5));
+        let e = b.put_id(&plain_floor(b), Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y, 0.5));
+        let base = b.origin + Vec3::new(x + 0.5, y - SLAB / 2.0, 0.0);
+        b.cmds.entity(e).insert(Falling { base, up: m.speed.max(0) as f32 * TILE_H / 63.0 });
     }
 }
 
-/// `x`: left edge, `y`: floor surface height of this tile's row.
-fn tile(b: &mut B, x: f32, y: f32, t: TileRef) {
+/// The normal floor's material (loose floors and falling slabs look like it, as in the original).
+fn plain_floor(b: &B) -> Handle<StandardMaterial> {
+    b.tiles.and_then(|s| s.floor(Tile::Floor)).unwrap_or_else(|| b.p.stone.clone())
+}
+
+/// A loose floor slab: tile `idx` of `room`, slab centre `base` (world).
+#[derive(Component)]
+pub struct Loose {
+    room: u8,
+    idx: u8,
+    base: Vec3,
+}
+
+/// A falling slab: centre at the current tick, `up` = how far above that it was one tick earlier (world units).
+#[derive(Component)]
+pub struct Falling {
+    base: Vec3,
+    up: f32,
+}
+
+/// A potion's bubbles: the frame shown is (tick + phase) mod 7.
+#[derive(Component)]
+pub struct Bubbles(u8);
+
+/// Loose floor wobble amplitudes: vertical bounce (world units, about 1.6 screen px) and roll (radians).
+const WOBBLE_DY: f32 = 0.05;
+const WOBBLE_ROLL: f32 = 0.08;
+
+/// Wobble of a loose floor from its modifier (docs/tiles.md 5.1/5.3) and the tick progress `alpha`: (lift, roll).
+/// 0x80..0x83 = knocked (shake for 4 ticks, decaying to 0 at 0x84); 1..10 = about to fall (growing); else still.
+/// One bounce per tick, the roll changes side every tick; `alpha` makes it continuous between ticks.
+pub fn wobble(m: u8, alpha: f32) -> (f32, f32) {
+    let (k, amp) = match m {
+        0x80..=0x83 => {
+            let k = (m & 0x7F) as f32 + alpha;
+            (k, (1.0 - k / 4.0).max(0.0))
+        }
+        1..=10 => {
+            let k = m as f32 + alpha;
+            (k, 0.6 + 0.04 * k)
+        }
+        _ => return (0.0, 0.0),
+    };
+    let s = (k * std::f32::consts::PI).sin();
+    (WOBBLE_DY * amp * s.abs(), WOBBLE_ROLL * amp * s)
+}
+
+/// Pressure plates stand out by 10% of the slab thickness (SLAB = 0.3 world units, so 0.03, about one screen pixel of the
+/// 63-px row) while up; pressed (link timer > 1, docs/tiles.md 4.2) they are at floor level. Visual only.
+pub const PLATE_LIFT: f32 = 0.1 * SLAB;
+pub fn plate_lift(timer: u8) -> f32 {
+    if timer > 1 { 0.0 } else { PLATE_LIFT }
+}
+
+/// Every frame: loose floor wobble, falling slab interpolation, potion bubble frames.
+pub fn animate(g: Res<Game>, p: Res<Palette>, mut loose: Query<(&Loose, &mut Transform), Without<Falling>>, mut falling: Query<(&Falling, &mut Transform), Without<Loose>>, mut bubbles: Query<(&Bubbles, &mut Mesh3d)>) {
+    let a = g.world.alpha();
+    for (l, mut t) in &mut loose {
+        let (dy, roll) = wobble(g.world.level.tile_at(l.room as usize, l.idx as usize).modifier, a);
+        if g.world.level.tile_at(l.room as usize, l.idx as usize).modifier != 0 { info!("DBG loose {} {} m {} a {a} dy {dy}", l.room, l.idx, g.world.level.tile_at(l.room as usize, l.idx as usize).modifier); }
+        t.set_if_neq(Transform { translation: l.base + Vec3::Y * dy, rotation: Quat::from_rotation_z(roll), scale: t.scale });
+    }
+    for (f, mut t) in &mut falling {
+        t.translation = f.base + Vec3::Y * f.up * (1.0 - a);
+    }
+    if let Some(frames) = p.items.as_ref().map(|i| &i.bubbles).filter(|f| !f.is_empty()) {
+        for (b, mut m) in &mut bubbles {
+            let want = &frames[(g.world.tick as usize + b.0 as usize) % frames.len()].mesh;
+            if m.0 != *want {
+                m.0 = want.clone();
+            }
+        }
+    }
+}
+
+/// `x`: left edge, `y`: floor surface height of this tile's row; `lift`: pressure plate height above the floor (0 pressed);
+/// `idx`: tile index in the room (potion bubble phase).
+fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
     use Tile::*;
     let p = b.p;
-    let (stone, dark, wood, metal) = (p.stone.clone(), p.dark.clone(), p.wood.clone(), p.metal.clone());
+    let (stone, dark, metal) = (p.stone.clone(), p.dark.clone(), p.metal.clone());
     // original images: the floor of this tile type and its extra piece (pillar, door post, exit frame, wall face)
     let fl = b.tiles.and_then(|s| s.floor(t.kind)).unwrap_or_else(|| stone.clone());
     let ex: Option<Tex> = b.tiles.and_then(|s| s.extra(t.kind, t.modifier)).cloned();
@@ -180,16 +283,26 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef) {
             Some(w) => b.put(&w.mat, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y + TILE_H - SLAB, 0.5)),
             None => b.put(&stone, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y + TILE_H, 0.5)),
         },
-        Floor | Skeleton | Sword | Debris | BalconyLeft | BalconyRight => {
+        Skeleton => match b.items.and_then(|(i, set)| Some((i.skeleton[set].clone()?, i.mat.clone()))) {
+            // the bones as a voxel relief standing on the plain floor, centred on the tile, behind the figures (z 0.25)
+            Some((m, mat)) => {
+                floor(b, &plain_floor(b));
+                b.item(&m, &mat, Vec3::new(x + 0.5 - px_w(m.w as f32) / 2.0, y, SKELETON_Z));
+            }
+            None => {
+                floor(b, &fl);
+                b.put(&p.glass, Vec3::new(x + 0.3, y, -0.2), Vec3::new(x + 0.7, y + 0.15, 0.2));
+            }
+        },
+        Floor | Sword | Debris | BalconyLeft | BalconyRight => {
             floor(b, &fl);
             match t.kind {
-                Skeleton => b.put(&p.glass, Vec3::new(x + 0.3, y, -0.2), Vec3::new(x + 0.7, y + 0.15, 0.2)),
                 Sword => b.put(&metal, Vec3::new(x + 0.2, y, -0.05), Vec3::new(x + 0.8, y + 0.05, 0.05)),
                 Debris => b.put(&dark, Vec3::new(x + 0.2, y, -0.2), Vec3::new(x + 0.8, y + 0.15, 0.2)),
                 _ => {}
             }
         }
-        LooseFloor => floor(b, &wood),
+        LooseFloor => {} // its own entity, spawn_tiles
         Spikes => {
             floor(b, &fl);
             // modifier: 0 retracted, 1..=4 rising, >= 0x80 or 255 out, 5..=9 retracting
@@ -228,24 +341,39 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef) {
             if let Some(d) = &ex {
                 door_post(b, d, x, y);
             }
-            // runtime gate modifier: 0 = closed, 188 = open (docs/tiles.md)
-            let open = (t.modifier as f32 / 188.0).clamp(0.0, 1.0);
-            for i in 0..5 {
-                let sx = x + 0.1 + i as f32 * 0.2;
-                b.put(&metal, Vec3::new(sx, y + open * TILE_H * 0.8, -0.05), Vec3::new(sx + 0.05, y + TILE_H * 0.95, 0.05));
+            for (lo, hi) in gate_bars(t.modifier) {
+                b.put(&metal, Vec3::new(x, y, 0.0) + lo, Vec3::new(x, y, 0.0) + hi);
             }
         }
         StuckButton | DropButton | RaiseButton => {
-            floor(b, &fl);
+            // pressed (lift 0): the original draws a held drop button as the stuck button and a raise button as plain floor
+            let look = match (t.kind, lift == 0.0) { (DropButton, true) => StuckButton, (RaiseButton, true) => Floor, (k, _) => k };
+            let m = b.tiles.and_then(|s| s.floor(look)).unwrap_or_else(|| stone.clone());
+            b.put(&m, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y + lift, 0.5));
             // the original shows a button only by its own floor images (raised plate, lip); keep the marker box without them
             if b.tiles.and_then(|s| s.floor(t.kind)).is_none() {
                 let m = if t.kind == RaiseButton { &p.blue } else { &p.red };
-                b.put(m, Vec3::new(x + 0.3, y, -0.2), Vec3::new(x + 0.7, y + 0.1, 0.2));
+                b.put(m, Vec3::new(x + 0.3, y + lift, -0.2), Vec3::new(x + 0.7, y + lift + 0.1, 0.2));
             }
         }
         Potion => {
             floor(b, &fl);
-            b.put(&p.red, Vec3::new(x + 0.4, y, -0.1), Vec3::new(x + 0.6, y + 0.3, 0.1));
+            let (big, colour) = crate::items::potion_look(t.modifier >> 5);
+            match b.items.and_then(|(i, _)| Some((i, i.bottles.clone()?))) {
+                // bottle in front of the figures (the original draws it as a fore piece), bubbles on its neck in the
+                // potion's colour (emissive), x from the original's draw_xh + 3 (24 px into the tile)
+                Some((i, bottles)) => {
+                    let bt = &bottles[big as usize];
+                    let lo = Vec3::new(x + 0.25, y, POTION_Z);
+                    b.item(bt, &i.mat, lo);
+                    if let (Some(c), Some(f)) = (colour, i.bubbles.first()) {
+                        let at = lo + Vec3::new(px_w((bt.w as f32 - f.w as f32) / 2.0), px_h(bt.h as f32 - 1.0), 0.0);
+                        let e = b.item(f, &i.glow[c], at);
+                        b.cmds.entity(e).insert((Bubbles(idx), bevy::light::NotShadowCaster));
+                    }
+                }
+                None => b.put(if colour == Some(2) { &p.blue } else { &p.red }, Vec3::new(x + 0.4, y, -0.1), Vec3::new(x + 0.6, y + if big { 0.4 } else { 0.3 }, 0.1)),
+            }
         }
         Mirror => {
             floor(b, &fl);
@@ -284,6 +412,34 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef) {
     }
 }
 
+/// Depth of the voxel items' sprite plane: the skeleton behind the figures (VOXEL_Z 0.25), the bottle in front of them.
+const SKELETON_Z: f32 = -0.1;
+const POTION_Z: f32 = 0.4;
+
+/// Gate plane: logic x tl+10 .. tl+13 of the 14-unit column (gate wall_type 1, docs/collisions.md 3) = 0.71 .. 0.93 of the
+/// tile; the bars stand across the corridor at its middle, 11.5 / 14.
+pub const GATE_X: f32 = 11.5 / 14.0;
+
+/// Gate bars as boxes (lo, hi) relative to (tile left x, floor y, z 0): turned 90 degrees about the vertical axis, so the
+/// gate is a grille in the y-z plane across the corridor at GATE_X, from the door post's front face (z -0.15) to the
+/// floor's front edge. Four vertical bars along z plus a bottom rail and a middle rail, slightly thick along x so the gate
+/// reads edge-on from the game camera. Runtime modifier 0 = closed .. 188 = open (docs/tiles.md 3): the grille slides up.
+pub fn gate_bars(modifier: u8) -> Vec<(Vec3, Vec3)> {
+    let open = (modifier as f32 / 188.0).clamp(0.0, 1.0);
+    let (bottom, top) = (open * TILE_H * 0.8, TILE_H * 0.95);
+    let (x0, x1) = (GATE_X - 0.03, GATE_X + 0.03);
+    let mut v: Vec<(Vec3, Vec3)> = (0..4)
+        .map(|i| {
+            let z = -0.1 + i as f32 * 0.5 / 3.0;
+            (Vec3::new(x0, bottom, z - 0.025), Vec3::new(x1, top, z + 0.025))
+        })
+        .collect();
+    for y in [bottom + 0.02, (bottom + top) / 2.0] {
+        v.push((Vec3::new(x0 + 0.005, y, -0.15), Vec3::new(x1 - 0.005, y + 0.05, 0.45)));
+    }
+    v
+}
+
 /// The door post image (record +9, 8 px wide) at the right edge of the cell, standing on the back half of the floor.
 fn door_post(b: &mut B, d: &Tex, x: f32, y: f32) {
     let w = px_w(d.w);
@@ -309,4 +465,50 @@ pub fn rebuild_on_change(mut cmds: Commands, g: Res<Game>, old: Query<Entity, Wi
         cmds.entity(e).despawn();
     }
     build_room(cmds, g, p);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plate_lift_is_ten_percent_of_the_slab_and_zero_when_pressed() {
+        assert!((PLATE_LIFT - 0.03).abs() < 1e-6);
+        assert_eq!(plate_lift(0), PLATE_LIFT);
+        assert_eq!(plate_lift(1), PLATE_LIFT); // pops up when the timer reaches 1
+        assert_eq!(plate_lift(5), 0.0);
+        assert_eq!(plate_lift(2), 0.0);
+    }
+
+    #[test]
+    fn wobble_follows_the_trob_state() {
+        assert_eq!(wobble(0, 0.5), (0.0, 0.0));
+        assert_eq!(wobble(0xF5, 0.5), (0.0, 0.0)); // level 13 countdown: still
+        // knock: decays to nothing at 0x84 (0x83 + alpha 1)
+        let (d1, _) = wobble(0x80, 0.5);
+        let (d3, _) = wobble(0x83, 0.5);
+        assert!(d1 > d3 && d3 > 0.0 && d1 <= WOBBLE_DY);
+        assert!(wobble(0x83, 1.0).0.abs() < 1e-6);
+        // about to fall: the roll changes side every tick, bounded
+        let (r1, r2) = (wobble(3, 0.5).1, wobble(4, 0.5).1);
+        assert!(r1 * r2 < 0.0 && r1.abs() <= WOBBLE_ROLL);
+        // continuous across a tick: end of tick k = start of tick k + 1
+        let (a, b) = (wobble(5, 0.999), wobble(6, 0.0));
+        assert!((a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3);
+    }
+
+    #[test]
+    fn gate_stands_across_the_corridor_and_slides_up() {
+        let closed = gate_bars(0);
+        for (lo, hi) in &closed {
+            // thin along x at the gate's collision position, long along z or y
+            assert!(lo.x >= 10.0 / 14.0 && hi.x <= 13.0 / 14.0 && hi.x - lo.x < 0.1, "{lo} {hi}");
+            assert!(lo.z >= -0.15 && hi.z <= 0.45);
+        }
+        assert!(closed.iter().any(|(lo, hi)| hi.z - lo.z > 0.5), "a rail spans the corridor");
+        assert_eq!(closed.iter().filter(|(lo, hi)| hi.y - lo.y > 1.0).count(), 4, "four vertical bars");
+        let open = gate_bars(188);
+        assert!(open[0].0.y > 1.5 && closed[0].0.y == 0.0);
+        assert_eq!(gate_bars(255)[0].0.y, open[0].0.y); // 238 / 255 = fully open
+    }
 }
