@@ -47,7 +47,7 @@ pub enum Event {
     /// next_level++ (op F1 at the end of seq 70, or falling out of level 6 room 1)
     NextLevel,
     /// the kid jumped through the level-4 mirror (is_obstacle 0000:577E): modifier = 0x56, jumped_through_mirror = -1
-    Mirror { room: u8, tilepos: u8, col: i32 },
+    Mirror { room: u8, tilepos: u8 },
 }
 
 /// Everything the kid needs to look at besides itself.
@@ -333,6 +333,11 @@ impl Kid {
     pub fn start_seq(&mut self, env: &Env, seq: usize) {
         self.seq = seq;
         self.set_seq_ptr(env, (env.exe.seq_offset(seq).unwrap_or(0), 0));
+    }
+
+    /// Char.curr_col as the last load_fram_det_col left it (stale after bumps, docs/collisions.md 4.6)
+    pub fn curr_col(&self) -> i32 {
+        self.snap_col
     }
 
     /// The raw sequence pointer (Char.curr_seq): data-segment offset of the decoded op list and the index in it.
@@ -1191,7 +1196,7 @@ impl Kid {
             Tile::Mirror if self.charid == 0 && (39..44).contains(&self.frame) && self.facing_left => {
                 // 0000:577E: jumped through; the world sets the modifier to 0x56 and creates the shadow after the tick
                 if (1..=24).contains(&r) {
-                    self.events.push(Event::Mirror { room: r as u8, tilepos: (rw * 10 + c) as u8, col: c });
+                    self.events.push(Event::Mirror { room: r as u8, tilepos: (rw * 10 + c) as u8 });
                 }
                 false
             }

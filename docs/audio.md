@@ -112,13 +112,15 @@ on an AdLib/MIDI setup are UNVERIFIED. The speaker lengths above are the ones us
 ## 4. Playback in the remake (pop-app)
 
 - `synth.rs`: every emitted id and the card cues are synthesized at startup (oscillators, filtered noise, envelopes; music cues
-  are short original jingles, not the game's melodies), mono 22050 Hz, peak 0.8. No audio files in the repository. Unit test:
+  are short original jingles, not the game's melodies), mono 22050 Hz, peak 0.5. No audio files in the repository. Unit test:
   every clip is non-silent, finite, within its length range, not clipped.
 - `POP_SOUND=original`: digitized clip where the game has one, else the PC-speaker tune rendered as a square wave, else the
   synthesized clip. Read from the user's own game data at startup (nothing copied into the repository).
 - `audio.rs`: a custom `Decodable` PCM asset (no decoder feature needed: bevy's default `audio` feature already brings
   `bevy_audio`). Polyphonic; the same id again restarts that sound (approximates the single channel for repeated ticks).
-- Master volume (`-` / `=`, 10 % steps, default 70 %) and mute (`M`); Paused pauses the playing sounds; Title and cards stop
+- Headroom instead of a limiter (bevy_audio has no hook on the mixed output): synthesized clips peak at 0.5, digitized ones at
+  0.5, speaker tunes at 0.25, and the same id restarts instead of stacking, so typical overlaps stay below 1.0 at full volume.
+- Master volume (`-` / `=`, 10 % steps, default 70 %) and mute (`M`), applied to every playing or just-spawned sound (effects and cues); Paused pauses the playing sounds; Title and cards stop
   them; a card plays its cue (27 / 35 / 40 cutscenes, 36 time out, 26 the end).
 
 ## 5. "A sound is playing": death counter and level end
@@ -144,8 +146,9 @@ Continue" once the music has ended (about 3 s, or 6.45 s with the sword drawn). 
 decoded clips. `pop-core` alone still treats sounds as finished at once (deterministic tests).
 
 Feather fall: the original ends it on the first frame with no sound playing (edge_cases.md 5.1). The remake keeps the fixed
-`sim::FEATHER_TICKS` (225 ticks = 18.75 s at 12 ticks/s) in the core: with polyphony the "no sound playing" moment would depend
-on unrelated sounds, and the synthesized feather tune is 18.6 s, matching the speaker tune, so effect and music end together.
+`sim::FEATHER_TICKS` (224 ticks: the first 5/60 s frame after the 18.61 s speaker tune, tested against IBM_SND1 in pop-app) in the
+core: with polyphony the "no sound playing" moment would depend on unrelated sounds, and the synthesized feather tune is 18.6 s,
+matching the speaker tune, so effect and music end together.
 
 ## 6. Open / UNVERIFIED
 

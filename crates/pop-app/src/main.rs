@@ -143,8 +143,8 @@ fn navigate(keys: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, mut text: Quer
 }
 
 const BACKGROUND: Color = Color::srgb(0.02, 0.02, 0.04);
-/// EGA colours (ds:2BBA, 6-bit RGB); flash() sets VGA palette entry 0 (the black background) to one of them.
-/// 2, 4, 12, 14 and 15 are the ones used (docs/edge_cases.md 3.6); the rest is the standard EGA palette (UNVERIFIED against ds:2BBA).
+/// EGA colours (ds:2BBA, 6-bit RGB, read by 0C83:198F); flash() sets VGA palette entry 0 (the black background) to one of them.
+/// 2, 4, 12, 14 and 15 are the ones used (docs/edge_cases.md 3.6). VERIFIED against the exe (test below).
 const EGA: [[u8; 3]; 16] = [
     [0, 0, 0], [0, 0, 42], [0, 42, 0], [0, 42, 42], [42, 0, 0], [42, 0, 42], [42, 21, 0], [42, 42, 42],
     [21, 21, 21], [21, 21, 63], [21, 63, 21], [21, 63, 63], [63, 21, 21], [63, 21, 63], [63, 63, 21], [63, 63, 63],
@@ -193,5 +193,16 @@ fn screenshot_and_quit(mut cmds: Commands, mut frame: Local<u32>, mut exit: Mess
             .observe(bevy::render::view::screenshot::save_to_disk(path));
     } else if *frame == at + 60 {
         exit.write(AppExit::Success);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// ds:2BBA = file offset 0x1E47A (ds + 112832): 16 RGB triples, equal to the table above.
+    #[test]
+    fn ega_table_matches_ds_2bba() {
+        let Ok(exe) = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Original_data/PRINCE.EXE")) else { return };
+        let t: Vec<[u8; 3]> = exe[0x2BBA + 112832..][..48].chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
+        assert_eq!(t, super::EGA);
     }
 }

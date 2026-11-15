@@ -168,7 +168,7 @@ pub fn sound(id: u8) -> Option<Vec<f32>> {
         36 => jingle(&[(0, 1.0), (-1, 1.0), (-4, 1.0), (-5, 1.0), (-7, 2.0)], 80.0, None, -12), // time is up
         37 => jingle(&[(7, 0.5), (7, 0.25), (7, 0.25), (12, 1.5)], 120.0, None, 0), // victory / sword found
         39 => {
-            // feather fall: a floating arpeggio for the whole effect (the original's tune is 18.6 s, sim::FEATHER_TICKS 18.75 s)
+            // feather fall: a floating arpeggio for the whole effect (the original's tune is 18.61 s, sim::FEATHER_TICKS 224 ticks = 18.67 s)
             let mut notes = vec![];
             for bar in 0..20 {
                 let k = [0, 5, 3, 7][bar / 2 % 4];

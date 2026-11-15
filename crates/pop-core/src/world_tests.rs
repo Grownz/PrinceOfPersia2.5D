@@ -44,9 +44,14 @@ fn synth(room: usize, rows: std::ops::Range<usize>, start_col: usize, start_row:
     Level::parse(&b).unwrap()
 }
 
+/// n logic ticks; a frame longer than 6 steps (the sword frame length) fails instead of hanging
 fn tick(w: &mut World, keys: Keys, n: usize) {
     for _ in 0..n {
-        while !w.step(keys) {}
+        let mut steps = 1;
+        while !w.step(keys) {
+            steps += 1;
+            assert!(steps <= crate::sim::SWORD_SUBSTEPS, "a logic frame took more than {} steps", crate::sim::SWORD_SUBSTEPS);
+        }
     }
 }
 
@@ -376,7 +381,7 @@ fn level4_mirror_shadow_4_3() {
             let k = if t == jump { Keys { up: true, ..left } } else { left };
             tick(&mut w, k, 1);
             if let Some(g) = w.guard.as_ref().filter(|g| g.charid == 1) {
-                assert_eq!(g.x as i32, (2 * (58 + 14 * 4 + 10) - w.kid.x as i32) & 0xFF, "mirror image");
+                assert_eq!(g.x as i32, (2 * (58 + 14 * w.kid.curr_col() + 10) - w.kid.x as i32) & 0xFF, "mirror image about the kid's curr_col");
                 assert_eq!((g.facing_left, g.hp, g.hp_max, w.kid.hp), (false, 3, 3, 1));
                 assert!(w.sounds.contains(&45));
                 assert_eq!(w.level.tile_at(4, 4).modifier, 0x56);
@@ -464,4 +469,135 @@ fn save_file_round_trip() {
     assert_eq!(Progress::from_save(&t), Some(p));
     assert_eq!(Progress::from_save(&t.replace("41", "0")), None, "no time left");
     assert_eq!(Progress::from_save("{\"level\": 7}"), None);
+}
+
+#[test]
+fn save_file_parsing_is_strict() {
+    let ok = "{\"level\": 7, \"hitp_max\": 5, \"rem_min\": 41, \"rem_tick\": 123, \"hitp_beg_lev\": 5}";
+    assert!(Progress::from_save(ok).is_some());
+    // the key is matched exactly, not as a substring of another key or value
+    assert!(Progress::from_save("{\"xlevel\": 3, \"level\": 7, \"rem_min\": 41, \"rem_tick\": 123, \"hitp_beg_lev\": 5}").is_none(), "unknown key");
+    assert_eq!(Progress::from_save("{\"hitp_beg_lev\": 5, \"rem_tick\": 123, \"rem_min\": 41, \"level\": 7}").map(|p| p.level), Some(7), "any order");
+    assert!(Progress::from_save(&ok.replace("\"rem_min\": 41", "\"rem_min\": 41, \"rem_min\": 42")).is_none(), "duplicate key");
+    assert!(Progress::from_save(&ok.replace("41", "41x")).is_none(), "trailing junk in a value");
+    assert!(Progress::from_save(&ok.replace("41", "-41")).is_none());
+    assert!(Progress::from_save(&ok.replace("\"rem_tick\": 123", "\"rem_tick\": 720")).is_none());
+    assert!(Progress::from_save(&ok.replace("\"hitp_beg_lev\": 5", "\"hitp_beg_lev\": 11")).is_none());
+    assert!(Progress::from_save(&ok[..ok.len() - 1]).is_none(), "no closing brace");
+    // writer and reader agree on the levels: 3..13 (0000:05EA); level 14 cannot be saved, so it is not loaded either
+    for level in 0..=15 {
+        let t = Progress { level, rem_min: 30, rem_tick: 5, hitp_beg_lev: 4, ..Progress::new_game(level) }.save_text(4);
+        assert_eq!(Progress::from_save(&t).is_some(), (3..=13).contains(&level), "level {level}");
+    }
+}
+
+#[test]
+fn ending_wins_over_a_title_exit_in_the_same_tick() {
+    let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
+    let mut w = World::from_progress(data(), Level::parse(lv.get(2014).unwrap()).unwrap(), Progress::new_game(14));
+    w.text_timer = 2; // reaches 1 at the start of the next tick: Exit::Title
+    w.kid.room = 5; // and check_the_end fires later in the same tick
+    tick(&mut w, NONE, 1);
+    assert_eq!(w.exit, Some(Exit::End));
+    // otherwise the first exit stays
+    let mut w = world(3, &[], &[]);
+    w.text_timer = 2;
+    w.progress.rem_min = 0;
+    tick(&mut w, NONE, 1);
+    assert_eq!(w.exit, Some(Exit::Title));
+}
+
+#[test]
+fn clock_runs_in_the_demo_and_stops_on_level_13_after_jaffar() {
+    // show_time (0000:C170) has no level-0 test: the demo's clock runs
+    let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
+    let mut w = World::new(data(), Level::parse(lv.get(2000).unwrap()).unwrap(), 0);
+    tick(&mut w, NONE, 10);
+    assert_eq!((w.progress.rem_min, w.progress.rem_tick), (60, 709));
+    // level 13: only while leveldoor_open == 0 (Jaffar's death sets 2, the opened door 1)
+    for (door, runs) in [(0u8, true), (2, false), (1, false)] {
+        let mut w = World::new(data(), synth(1, 1..3, 3, 1, &[], &[]), 13);
+        w.leveldoor_open = door;
+        tick(&mut w, NONE, 5);
+        assert_eq!(w.progress.rem_tick == 714, runs, "door {door}");
+    }
+}
+
+#[test]
+fn level8_counter_capped_at_255_behaves_like_the_word() {
+    // the original counter is a word (0..65535); within the 60 minutes (< 43200 frames) it never wraps, and the only value
+    // anything tests on level 8 is 150 (do_mouse) and != 0 (door open), so the port's saturating u8 gives the same result
+    let mut w = World::new(data(), synth(16, 0..3, 2, 1, &[], &[]), 8);
+    w.leveldoor_open = 1;
+    let mut mice = 0;
+    for _ in 0..600 {
+        let had = w.guard.is_some();
+        tick(&mut w, NONE, 1);
+        mice += (!had && w.guard.as_ref().is_some_and(|g| g.charid == 24)) as u32;
+    }
+    assert_eq!((mice, w.leveldoor_open), (1, 255), "one mouse, the door stays open");
+    assert!(w.shared.leveldoor_open);
+}
+
+/// Play-through harness (edge_cases.md 4.1): on every level the kid is teleported next to the way out and the level's exit
+/// hook must fire. Door levels: start on the exit door (a level-door tile outside the start room), door open, Up -> seq 70
+/// -> op F1. Level 6: falling out of room 1; level 12: room 23 (seamless); level 14: room 5 (the end).
+fn reach_exit(n: usize) -> Result<Exit, String> {
+    let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
+    let mut level = Level::parse(lv.get(2000 + n as u16).unwrap()).unwrap();
+    let real_start = level.start_room;
+    let (room, tile) = match n {
+        6 => {
+            // room 1, bottom row: a column with nothing to stand on (the kid drops out of the room)
+            let c = (0..10).find(|&c| level.tile(1, c, 2).kind == Tile::Empty).ok_or("no gap in room 1")?;
+            (1, 20 + c as u8)
+        }
+        12 => (23, 0),
+        14 => (5, 0),
+        _ => {
+            let doors: Vec<(u8, u8)> = (1..=24u8).filter(|&r| r != real_start).flat_map(|r| (0..30u8).map(move |t| (r, t))).filter(|&(r, t)| level.tile_at(r as usize, t as usize).kind == Tile::ExitLeft).collect();
+            *doors.first().ok_or(format!("no exit door outside room {real_start}"))?
+        }
+    };
+    (level.start_room, level.start_tile, level.start_dir) = (room, tile, 0);
+    let mut w = World::from_progress(data(), level, Progress::new_game(n));
+    w.level.start_room = real_start; // up_pressed refuses the door of the start room
+    if n != 6 && n != 12 && n != 14 {
+        // the guard of the door room (levels 4, 10) would fight: this harness tests the exit, not the fight
+        w.guard = None;
+        w.slots[room as usize - 1].tile = 0xFF;
+        w.leveldoor_open = 1;
+        // tap Up until the kid is on the stairs (level 1 starts with a fall and a crouching landing)
+        for _ in 0..20 {
+            tick(&mut w, Keys { up: true, ..NONE }, 1);
+            if w.kid.seq == 70 {
+                break;
+            }
+            tick(&mut w, NONE, 1);
+        }
+    }
+    for _ in 0..60 {
+        if let Some(e) = w.exit {
+            return Ok(e);
+        }
+        tick(&mut w, NONE, 1);
+    }
+    Err(format!("no exit (room {} seq {} frame {} alive {})", w.kid.room, w.kid.seq, w.kid.frame, w.kid.alive))
+}
+
+#[test]
+fn play_through_every_level_reaches_its_exit() {
+    let mut bad = vec![];
+    for n in 1..=14 {
+        let want = match n {
+            12 => Exit::NextLevel { seamless: true },
+            14 => Exit::End,
+            _ => Exit::NextLevel { seamless: false },
+        };
+        match reach_exit(n) {
+            Ok(e) if e == want => {}
+            r => bad.push(format!("level {n}: {r:?}")),
+        }
+    }
+    assert!(bad.is_empty(), "{bad:#?}");
 }

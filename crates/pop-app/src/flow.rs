@@ -135,15 +135,20 @@ pub fn setup(mut cmds: Commands, mut imgs: ResMut<Assets<Image>>) {
 /// loaded game, never a restart), the cutscene card).
 fn begin(g: &mut Game, a: &KidAssets, f: &mut Flow, next: &mut NextState<Screen>, p: Progress, banner: bool, entered: bool) {
     kid::start(g, a, p);
-    // "Level N" for 24 ticks (0000:C270): levels 1..13, not after the seamless 12 -> 13; level 13 is shown as 12
-    if banner && (1..=13).contains(&g.level) {
-        g.banner = (24, format!("LEVEL {}", g.level.min(12)));
+    if let Some(text) = level_banner(g.level).filter(|_| banner) {
+        g.banner = (24, text);
     }
     if let Some(id) = cutscene_sound(g.level).filter(|_| entered) {
         card(f, next, format!("LEVEL {}\n\n(cutscene not implemented)", g.level), false, Some(id));
     } else {
         next.set(Screen::Playing);
     }
+}
+
+/// "Level N" for 24 ticks (0000:C270, VERIFIED): levels 1..13 (level != 0 and < 14), level 13 shown as 12; the caller skips
+/// it after the seamless 12 -> 13 ([59C8]).
+fn level_banner(level: usize) -> Option<String> {
+    (1..=13).contains(&level).then(|| format!("LEVEL {}", level.min(12)))
 }
 
 fn card(f: &mut Flow, next: &mut NextState<Screen>, text: String, then_title: bool, sound: Option<u8>) {
@@ -153,6 +158,19 @@ fn card(f: &mut Flow, next: &mut NextState<Screen>, text: String, then_title: bo
 
 fn save_path() -> std::path::PathBuf {
     std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("PRINCE.SAV"))).unwrap_or_else(|| "PRINCE.SAV".into())
+}
+
+/// Write PRINCE.SAV atomically: a temporary file next to it, flushed, then renamed over the old save (a crash or a full
+/// disk mid-write keeps the previous save).
+fn write_save(text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let path = save_path();
+    let tmp = path.with_extension("SAV.tmp");
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(text.as_bytes())?;
+    f.sync_all()?;
+    drop(f);
+    std::fs::rename(&tmp, &path)
 }
 
 /// Ctrl+L (key 0x0C, title/demo only, 0000:0507 -> 1E6F): load PRINCE.SAV.
@@ -202,8 +220,8 @@ pub fn pause(k: Res<ButtonInput<KeyCode>>, state: Res<State<Screen>>, mut next: 
 pub fn playing(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAssets>, mut f: ResMut<Flow>, mut next: ResMut<NextState<Screen>>, audio: Res<crate::audio::AudioState>) {
     if ctrl(&k) && k.just_pressed(KeyCode::KeyG) && g.world.exit.is_none() {
         // Ctrl+G (key 7, 0000:05EA): only on levels 3..13; messages from ds:0AA4 / ds:0AB0 (display time UNVERIFIED)
-        if (3..=13).contains(&g.level) {
-            let ok = std::fs::write(save_path(), g.world.progress.save_text(g.world.kid.hp_max)).is_ok();
+        if pop_core::sim::SAVE_LEVELS.contains(&g.level) {
+            let ok = write_save(&g.world.progress.save_text(g.world.kid.hp_max)).is_ok();
             g.banner = (24, if ok { "GAME SAVED" } else { "UNABLE TO SAVE GAME" }.into());
         }
     }
@@ -296,5 +314,16 @@ pub fn overlay(
         }
         bg.set_if_neq(BackgroundColor(if i < hp { c } else { Color::NONE }));
         border.set_if_neq(BorderColor::all(c));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn level_banner_c270() {
+        let b = |l| super::level_banner(l);
+        assert_eq!((b(0), b(14), b(15)), (None, None, None));
+        assert_eq!((b(1).unwrap(), b(12).unwrap()), ("LEVEL 1".to_string(), "LEVEL 12".to_string()));
+        assert_eq!(b(13).unwrap(), "LEVEL 12", "level 13 is shown as 12");
     }
 }

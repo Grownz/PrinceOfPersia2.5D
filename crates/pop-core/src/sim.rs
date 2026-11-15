@@ -20,8 +20,14 @@ pub const TICKS_PER_SEC: u32 = 12;
 pub const SUBSTEPS: u32 = 5;
 pub const SWORD_SUBSTEPS: u32 = 6;
 pub const STEP_HZ: f64 = (TICKS_PER_SEC * SUBSTEPS) as f64;
-/// UNVERIFIED: the original ends feather fall when sound 39 stops playing; we use a fixed length (18.75 s, SDLPoP's default).
-pub const FEATHER_TICKS: u8 = 225;
+/// Feather fall length. The original ends it in timers (0000:4FD0) on the first frame with no sound playing, i.e. when sound
+/// 39 (PC speaker, 18.61 s, docs/audio.md) ends. Set during frame T0's play_frame, the timers of frame T0+k run k * 5/60 s
+/// later: the tune still plays at k = 223 (18.58 s) and has ended at k = 224 (18.67 s). The port decrements before use, so
+/// feather > 0 on ticks T0+1..T0+223 needs 224. INFERRED: a sound that interrupts the tune (one channel) or sound off ends it
+/// earlier in the original; the speaker length is assumed (AdLib/MIDI length UNVERIFIED).
+pub const FEATHER_TICKS: u8 = 224;
+/// Ctrl+G saves only on levels 3..13 (0000:05EA: level > 2 and < 14); the loader accepts the same range.
+pub const SAVE_LEVELS: std::ops::RangeInclusive<usize> = 3..=13;
 
 const MAX_TROBS: usize = 30;
 const MAX_MOBS: usize = 14;
@@ -96,15 +102,29 @@ impl Progress {
         )
     }
 
-    /// Parse `save_text`; `None` if a key is missing or a value is out of range (the file is user-editable).
+    /// Parse `save_text` (a flat object of integer values); `None` if the shape is wrong, a key is unknown, duplicated or
+    /// missing, or a value is out of range (the file is user-editable).
     pub fn from_save(text: &str) -> Option<Progress> {
-        let num = |key: &str| -> Option<i32> {
-            let rest = text.split_once(&format!("\"{key}\""))?.1.trim_start().strip_prefix(':')?.trim_start();
-            let end = rest.find(|c: char| !(c.is_ascii_digit() || c == '-')).unwrap_or(rest.len());
-            rest[..end].parse().ok()
-        };
-        let (level, rem_min, rem_tick, hp) = (num("level")?, num("rem_min")?, num("rem_tick")?, num("hitp_beg_lev")?);
-        let ok = (1..=14).contains(&level) && (1..=60).contains(&rem_min) && (1..=719).contains(&rem_tick) && (1..=10).contains(&hp);
+        let body = text.trim().strip_prefix('{')?.strip_suffix('}')?;
+        let mut v = [None; 4];
+        for pair in body.split(',') {
+            let (key, num) = pair.split_once(':')?;
+            let key = key.trim().strip_prefix('"')?.strip_suffix('"')?;
+            let num: i32 = num.trim().parse().ok()?;
+            let i = match key {
+                "level" => 0,
+                "rem_min" => 1,
+                "rem_tick" => 2,
+                "hitp_beg_lev" => 3,
+                "hitp_max" => continue, // informational
+                _ => return None,
+            };
+            if v[i].replace(num).is_some() {
+                return None;
+            }
+        }
+        let [Some(level), Some(rem_min), Some(rem_tick), Some(hp)] = v else { return None };
+        let ok = SAVE_LEVELS.contains(&(level.max(0) as usize)) && (1..=60).contains(&rem_min) && (1..=719).contains(&rem_tick) && (1..=10).contains(&hp);
         ok.then_some(Progress { level: level as usize, rem_min, rem_tick, hitp_beg_lev: hp, checkpoint: false, carry_hp: None })
     }
 }
@@ -146,8 +166,8 @@ pub struct World {
     /// level 0: the kid is driven by DEMO_MOVES / the guard AI; the control flags persist between ticks
     pub demo: bool,
     demo_ctrl: crate::kid::Ctrl,
-    /// jumped_through_mirror (ds:42E0): column of the mirror, handled after the tick
-    mirror_jump: Option<i32>,
+    /// jumped_through_mirror (ds:42E0), handled after the tick
+    mirror_jump: bool,
     sub: u32,
     /// 60 Hz steps of the current logic frame (5, or 6 with the kid's sword drawn)
     frame_len: u32,
@@ -195,7 +215,7 @@ impl World {
         let kid = {
             let mut start = level.clone();
             if level_no == 3 && progress.checkpoint {
-                // dir 0xFF goes through the usual NOT + turn (seq 5): the kid ends facing left (edge_cases.md 3.4 says "right")
+                // 0000:4A24: dir 0xFF, then NOT (4A86) -> 0 (right) and seq 5's flip: the kid ends facing left (VERIFIED)
                 (start.start_room, start.start_tile, start.start_dir) = (2, 6, 0xFF);
             }
             let env = mk_env(&data, &start, guard_type);
@@ -220,7 +240,7 @@ impl World {
             text_timer: 0,
             demo: level_no == 0,
             demo_ctrl: Default::default(),
-            mirror_jump: None,
+            mirror_jump: false,
             sub: 0,
             frame_len: SUBSTEPS,
             flash: (0, 0),
@@ -380,8 +400,8 @@ impl World {
             self.set_exit(Exit::End); // check_the_end runs on room entry; the exit is set once, so testing every tick is the same
         }
         self.show_time();
-        if let Some(col) = self.mirror_jump.take() {
-            self.jump_through_mirror(col); // check_mirror runs in the drawing pass, after play_frame
+        if std::mem::take(&mut self.mirror_jump) {
+            self.jump_through_mirror(); // check_mirror runs in the drawing pass, after play_frame
         }
         if self.flash.1 == 0 && self.kid.hp_delta < 0 {
             self.flash = (12, 1); // flash_if_hurt (0000:5374): red for the frame the kid lost hit points
@@ -447,9 +467,9 @@ impl World {
                 Event::GetObject(kind) => self.get_object(kind),
                 Event::NextLevel => self.set_exit(Exit::NextLevel { seamless: false }),
                 // is_obstacle fires on every probe of frames 39..43; the 0x56 modifier marks the jump as done (one shadow per jump)
-                Event::Mirror { room, tilepos, col } if self.modifier(room, tilepos) != 0x56 => {
+                Event::Mirror { room, tilepos } if self.modifier(room, tilepos) != 0x56 => {
                     self.set_mod(room, tilepos, 0x56);
-                    self.mirror_jump = Some(col);
+                    self.mirror_jump = true;
                 }
                 Event::Mirror { .. } => {}
             }
@@ -488,7 +508,12 @@ impl World {
 
     // ------------------------------------------------------------------ death, restart, time (docs/edge_cases.md 3.2-3.5)
 
+    /// The first exit of a tick wins, except that the ending replaces a time-out / title or restart set earlier in the
+    /// same tick (Exit::End must not be lost to a race on the final tick).
     fn set_exit(&mut self, e: Exit) {
+        if e == Exit::End && matches!(self.exit, Some(Exit::Title | Exit::Restart)) {
+            self.exit = Some(e);
+        }
         self.exit.get_or_insert(e);
     }
 
@@ -561,7 +586,9 @@ impl World {
     /// show_time (0000:C170) and the time-out test of play_frame (0000:09C9).
     fn show_time(&mut self) {
         let p = &mut self.progress;
-        let runs = (self.level_no < 13 || (self.level_no == 13 && self.leveldoor_open != 2)) && self.level_no != 15;
+        // 0000:C176..C199: alive, rem_min != 0, level <= 13 (13 only while leveldoor_open == 0: Jaffar's death sets 2, the
+        // opened door then 1, time stays stopped), level < 15. Level 0 is not excluded: the clock also runs in the demo.
+        let runs = self.level_no < 13 || (self.level_no == 13 && self.leveldoor_open == 0);
         if self.kid.alive && p.rem_min != 0 && runs {
             p.rem_tick -= 1;
             if p.rem_tick == 0 {
