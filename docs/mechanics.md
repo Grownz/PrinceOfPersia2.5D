@@ -89,7 +89,9 @@ Action values (behaviour VERIFIED in check_action `0000:7309`; names INFERRED): 
 ### 2.1 Reading the keys (VERIFIED)
 
 - `0000:1533` (keyboard). The key-state array is indexed by scancode: up = 0x48, 7/Home = 0x47 (up+left), 9/PgUp = 0x49 (up+right),
-  down = 0x50, keypad 5 = 0x4C (down), left = 0x4B, right = 0x4D.
+  down = 0x50, keypad 5 = 0x4C (down), left = 0x4B, right = 0x4D. The int 9 handler `0C83:00DE` stores `scancode & 0x7F` and drops
+  the E0 prefix, so keypad 8/4/6/2 are the arrows, and the grey Home / PgUp keys act like keypad 7 / 9. Keypad 1/End (0x4F), 3/PgDn (0x51)
+  and 0/Ins (0x52) are never read. Shift comes from the BIOS flags, so NumLock and the keypad's fake Shift codes do not matter.
   - control_y = -1 for up/Home/PgUp, else +1 for keypad-5/down.
   - control_x = -1 for left/Home, else +1 for right/PgUp. So left beats right and up beats down.
   - control_shift -= (BIOS `0040:0017` & 3), the left/right Shift bits. It is negative while Shift is held.
@@ -475,4 +477,7 @@ back_delta_x `7DBA` = (facing left ? d : -d).
 **Status (port):** items 2-5 above are fixed in crates/ (spawn, box-based dist_from_wall, in_wall, leave_room). Item 1 (drawing) was fixed earlier. Two readings remain INFERRED in `pop-core/src/kid.rs`: the column lookup after a bump (9.3) and the climb-down condition (2.3, can_grab target).
 
 **Rendering note (port):** logical column c spans x = 65 + 14c .. 79 + 14c (col_m7 = x - 7 in determine_col, tile_left = x_bump + 7 in the collision code), i.e. screen px 32c + 16 .. 32c + 48 - half a tile right of the 7.3 example `sx = 32c`. pop-app draws tile column c at world x = c .. c + 1, so sprites are shifted by -16 px (-0.5 world units) to keep the figure on the tile the physics uses.
+Hanging is mirror symmetric to within 2 px: the hang frame 91 hands are 4..6 px over the ledge facing left and 1..3 px facing right
+(the core pairs x <-> 283 - x around a column, plus the 8/7 truncation). That is the original's own rounding, not an anchor error
+(pop-app test `hang_anchor_matches_the_original_formula`).
 
