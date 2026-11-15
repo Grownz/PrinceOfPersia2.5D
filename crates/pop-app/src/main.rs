@@ -229,7 +229,7 @@ fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<
     let centre = Vec3::new(5.0, 3.0, 0.0);
     cmds.spawn((
         Camera3d::default(),
-        game_camera(),
+        game_camera(16.0 / 9.0),
         AmbientLight { color: Color::srgb(0.6, 0.65, 0.9), brightness: 150.0, ..default() },
     ));
     cmds.spawn((DirectionalLight { illuminance: 4000.0, ..default() }, Transform::from_xyz(-4.0, 9.0, 10.0).looking_at(centre, Vec3::Y)));
@@ -244,8 +244,13 @@ fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<
 }
 
 /// The level view: the room is 10 wide and 3 * TILE_H tall; look at its centre with a slight downward tilt for depth.
-pub fn game_camera() -> Transform {
-    Transform::from_xyz(5.0, 4.2, 13.5).looking_at(Vec3::new(5.0, 3.0, 0.0), Vec3::Y)
+/// The room (10 columns x 3 rows of TILE_H) fills about 80% of the window along its limiting axis, so the neighbouring rooms
+/// show in the margins. Default perspective fov is 45 degrees; the slight view from above (1.2 over 13.5) is kept.
+pub fn game_camera(aspect: f32) -> Transform {
+    const FILL: f32 = 0.8;
+    let visible_h = (3.0 * room::TILE_H / FILL).max(10.0 / (FILL * aspect.max(0.1)));
+    let d = visible_h / (2.0 * (std::f32::consts::FRAC_PI_8).tan());
+    Transform::from_xyz(5.0, 3.0 + 1.2 * d / 13.5, d).looking_at(Vec3::new(5.0, 3.0, 0.0), Vec3::Y)
 }
 
 /// POP_CUTSCENE=<level>|end|timeout|intro (debugging): start that scene right away (POP_REM_MIN sets the minutes left for the

@@ -238,6 +238,7 @@ pub fn render(
     mut imgs: ResMut<Assets<Image>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     star_mats: Res<StarMats>,
+    win: Single<&Window, With<bevy::window::PrimaryWindow>>,
     mut q: ParamSet<(
         Query<(&ActorSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>)>,
         Query<(&GlassSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>)>,
@@ -254,7 +255,7 @@ pub fn render(
     let on_set = in_scene || s == Screen::Title;
     // camera: the set for cutscenes and the title/story screens, the level otherwise
     for mut t in &mut q.p6() {
-        let want = if on_set { camera_on_set() } else { crate::game_camera() };
+        let want = if on_set { camera_on_set() } else { crate::game_camera(win.width() / win.height().max(1.0)) };
         if *t != want {
             *t = want;
         }
