@@ -47,7 +47,14 @@ pub fn data_dir() -> String {
 }
 
 /// Files that must be present for a folder to count as the game data.
-const REQUIRED: [&str; 3] = ["LEVELS.DAT", "PRINCE.EXE", "KID.DAT"];
+/// (TITLE.DAT and the sound DATs are optional: the app falls back to a text title / synthesized sound.)
+const REQUIRED: [&str; 11] = [
+    "LEVELS.DAT", "PRINCE.EXE", "KID.DAT", "PRINCE.DAT", "GUARD.DAT", "GUARD1.DAT", "GUARD2.DAT", "FAT.DAT", "SKEL.DAT", "VIZIER.DAT", "SHADOW.DAT",
+];
+
+fn missing_files(d: &std::path::Path) -> Vec<&'static str> {
+    REQUIRED.iter().copied().filter(|f| !d.join(f).is_file()).collect()
+}
 
 /// Where to look for the user's own game files, in order: POP_DATA, Original_data next to the exe, Original_data in the
 /// current folder, settings.json "data_path".
@@ -60,7 +67,7 @@ fn data_candidates(set: &Settings) -> Vec<PathBuf> {
 }
 
 fn find_data(candidates: &[PathBuf]) -> Option<&PathBuf> {
-    candidates.iter().find(|d| REQUIRED.iter().all(|f| d.join(f).is_file()))
+    candidates.iter().find(|d| missing_files(d).is_empty())
 }
 
 /// stderr plus, in release builds (no console), pop.log next to the exe.
@@ -94,7 +101,13 @@ fn main() {
     let set = Settings::load();
     let candidates = data_candidates(&set);
     let Some(dir) = find_data(&candidates) else {
-        let tried: Vec<String> = candidates.iter().map(|p| format!("  {}", p.display())).collect();
+        let tried: Vec<String> = candidates
+            .iter()
+            .map(|p| match (p.is_dir(), missing_files(p)) {
+                (true, m) => format!("  {} (missing files: {})", p.display(), m.join(", ")),
+                _ => format!("  {} (not a folder)", p.display()),
+            })
+            .collect();
         let msg = format!(
             "Game data not found. This remake needs your own copy of Prince of Persia (DOS): a folder with {}.\nPut it in a folder named Original_data next to the exe, set POP_DATA, or set \"data_path\" in {}.\nSearched:\n{}",
             REQUIRED.join(", "), Settings::path().display(), tried.join("\n")
@@ -320,6 +333,10 @@ mod tests {
         let c = [base.join("missing"), a.clone(), b.clone()];
         assert_eq!(super::find_data(&c), Some(&b));
         assert_eq!(super::find_data(&c[..2]), None);
+        // partial install: only the files the app opens at startup are required, and the missing ones are named
+        let m = super::missing_files(&a);
+        assert!(m.contains(&"KID.DAT") && m.contains(&"GUARD2.DAT") && !m.contains(&"LEVELS.DAT"));
+        assert!(!super::REQUIRED.contains(&"TITLE.DAT") && super::missing_files(&b).is_empty());
         let _ = std::fs::remove_dir_all(&base);
     }
 
