@@ -549,6 +549,16 @@ mod tests {
     }
 
     #[test]
+    fn debug_draw_trace() {
+        let mut w = world(2, 7, 1);
+        for t in 0..40 {
+            tick(&mut w, NONE, 1);
+            let g = w.guard.as_ref().unwrap();
+            println!("t{t} kid f{} s{} seq{} x{} row{} alive{} have{} | guard f{} s{} seq{} x{} | can_see {} dist {}", w.kid.frame, w.kid.sword, w.kid.seq, w.kid.x, w.kid.row, w.kid.alive, w.kid.have_sword, g.frame, g.sword, g.seq, g.x, w.shared.can_see, w.kid.opp_dist());
+        }
+    }
+
+    #[test]
     fn guard_and_kid_draw_their_swords() {
         let mut w = world(2, 7, 1);
         tick(&mut w, NONE, 40);
@@ -566,7 +576,7 @@ mod tests {
         let g = w.guard.as_mut().unwrap();
         g.sword = 2;
         g.frame = 158;
-        g.x = (w.kid.x as i32 + 20) as u8;
+        g.x = (w.kid.x as i32 + 5) as u8; // opp_dist adds 13 when facing each other: 18, inside 12..29
         g.facing_left = true;
         w.kid.sword = 2;
         w.kid.facing_left = false;
@@ -588,7 +598,7 @@ mod tests {
         let g = w.guard.as_mut().unwrap();
         g.sword = 2;
         g.frame = 150; // parrying
-        g.x = (w.kid.x as i32 + 20) as u8;
+        g.x = (w.kid.x as i32 + 5) as u8;
         g.facing_left = true;
         w.kid.sword = 2;
         w.kid.facing_left = false;
