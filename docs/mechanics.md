@@ -473,3 +473,6 @@ back_delta_x `7DBA` = (facing left ? d : -d).
    y >= 211 for down, skipped for climb/stand-up/turn frames), and the original moves even when the link is 0.
 
 **Status (port):** items 2-5 above are fixed in crates/ (spawn, box-based dist_from_wall, in_wall, leave_room). Item 1 (drawing) was fixed earlier. Two readings remain INFERRED in `pop-core/src/kid.rs`: the column lookup after a bump (9.3) and the climb-down condition (2.3, can_grab target).
+
+**Rendering note (port):** logical column c spans x = 65 + 14c .. 79 + 14c (col_m7 = x - 7 in determine_col, tile_left = x_bump + 7 in the collision code), i.e. screen px 32c + 16 .. 32c + 48 - half a tile right of the 7.3 example `sx = 32c`. pop-app draws tile column c at world x = c .. c + 1, so sprites are shifted by -16 px (-0.5 world units) to keep the figure on the tile the physics uses.
+

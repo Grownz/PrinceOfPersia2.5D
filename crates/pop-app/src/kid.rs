@@ -94,7 +94,9 @@ fn world_pos(k: &Kid, frames: &[Frame]) -> Vec2 {
     let obj_x = 2 * (k.x as i32 + dxs) - 116 + parity;
     let sx = obj_x * 320 / 280;
     let bottom = k.y.wrapping_add(f.dy as u8) as f32;
-    Vec2::new(sx as f32 / 32.0, (181.0 - bottom) * crate::room::TILE_H / TILE_H_PX as f32)
+    // Logic column c spans x = 65 + 14c .. 79 + 14c (collision and floor checks use col_m7 = x - 7), i.e. screen px 32c + 16.
+    // The tile geometry is built at world x = c .. c + 1, so the sprite is shifted left by half a tile (16 px).
+    Vec2::new(sx as f32 / 32.0 - 0.5, (181.0 - bottom) * crate::room::TILE_H / TILE_H_PX as f32)
 }
 
 fn respawn(g: &mut Game, a: &KidAssets) {
