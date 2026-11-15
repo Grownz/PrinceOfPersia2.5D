@@ -68,7 +68,7 @@ impl<'a> Env<'a> {
     pub fn frame_of(&self, charid: u8, frame: u8) -> Frame {
         let f = frame as usize;
         let kid = |i: usize| self.frames.get(i).copied().unwrap_or(NO_FRAME);
-        let guard = |i: usize| i.checked_sub(150).and_then(|j| self.gframes.get(j)).copied();
+        let guard = |i: usize| i.checked_sub(150).filter(|&j| j < 40).and_then(|j| self.gframes.get(j)).copied();
         match charid {
             1 => guard(f).unwrap_or_else(|| kid(f)),
             2 | 4 => {
@@ -151,8 +151,7 @@ pub struct Kid {
     pub hp_max: i32,
     /// set by take_hp, applied once per tick by the world (do_delta_hp)
     pub hp_delta: i32,
-    /// guard timers (docs/combat.md 3.4)
-    pub refrac: u8,
+    /// guard timer (docs/combat.md 3.4); guard_refrac is global and lives in `Shared`
     pub justblocked: u8,
     pub have_sword: bool,
     /// the other fighter and the state shared between them, copied in by the world before each tick
@@ -590,6 +589,10 @@ impl Kid {
     }
 
     fn control_standing(&mut self, env: &Env, c: &mut Ctrl) {
+        if self.charid != 0 && c.down == -1 && c.fwd == -1 {
+            self.draw_sword(env, c); // shadow and guards draw on down + forward (0000:61E3)
+            return;
+        }
         // the kid draws his sword by himself when a reachable guard is close (docs/combat.md 4.1)
         if self.charid == 0 && self.have_sword && !(self.sh.offguard && c.shift >= 0) {
             if self.sh.can_see >= 2 {
@@ -646,6 +649,7 @@ impl Kid {
     }
 
     fn back_pressed(&mut self, env: &Env, c: &mut Ctrl) {
+        self.sh.offguard = false;
         c.bwd = c.release_arrows();
         if self.have_sword && self.sh.can_see >= 2 && self.opp_dist() <= 0 && self.dist_weight(env) >= 2 {
             self.sword = 2;
@@ -907,6 +911,9 @@ impl Kid {
                 Op::KnockDown => self.knock = -1,
                 Op::KnockUp => self.knock = 1,
                 Op::Sound(n) => {
+                    if n <= 3 {
+                        self.sh.guard_notice = true; // 0 = notice only, 1..3 = sound + notice
+                    }
                     // F2 arg: 1 = footstep (23), 2 = bump (8), 3 = drink (18); 0 and 4 (music) have no effect id here
                     if let Some(id) = match n { 1 => Some(23), 2 => Some(8), 3 => Some(18), _ => None } {
                         self.events.push(Event::Sound(id));
@@ -1123,6 +1130,7 @@ impl Kid {
             self.play_seq(env);
         }
         self.events.push(Event::Sound(8)); // bumped_sound, both branches
+        self.sh.guard_notice = true;
     }
 
     /// bumped_floor (0000:58C8), kid without sword
@@ -1142,6 +1150,7 @@ impl Kid {
         self.start_seq(env, if hard { 46 } else { 47 });
         self.play_seq(env);
         self.events.push(Event::Sound(8));
+        self.sh.guard_notice = true;
     }
 
     /// in_wall (0000:7809): push the kid out of a wall tile, then reload record and column.
@@ -1472,8 +1481,12 @@ impl Kid {
             22
         };
         // fighters (guards, or a drawn sword) land in the en garde sequence (0000:5F85)
-        if (self.charid != 0 || self.sword == 2) && seq != 22 {
+        if (self.charid >= 2 || self.sword == 2) && seq == 17 {
             seq = 63;
+            self.sword = 2;
+        }
+        if seq == 17 || seq == 20 {
+            self.sh.guard_notice = true;
         }
         self.start_seq(env, seq);
         self.play_seq(env);

@@ -166,6 +166,7 @@ impl World {
     }
 
     fn logic_tick(&mut self, keys: Keys) {
+        let room_before = self.kid.room;
         // hit point deltas are cleared at the start of the frame and applied at its end (0000:4D7F, 0000:12A6)
         self.kid.hp_delta = 0;
         if let Some(g) = self.guard.as_mut() {
@@ -177,7 +178,18 @@ impl World {
         self.shared.drawn_room = self.kid.room;
         self.shared.can_see = self.can_guard_see_kid();
         self.shared.notice_timer = self.shared.notice_timer.saturating_sub(1);
-        self.shadow.united = if self.shadow.united > 0 { self.shadow.united - 1 } else { self.shadow.united };
+        if self.shadow.united > 0 {
+            self.shadow.united -= 1;
+            if self.shadow.united == 0 {
+                self.shadow.united = -1; // the hidden floor trick of level 12 is enabled from here
+            }
+        }
+        if self.shadow.killed {
+            self.shadow.killed = false;
+            if self.kid.alive {
+                self.kid.take_hp(100); // check_killed_shadow (0000:84B1): killing the shadow kills the kid
+            }
+        }
         self.kid.opp = self.guard.as_ref().map_or_else(Default::default, crate::kid::Opp::of);
         self.kid.sh = self.shared;
         {
@@ -187,21 +199,20 @@ impl World {
         self.shared = self.kid.sh;
         self.apply_kid_events();
         self.play_guard_frame();
-        if self.kid.alive || self.kid.hp > 0 {
-            self.check_sword_hurting();
-            self.check_sword_hurt();
-        }
+        self.check_sword_hurting();
+        self.check_sword_hurt();
         if self.kid.frame == 167 || self.guard.as_ref().is_some_and(|g| g.frame == 167) {
             self.sounds.push(10); // swords clash
         }
         self.do_delta_hp();
         // exit_room / check_the_end: the kid changed room
         if let Some(dir) = self.kid.leave_dir.take() {
-            self.on_room_left(dir);
+            self.on_room_left(dir, room_before);
             self.guard_after_room_change(dir);
             self.shared.drawn_room = self.kid.room;
             self.check_shadow();
         }
+        self.check_guard_fallout();
         if self.dirty {
             self.dirty = false;
             self.version = self.version.wrapping_add(1);
@@ -209,8 +220,8 @@ impl World {
     }
 
     /// Level events at a room change (docs/combat.md 7.5): Jaffar is met, the exit door opens after his death.
-    fn on_room_left(&mut self, dir: u8) {
-        if self.level_no == 13 && dir == 1 && self.leveldoor_open == 0 && self.kid.room == 4 {
+    fn on_room_left(&mut self, dir: u8, from: u8) {
+        if self.level_no == 13 && dir == 1 && self.leveldoor_open == 0 && from == 3 {
             self.sounds.push(29);
             self.shared.notice_timer = 28;
         }
@@ -324,6 +335,7 @@ impl World {
             self.level.set_link_timer(m, 5);
             if t < 2 {
                 self.add_trob(room, tilepos, 1);
+                self.shared.guard_notice = true;
                 if playsound {
                     self.sound(3);
                 }

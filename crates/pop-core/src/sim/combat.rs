@@ -24,6 +24,8 @@ pub const NO_SLOT: GuardSlot = GuardSlot { tile: 0xFF, x: 0, dir: 0, skill: 0, c
 /// State of the scripted shadows (docs/combat.md 7.1)
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ShadowState {
+    /// the level 12 shadow died: the kid dies with it on the next tick
+    pub killed: bool,
     pub demo_time: u8,
     pub demo_index: usize,
     pub initialized: bool,
@@ -53,10 +55,7 @@ fn shadow_moves(g: &mut Kid, env: &Env, level_no: usize, st: &mut ShadowState, r
                     // do_auto_moves (0000:4633)
                     if st.demo_time < 0xFE {
                         st.demo_time += 1;
-                        let (t, m) = SHADOW5_MOVES[st.demo_index.min(6)];
-                        if t <= st.demo_time {
-                            st.demo_index += 1;
-                        }
+                        let m = SHADOW5_MOVES.iter().take_while(|e| e.0 <= st.demo_time).last().map_or(0, |e| e.1);
                         match m {
                             1 => c.move_forward(),
                             2 => c.move_backward(),
@@ -86,7 +85,7 @@ fn shadow_moves(g: &mut Kid, env: &Env, level_no: usize, st: &mut ShadowState, r
             if g.room == 15 {
                 let d = g.opp_dist();
                 if g.sword == 2 {
-                    if !g.sh.offguard || g.refrac == 0 {
+                    if !g.sh.offguard || g.sh.refrac == 0 {
                         return g.autocontrol_active(env, rng);
                     }
                     c.move_down();
@@ -139,7 +138,7 @@ impl World {
 
     /// enter_guard (0000:3806): a guard waiting in the kid's room steps into play.
     pub(super) fn enter_guard(&mut self, room: u8) {
-        if self.guard.is_some() || !(1..=24).contains(&room) || GUARD_TYPE[self.level_no.min(15)] < 0 {
+        if !(1..=24).contains(&room) || GUARD_TYPE[self.level_no.min(15)] < 0 {
             return;
         }
         let slot = self.slots[room as usize - 1];
@@ -232,22 +231,16 @@ impl World {
             6 if room == 1 => {
                 if !self.shadow.level6_done {
                     self.shadow.level6_done = true;
-                    self.sounds.push(25);
-                    self.init_shadow(15, 81, 118, 1, 2);
+                    self.sounds.push(25); // the music plays only once
                 }
+                self.init_shadow(15, 81, 118, 1, 2);
             }
             5 if room == 24 && self.level.tile_at(24, 3).kind == Tile::Potion => {
-                if self.guard.is_none() {
-                    self.shadow.demo_time = 0;
-                    self.shadow.demo_index = 0;
-                    self.init_shadow(15, 55, 55, 0, 2);
-                }
+                self.init_shadow(15, 55, 55, 0, 2);
             }
             12 if room == 15 && self.shadow.united == 0 && self.level.tile_at(15, 1).kind != Tile::Sword => {
-                if self.guard.is_none() {
-                    self.shadow.initialized = false;
-                    self.init_shadow(15, 81, 232, 0, 7);
-                }
+                self.shadow.initialized = false;
+                self.init_shadow(15, 81, 232, 0, 7);
             }
             _ => self.enter_guard(room),
         }
@@ -257,8 +250,12 @@ impl World {
     fn init_shadow(&mut self, frame: u8, x: u8, y: u8, row: i32, seq: usize) {
         let room = self.kid.room;
         let mut g = self.new_fighter(1, room, x, row, false, 3, 4, 0, seq);
+        let env = self.guard_env();
         g.frame = frame;
         g.y = y;
+        g.start_seq(&env, seq); // do_init_shad only sets the sequence pointer: the first frame comes next tick
+        self.shadow.demo_time = 0;
+        self.shadow.demo_index = 0;
         self.guard = Some(g);
     }
 
@@ -334,6 +331,16 @@ impl World {
             clear = true;
         }
         let level_no = self.level_no;
+        if g.charid == 1 && level_no == 12 {
+            if clear {
+                self.shadow.killed = true; // the shadow died
+            } else if g.alive && !self.kid.alive {
+                g.take_hp(100); // ... and the kid's death takes the shadow with it
+            }
+        }
+        if !g.alive && g.charid != 1 {
+            g.tick_timers();
+        }
         if !clear {
             // level 12: the shadow keeps dropping in until the kid has moved left of x 150
             if level_no == 12 && g.charid == 1 && g.room == 15 && !self.shadow.initialized {
@@ -342,6 +349,7 @@ impl World {
                     let (x, y) = (81u8, 232u8);
                     g = Kid::new_char(&env, 1, g.room, x, 0, false, 3, 4, 0, 7);
                     g.y = y;
+                    g.sh = self.shared;
                     g.opp = Opp::of(&self.kid);
                 } else {
                     self.shadow.initialized = true;
@@ -382,7 +390,6 @@ impl World {
             return; // clear_char: the guard record is gone
         }
         self.guard = Some(g);
-        self.check_guard_fallout();
     }
 
     /// on_guard_killed (0000:833C)
@@ -399,7 +406,7 @@ impl World {
     }
 
     /// check_guard_fallout (0000:395D): a guard that fell out of the room is gone.
-    fn check_guard_fallout(&mut self) {
+    pub(super) fn check_guard_fallout(&mut self) {
         let Some(g) = &self.guard else { return };
         if g.y < 211 {
             return;
@@ -447,7 +454,7 @@ impl World {
                 self.kid.action = 1; // the kid wins a double hit
             }
             g.hurt_by_sword(&env);
-            g.refrac = REFRACTIMER[(g.skill as usize).min(11)];
+            self.shared.refrac = REFRACTIMER[(g.skill as usize).min(11)];
         } else if self.kid.action == 99 {
             self.kid.hurt_by_sword(&env);
         }
@@ -663,6 +670,27 @@ mod tests {
         w.enter_guard(1);
         let g = w.guard.as_ref().unwrap();
         assert_eq!((g.hp, g.sword), (3, 0), "full hit points, sword sheathed");
+    }
+
+    #[test]
+    fn sheathing_makes_the_kid_offguard_and_makes_the_guard_wait() {
+        let mut w = world(2, 7, 1);
+        tick(&mut w, NONE, 40);
+        assert_eq!(w.kid.sword, 2);
+        w.kid.frame = 158; // en garde
+        w.kid.action = 0;
+        tick(&mut w, Keys { down: true, ..NONE }, 1);
+        assert_eq!(w.kid.sword, 0, "sheathed");
+        assert!(w.shared.offguard, "offguard stops the automatic drawing");
+        assert!((8..=9).contains(&w.shared.refrac), "guard_refrac = 9 (one tick already counted): {}", w.shared.refrac);
+    }
+
+    #[test]
+    fn shadow_united_counts_down_to_minus_one() {
+        let mut w = world(12, 7, 1);
+        w.shadow.united = 3;
+        tick(&mut w, NONE, 5);
+        assert_eq!(w.shadow.united, -1);
     }
 
     #[test]
