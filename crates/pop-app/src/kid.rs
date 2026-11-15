@@ -87,6 +87,11 @@ fn ctrl_held(k: &ButtonInput<KeyCode>) -> bool {
 pub fn pressed(k: &ButtonInput<KeyCode>, m: &KeyMap, pads: &Query<&Gamepad>) -> Keys {
     use GamepadButton::*;
     let mut keys = if ctrl_held(k) { Keys::default() } else { Keys { left: k.any_pressed(m.left.iter().copied()), right: k.any_pressed(m.right.iter().copied()), up: k.any_pressed(m.up.iter().copied()), down: k.any_pressed(m.down.iter().copied()), shift: k.any_pressed(m.shift.iter().copied()) } };
+    if !ctrl_held(k) {
+        for p in k.get_pressed().map(|&c| keypad(c)) {
+            keys = Keys { left: keys.left | p.left, right: keys.right | p.right, up: keys.up | p.up, down: keys.down | p.down, shift: keys.shift };
+        }
+    }
     for p in pads {
         let s = p.left_stick();
         keys.left |= p.pressed(DPadLeft) || s.x < -0.5;
@@ -96,6 +101,24 @@ pub fn pressed(k: &ButtonInput<KeyCode>, m: &KeyMap, pads: &Query<&Gamepad>) -> 
         keys.shift |= p.pressed(South) || p.pressed(West);
     }
     keys
+}
+
+/// Numeric keypad, fixed like the original: its key table is indexed by scancode and the E0 prefix is dropped (0C83:00DE),
+/// so keypad 7/Home (0x47) = up+left, 8 (0x48) = up, 9/PgUp (0x49) = up+right, 4 (0x4B) = left, 6 (0x4D) = right,
+/// 5 (0x4C) and 2 (0x50) = down (read at 0000:1533). Keypad 1/End, 3/PgDn and 0/Ins are not read. Bevy reports keypad keys
+/// as `NumpadN` whatever the NumLock state; the separate Home / PageUp keys share the scancode, so they act the same.
+pub fn keypad(c: KeyCode) -> Keys {
+    use KeyCode::*;
+    let (left, right, up, down) = match c {
+        Numpad7 | Home => (true, false, true, false),
+        Numpad8 => (false, false, true, false),
+        Numpad9 | PageUp => (false, true, true, false),
+        Numpad4 => (true, false, false, false),
+        Numpad6 => (false, true, false, false),
+        Numpad5 | Numpad2 => (false, false, false, true),
+        _ => (false, false, false, false),
+    };
+    Keys { left, right, up, down, shift: false }
 }
 
 /// Runs every frame: remember keys that were down at any point since the last logic tick.
@@ -148,15 +171,19 @@ fn material_for(a: &mut KidAssets, imgs: &mut Assets<Image>, mats: &mut Assets<S
 /// bottom = the image's bottom line (row 2 floor = 0).
 fn world_pos(k: &Kid, env: &Env) -> Vec2 {
     let f = env.frame_of(k.charid, k.frame);
-    let dir_byte: u8 = if k.facing_left { 0xFF } else { 0 };
-    let dxs = if k.facing_left { -(f.dx as i32) } else { f.dx as i32 };
-    let parity = (((f.flags ^ dir_byte) & 0x80) == 0) as i32;
-    let obj_x = 2 * (k.x as i32 + dxs) - 116 + parity;
-    let sx = obj_x * 320 / 280;
+    let sx = screen_x(k.x, f.dx, f.flags, k.facing_left);
     let bottom = k.y.wrapping_add(f.dy as u8) as f32;
     // Logic column c spans x = 65 + 14c .. 79 + 14c (collision and floor checks use col_m7 = x - 7), i.e. screen px 32c + 16.
     // The tile geometry is built at world x = c .. c + 1, so the sprite is shifted left by half a tile (16 px).
     Vec2::new(sx as f32 / 32.0 - 0.5, (181.0 - bottom) * crate::room::TILE_H / TILE_H_PX as f32)
+}
+
+/// 7.3: screen x (320 px wide) of the image's left edge (facing left) or exclusive right edge (facing right).
+fn screen_x(x: u8, dx: i8, flags: u8, facing_left: bool) -> i32 {
+    let dir_byte: u8 = if facing_left { 0xFF } else { 0 };
+    let dxs = if facing_left { -(dx as i32) } else { dx as i32 };
+    let parity = (((flags ^ dir_byte) & 0x80) == 0) as i32;
+    (2 * (x as i32 + dxs) - 116 + parity) * 320 / 280
 }
 
 /// Build the world for `p` (restart, next level, new game, the demo level 0). Cutscenes: see `flow` (text cards only).
@@ -272,6 +299,12 @@ fn draw_char(
     Some(p)
 }
 
+/// draw_sword (0000:84EC) draws the frame's sword entry when Char.sword != 0, on the sword pickup frames 229..237 (the kid
+/// raises the found sword with sword still 0), or for a living guard (charid 2, alive < 0).
+fn sword_shown(k: &Kid) -> bool {
+    k.sword != 0 || (229..=237).contains(&k.frame) || (k.charid == 2 && k.alive)
+}
+
 /// The sword of a fighter with his sword drawn: position from the sword table (screen pixels relative to the body).
 #[allow(clippy::too_many_arguments)]
 fn draw_sword(
@@ -290,7 +323,7 @@ fn draw_sword(
     let env = mk_env(&data, level, gtype);
     let f = env.frame_of(k.charid, k.frame);
     let entry = a.sword_table.get((f.sword & 0x3F) as usize).copied();
-    let (Some(p), Some((img, dx, dy)), true) = (body, entry, k.sword == 2) else {
+    let (Some(p), Some((img, dx, dy)), true) = (body, entry, sword_shown(k)) else {
         *vis = Visibility::Hidden;
         return;
     };
@@ -354,4 +387,50 @@ fn script() -> Option<&'static Vec<Keys>> {
         Some(out)
     })
     .as_ref()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Hang frame 91 (image 102, 14 px wide, hands in stored columns 7..9; dx 3, flags 0x80) on the same ledge edge, logic x
+    /// from pop-core: facing left on level 8 room 19 (ledge col 3, kid x 118), facing right on level 2 room 1 (ledge col 4,
+    /// kid x 123). Both edges are logic x 121 = screen px 144 (128 after the -16 px tile shift). Facing left the image is
+    /// 131..145 (hands 138..140, 4..6 px over the ledge), facing right 141..155 mirrored (hands 145..147, 1..3 px over it):
+    /// the 2 px difference is the original's own rounding (core mirror pairs x <-> 283 - x, the 8/7 truncation), not an anchor error.
+    #[test]
+    fn hang_anchor_matches_the_original_formula() {
+        let (left, right) = (screen_x(118, 3, 0x80, true), screen_x(123, 3, 0x80, false));
+        assert_eq!((left, right), (131, 155));
+        let (lh, rh) = ((left + 7, left + 9), (right - 1 - 9, right - 1 - 7));
+        assert_eq!((lh, rh), ((138, 140), (145, 147)));
+        assert!(lh.1 < 144 && rh.0 >= 144, "hands on the ledge side of the edge in both directions");
+        assert!((144 - lh.0) - (rh.1 - 143) <= 2, "within 2 px of mirror symmetric");
+    }
+
+    #[test]
+    fn sword_drawn_on_pickup_frames_and_when_drawn() {
+        let k = |frame, sword, charid, alive| { let mut k = Kid::default(); (k.frame, k.sword, k.charid, k.alive) = (frame, sword, charid, alive); k };
+        assert!(sword_shown(&k(230, 0, 0, true)) && sword_shown(&k(237, 0, 0, true)), "pickup frames, sword still 0");
+        assert!(!sword_shown(&k(238, 0, 0, true)) && !sword_shown(&k(15, 0, 0, true)), "sheathed frames");
+        assert!(sword_shown(&k(158, 2, 0, true)));
+        assert!(sword_shown(&k(166, 0, 2, true)) && !sword_shown(&k(166, 0, 2, false)), "living guard (charid 2)");
+    }
+
+    #[test]
+    fn keypad_matches_the_original_scancodes() {
+        let dirs = |c| { let k = keypad(c); (k.left, k.right, k.up, k.down, k.shift) };
+        assert_eq!(dirs(KeyCode::Numpad7), (true, false, true, false, false));
+        assert_eq!(dirs(KeyCode::Home), dirs(KeyCode::Numpad7));
+        assert_eq!(dirs(KeyCode::Numpad8), (false, false, true, false, false));
+        assert_eq!(dirs(KeyCode::Numpad9), (false, true, true, false, false));
+        assert_eq!(dirs(KeyCode::PageUp), dirs(KeyCode::Numpad9));
+        assert_eq!(dirs(KeyCode::Numpad4), (true, false, false, false, false));
+        assert_eq!(dirs(KeyCode::Numpad6), (false, true, false, false, false));
+        assert_eq!(dirs(KeyCode::Numpad5), (false, false, false, true, false));
+        assert_eq!(dirs(KeyCode::Numpad2), (false, false, false, true, false));
+        for c in [KeyCode::Numpad1, KeyCode::Numpad3, KeyCode::Numpad0, KeyCode::End, KeyCode::PageDown, KeyCode::Insert, KeyCode::KeyA] {
+            assert_eq!(dirs(c), (false, false, false, false, false), "{c:?}");
+        }
+    }
 }

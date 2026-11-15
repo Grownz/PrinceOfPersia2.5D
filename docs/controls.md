@@ -5,6 +5,8 @@
 | Key | Action |
 |---|---|
 | Arrow keys | Move the kid (left / right / up = jump, climb / down = crouch, step down) |
+| Numeric keypad | 8 up, 4 left, 6 right, 2 and 5 down, **7 up+left, 9 up+right** (running jump, strike); NumLock does not matter |
+| Home / PageUp | Same as keypad 7 / 9 (same scancode in the original) |
 | Shift | Action: grab a ledge, careful step, drink, strike with the sword; after death, hold to restart |
 | Enter | After death: restart the level |
 | Esc / P | Pause / resume |
@@ -17,7 +19,10 @@
 | F11 | Windowed / borderless fullscreen |
 | F3 | Debug text and debug keys |
 
-With the debug text on (F3): Ctrl+arrows = neighbouring room, PageUp / PageDown = previous / next level,
+The keypad is fixed like the original (its key handler `0000:1533` reads scancodes 0x47..0x50): keypad 1, 3 and 0 (End, PgDn, Ins)
+do nothing. It works alongside the rebindable keys below.
+
+With the debug text on (F3): Ctrl+arrows = neighbouring room, Ctrl+PageUp / Ctrl+PageDown = previous / next level (plain PageUp is up+right),
 `,` / `.` = previous / next animation sequence (sequence viewer), Space = restart the sequence, F = flip, C = back to the
 controlled kid at the level start.
 

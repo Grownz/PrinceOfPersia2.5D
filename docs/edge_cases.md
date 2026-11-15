@@ -400,7 +400,7 @@ Other graphics modes use other routines (`95BE`, `95F3`, `03FF`); not needed.
 - New `World` state: `rem_min`, `rem_tick` (combat.md 8), `hitp_beg_lev`, `checkpoint`, `text_timer` + kind, `flash: (colour, time)`,
   `restart_requested`, `next_level`. Put the cross-level part (`rem_min`, `rem_tick`, `hitp_beg_lev`, `checkpoint`, level number)
   in a small `Progress` struct; restart = rebuild `World` for the same level from `Progress` (the original reloads the level fully).
-- `pop-core` exposes `flash` as data (colour index + remaining frames); `pop-app` maps it to a background tint for that many frames.
+- `pop-core` exposes `flash` as data (colour index + remaining frames); `pop-app` maps it to a background tint plus a translucent full-window overlay of the same EGA colour (alpha 0.4) for that many frames: the opaque 3D room hides most of the background, so palette entry 0 alone would not be seen.
 - `have_sword` (kid.rs:156, sim.rs:98 sets it for level >= 2): the original rule is `level != 1` (level 0, the demo, has the sword).
 - Restart input: Shift or Enter only when `alive > 6` (and rem_min != 0); Ctrl+A any time except level 15.
 

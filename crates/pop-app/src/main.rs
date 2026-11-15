@@ -3,7 +3,7 @@
 //! Prince of Persia remake: title -> game (procedural 3D rooms, original sprites) -> title.
 //! Keys: arrows + Shift = kid, Esc/P = pause, Ctrl+A = restart, Ctrl+G = save, Ctrl+L = load (title/demo), M = mute,
 //! - / = = volume, F11 = borderless fullscreen, F3 = debug text, controller supported (docs/controls.md)
-//! (with it on: Ctrl+arrows = neighbouring room, PageUp/PageDown = level, sequence viewer keys).
+//! (with it on: Ctrl+arrows = neighbouring room, Ctrl+PageUp/PageDown = level, sequence viewer keys).
 //! POP_LEVEL / POP_ROOM skip the title; POP_SOUND=original uses the game's own sounds; POP_DATA = game data folder;
 //! POP_PERF=1 logs the average frame time (vsync off) and room rebuilds every 300 frames.
 mod audio;
@@ -235,7 +235,12 @@ fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<
         Visibility::Hidden,
         DebugText,
     ));
+    // full-window flash tint, below the HUD and texts
+    cmds.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(-1), BackgroundColor(Color::NONE), FlashOverlay));
 }
+
+#[derive(Component)]
+struct FlashOverlay;
 
 fn navigate(keys: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, mut text: Query<&mut Visibility, With<DebugText>>) {
     if keys.just_pressed(KeyCode::F3) {
@@ -256,7 +261,8 @@ fn navigate(keys: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, mut text: Quer
             }
         }
     }
-    let step = keys.just_pressed(KeyCode::PageUp) as i32 - keys.just_pressed(KeyCode::PageDown) as i32;
+    // Ctrl+PageUp/PageDown: plain PageUp is the kid's up+right (it shares keypad 9's scancode), Ctrl mutes the kid's keys
+    let step = ctrl as i32 * (keys.just_pressed(KeyCode::PageUp) as i32 - keys.just_pressed(KeyCode::PageDown) as i32);
     if step != 0 {
         g.level = (g.level as i32 + step).rem_euclid(g.levels.len() as i32) as usize;
         g.kid_respawn = true;
@@ -271,19 +277,28 @@ const EGA: [[u8; 3]; 16] = [
     [21, 21, 21], [21, 21, 63], [21, 63, 21], [21, 63, 63], [63, 21, 21], [63, 21, 63], [63, 63, 21], [63, 63, 63],
 ];
 
-/// Screen flash (flash_if_hurt / remove_flash_if_hurt): only the background changes colour, for `flash.1` logic frames.
-fn flash(g: Res<Game>, mut clear: ResMut<ClearColor>) {
+/// Screen flash (flash_if_hurt / remove_flash_if_hurt) for `flash.1` logic frames. The original recolours palette entry 0 (the
+/// black that shows through open areas); the opaque 3D room hides most of that, so the clear colour changes and a translucent
+/// overlay of the same colour (alpha FLASH_ALPHA) covers the whole view.
+fn flash(g: Res<Game>, mut clear: ResMut<ClearColor>, mut overlay: Query<&mut BackgroundColor, With<FlashOverlay>>) {
     let (c, frames) = g.world.flash;
-    let want = if frames > 0 {
+    let (want, tint) = if frames > 0 {
         let [r, gr, b] = EGA[c as usize & 15].map(|v| (v as u32 * 255 / 63) as u8);
-        Color::srgb_u8(r, gr, b)
+        (Color::srgb_u8(r, gr, b), Color::srgba_u8(r, gr, b, (FLASH_ALPHA * 255.0) as u8))
     } else {
-        BACKGROUND
+        (BACKGROUND, Color::NONE)
     };
     if clear.0 != want {
         clear.0 = want;
     }
+    for mut bg in &mut overlay {
+        if bg.0 != tint {
+            bg.0 = tint;
+        }
+    }
 }
+
+const FLASH_ALPHA: f32 = 0.4;
 
 fn debug_text(g: Res<Game>, mut q: Query<&mut Text, With<DebugText>>) {
     if !g.debug {
@@ -293,7 +308,7 @@ fn debug_text(g: Res<Game>, mut q: Query<&mut Text, With<DebugText>>) {
     let [left, right, up, down] = l.links[g.room - 1];
     for mut t in &mut q {
         t.0 = format!(
-            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}  kid: seq {} frame {} action {} x {} y {} room {} row {} fall {} hp {}/{} sword {}{}\narrows+Shift kid  Ctrl+arrows room  PgUp/PgDn level  , . sequence viewer  Space restart  F flip  C control  F3 text",
+            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}  kid: seq {} frame {} action {} x {} y {} room {} row {} fall {} hp {}/{} sword {}{}\narrows+Shift kid  Ctrl+arrows room  Ctrl+PgUp/PgDn level  , . sequence viewer  Space restart  F flip  C control  F3 text",
             g.level, g.room, left, right, up, down, l.start_room, l.start_tile, g.world.tick, g.world.kid.seq, g.world.kid.frame, g.world.kid.action, g.world.kid.x, g.world.kid.y, g.world.kid.room, g.world.kid.row, g.world.kid.fall_y, g.world.kid.hp, g.world.kid.hp_max, g.world.kid.sword,
             g.world.guard.as_ref().map_or(String::new(), |gd| format!("   guard: seq {} frame {} x {} hp {}/{} sword {} skill {} see {}", gd.seq, gd.frame, gd.x, gd.hp, gd.hp_max, gd.sword, gd.skill, g.world.shared.can_see))
         );
