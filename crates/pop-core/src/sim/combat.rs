@@ -161,6 +161,7 @@ impl World {
             g.alive = false;
             g.hp = 0;
         }
+        g.colour = slot.colour;
         self.shared.droppedout = false;
         self.guard = Some(g);
     }
@@ -174,7 +175,7 @@ impl World {
         }
         if (1..=24).contains(&g.room) {
             let dead = if g.alive { None } else { Some(match g.frame { 177 => 51, 178 => 54, _ => 71 }) };
-            let colour = self.slots[g.room as usize - 1].colour;
+            let colour = g.colour;
             self.slots[g.room as usize - 1] = GuardSlot { tile: 10 * g.row.clamp(0, 2) as u8, x: g.x, dir: if g.facing_left { 255 } else { 0 }, skill: g.skill, colour, dead };
         }
     }
@@ -526,7 +527,7 @@ mod tests {
         b[2119] = (10 + gcol) as u8; // guard tile in room 1
         b[2143] = 255; // facing left
         b[2215] = skill;
-        (b[2112], b[2113], b[2114]) = (1, 12, 255);
+        (b[2112], b[2113], b[2114]) = (1, 12, 0); // direction = NOT start_dir, and the opening turn flips it again: the kid ends facing start_dir ... for 0 that is right, toward the guard
         World::new(data(), Level::parse(&b).unwrap(), level_no)
     }
 

@@ -16,6 +16,7 @@ struct Game {
     room: usize,
     /// kid position (world units) and room at the start of the last logic tick, for interpolation
     kid_prev: (Vec2, u8),
+    guard_prev: (Vec2, u8),
     kid_respawn: bool,
 }
 
@@ -39,7 +40,7 @@ fn main() {
         }))
         .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
         .insert_resource(Time::<Fixed>::from_hz(sim::STEP_HZ))
-        .insert_resource(Game { world, levels, level, room, kid_prev: (Vec2::ZERO, 0), kid_respawn: false })
+        .insert_resource(Game { world, levels, level, room, kid_prev: (Vec2::ZERO, 0), guard_prev: (Vec2::ZERO, 0), kid_respawn: false })
         .insert_resource(kid::Latch::default())
         .insert_resource(assets)
         .add_systems(Startup, (setup, kid::setup)) // first room is built by room::rebuild_on_change
@@ -94,8 +95,9 @@ fn debug_text(g: Res<Game>, mut q: Query<&mut Text, With<DebugText>>) {
     let [left, right, up, down] = l.links[g.room - 1];
     for mut t in &mut q {
         t.0 = format!(
-            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}  kid: seq {} frame {} action {} x {} y {} room {} row {} fall {} hp {}\narrows+Shift kid  Ctrl+arrows room  PgUp/PgDn level  , . sequence viewer  Space restart  F flip  C control  Tab text",
-            g.level, g.room, left, right, up, down, l.start_room, l.start_tile, g.world.tick, g.world.kid.seq, g.world.kid.frame, g.world.kid.action, g.world.kid.x, g.world.kid.y, g.world.kid.room, g.world.kid.row, g.world.kid.fall_y, g.world.kid.hp
+            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}  kid: seq {} frame {} action {} x {} y {} room {} row {} fall {} hp {}/{} sword {}{}\narrows+Shift kid  Ctrl+arrows room  PgUp/PgDn level  , . sequence viewer  Space restart  F flip  C control  Tab text",
+            g.level, g.room, left, right, up, down, l.start_room, l.start_tile, g.world.tick, g.world.kid.seq, g.world.kid.frame, g.world.kid.action, g.world.kid.x, g.world.kid.y, g.world.kid.room, g.world.kid.row, g.world.kid.fall_y, g.world.kid.hp, g.world.kid.hp_max, g.world.kid.sword,
+            g.world.guard.as_ref().map_or(String::new(), |gd| format!("   guard: seq {} frame {} x {} hp {}/{} sword {} skill {} see {}", gd.seq, gd.frame, gd.x, gd.hp, gd.hp_max, gd.sword, gd.skill, g.world.shared.can_see))
         );
     }
 }

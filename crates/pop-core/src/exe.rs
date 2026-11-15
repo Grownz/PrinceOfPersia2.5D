@@ -89,6 +89,12 @@ impl Exe {
         self.frames(CUT_FRAMES_AT, CUT_FRAMES)
     }
 
+    /// Sword position table (ds:1726, 51 entries): (image in PRINCE.DAT resource 701 + i, dx, dy) in screen pixels;
+    /// a frame selects its entry with `sword & 0x3F` (entry 0 = no sword).
+    pub fn sword_table(&self) -> Vec<(u8, i8, i8)> {
+        self.0[DS_BASE + 0x1726..][..51 * 3].chunks(3).map(|b| (b[0], b[1] as i8, b[2] as i8)).collect()
+    }
+
     /// Data-segment offsets of sequences 1..=114.
     pub fn sequence_offsets(&self) -> Vec<u16> {
         self.0[SEQ_OFFSETS_AT..][..SEQUENCES * 2].chunks(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect()

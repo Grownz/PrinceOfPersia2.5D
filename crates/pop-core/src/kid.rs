@@ -146,6 +146,8 @@ pub struct Kid {
     /// 2 = sword drawn
     pub sword: u8,
     pub skill: u8,
+    /// guard colour 0..7 (palette slice of PRINCE.DAT resource 10; 0 = the file's own palette)
+    pub colour: u8,
     pub hp_max: i32,
     /// set by take_hp, applied once per tick by the world (do_delta_hp)
     pub hp_delta: i32,
