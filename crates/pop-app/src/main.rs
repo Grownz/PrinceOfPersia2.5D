@@ -1,16 +1,23 @@
+// release builds have no console window; errors go to pop.log next to the exe
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! Prince of Persia remake: title -> game (procedural 3D rooms, original sprites) -> title.
 //! Keys: arrows + Shift = kid, Esc/P = pause, Ctrl+A = restart, Ctrl+G = save, Ctrl+L = load (title/demo), M = mute,
-//! - / = = volume, F3 = debug text
+//! - / = = volume, F11 = borderless fullscreen, F3 = debug text, controller supported (docs/controls.md)
 //! (with it on: Ctrl+arrows = neighbouring room, PageUp/PageDown = level, sequence viewer keys).
-//! POP_LEVEL / POP_ROOM skip the title; POP_SOUND=original uses the game's own sounds.
+//! POP_LEVEL / POP_ROOM skip the title; POP_SOUND=original uses the game's own sounds; POP_DATA = game data folder;
+//! POP_PERF=1 logs the average frame time (vsync off) and room rebuilds every 300 frames.
 mod audio;
 mod flow;
 mod kid;
 mod room;
+mod settings;
 mod synth;
 
 use bevy::prelude::*;
+use bevy::window::{MonitorSelection, PresentMode, PrimaryWindow, WindowMode};
 use pop_core::{dat::Dat, level::*, sim};
+use settings::Settings;
+use std::path::PathBuf;
 
 #[derive(Resource)]
 struct Game {
@@ -32,15 +39,70 @@ struct Game {
     gen: u32,
 }
 
+static DATA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The game data folder found at startup (`find_data`).
 pub fn data_dir() -> String {
-    std::env::var("POP_DATA").unwrap_or_else(|_| "Original_data".into())
+    DATA.get().cloned().unwrap_or_else(|| "Original_data".into())
+}
+
+/// Files that must be present for a folder to count as the game data.
+const REQUIRED: [&str; 3] = ["LEVELS.DAT", "PRINCE.EXE", "KID.DAT"];
+
+/// Where to look for the user's own game files, in order: POP_DATA, Original_data next to the exe, Original_data in the
+/// current folder, settings.json "data_path".
+fn data_candidates(set: &Settings) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = std::env::var("POP_DATA").ok().map(PathBuf::from).into_iter().collect();
+    v.push(flow::exe_dir().join("Original_data"));
+    v.push("Original_data".into());
+    v.extend(set.data_path.as_ref().map(PathBuf::from));
+    v
+}
+
+fn find_data(candidates: &[PathBuf]) -> Option<&PathBuf> {
+    candidates.iter().find(|d| REQUIRED.iter().all(|f| d.join(f).is_file()))
+}
+
+/// stderr plus, in release builds (no console), pop.log next to the exe.
+fn report(msg: &str) {
+    eprintln!("{msg}");
+    if !cfg!(debug_assertions) {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(flow::exe_dir().join("pop.log")) {
+            let _ = writeln!(f, "{msg}");
+        }
+    }
+}
+
+/// Release builds: Bevy's log (warnings, errors, info) also goes to pop.log, truncated at each start.
+fn log_file_layer(_: &mut App) -> Option<bevy::log::BoxedLayer> {
+    if cfg!(debug_assertions) {
+        return None;
+    }
+    let file = std::fs::OpenOptions::new().create(true).append(true).open(flow::exe_dir().join("pop.log")).ok()?;
+    Some(Box::new(bevy::log::tracing_subscriber::fmt::layer().with_writer(std::sync::Mutex::new(file)).with_ansi(false)))
 }
 
 #[derive(Component)]
 struct DebugText;
 
 fn main() {
-    let dir = data_dir();
+    if !cfg!(debug_assertions) {
+        let _ = std::fs::write(flow::exe_dir().join("pop.log"), "");
+        std::panic::set_hook(Box::new(|info| report(&format!("panic: {info}"))));
+    }
+    let set = Settings::load();
+    let candidates = data_candidates(&set);
+    let Some(dir) = find_data(&candidates) else {
+        let tried: Vec<String> = candidates.iter().map(|p| format!("  {}", p.display())).collect();
+        let msg = format!(
+            "Game data not found. This remake needs your own copy of Prince of Persia (DOS): a folder with {}.\nPut it in a folder named Original_data next to the exe, set POP_DATA, or set \"data_path\" in {}.\nSearched:\n{}",
+            REQUIRED.join(", "), Settings::path().display(), tried.join("\n")
+        );
+        report(&msg);
+        return missing_data(msg);
+    };
+    let dir = DATA.get_or_init(|| dir.to_string_lossy().into_owned()).clone();
     let dat = Dat::open(format!("{dir}/LEVELS.DAT")).expect("cannot open LEVELS.DAT (set POP_DATA)");
     let levels: Vec<Level> = (2000..=2014).map(|id| Level::parse(dat.get(id).expect("level")).expect("bad level")).collect();
     let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<usize>().ok());
@@ -51,11 +113,21 @@ fn main() {
     let skip_title = env("POP_LEVEL").is_some() || env("POP_ROOM").is_some();
     let playing = || in_state(flow::Screen::Playing);
 
+    let perf = std::env::var("POP_PERF").is_ok();
+    let window = Window {
+        title: "Prince of Persia x64".into(),
+        resolution: (set.width.max(320), set.height.max(200)).into(),
+        mode: if set.borderless() { WindowMode::BorderlessFullscreen(MonitorSelection::Current) } else { WindowMode::Windowed },
+        // POP_PERF measures the real frame cost, so it turns vsync off
+        present_mode: if perf { PresentMode::AutoNoVsync } else { PresentMode::AutoVsync },
+        resizable: true,
+        ..default()
+    };
+
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window { title: "Prince of Persia x64".into(), ..default() }),
-            ..default()
-        }))
+        .add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }).set(bevy::log::LogPlugin { custom_layer: log_file_layer, ..default() }))
+        .insert_resource(set.key_map())
+        .insert_resource(set)
         .add_plugins(audio::plugin)
         .insert_resource(ClearColor(BACKGROUND))
         .insert_resource(Time::<Fixed>::from_hz(sim::STEP_HZ))
@@ -71,8 +143,8 @@ fn main() {
         .add_systems(OnExit(flow::Screen::Paused), audio::resume)
         .add_systems(
             FixedUpdate,
-            (audio::before_step, |mut g: ResMut<Game>, a: Res<kid::KidAssets>, mut latch: ResMut<kid::Latch>, keys: Res<ButtonInput<KeyCode>>| {
-                kid::fixed_step(&mut g, &a, &mut latch, &keys);
+            (audio::before_step, |mut g: ResMut<Game>, a: Res<kid::KidAssets>, mut latch: ResMut<kid::Latch>, keys: Res<ButtonInput<KeyCode>>, map: Res<settings::KeyMap>, pads: Query<&Gamepad>| {
+                kid::fixed_step(&mut g, &a, &mut latch, kid::pressed(&keys, &map, &pads));
             }, audio::fixed)
                 .chain()
                 .run_if(playing()),
@@ -91,11 +163,47 @@ fn main() {
                 flash,
                 flow::overlay,
                 debug_text,
+                fullscreen,
+                perf_log.run_if(move || perf),
                 screenshot_and_quit,
             )
                 .chain(),
         )
         .run();
+}
+
+/// No game data: a window with the instructions instead of a panic.
+fn missing_data(msg: String) {
+    App::new()
+        .add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: "Prince of Persia x64 - game data missing".into(), ..default() }), ..default() }).set(bevy::log::LogPlugin { custom_layer: log_file_layer, ..default() }))
+        .add_systems(Startup, move |mut cmds: Commands| {
+            cmds.spawn(Camera2d);
+            cmds.spawn((Text::new(msg.clone()), TextFont::from_font_size(18.0), Node { margin: UiRect::all(Val::Px(24.0)), ..default() }));
+        })
+        .add_systems(Update, screenshot_and_quit)
+        .run();
+}
+
+/// F11: windowed <-> borderless fullscreen, remembered in settings.json.
+fn fullscreen(k: Res<ButtonInput<KeyCode>>, mut win: Single<&mut Window, With<PrimaryWindow>>, mut set: ResMut<Settings>) {
+    if !k.just_pressed(KeyCode::F11) {
+        return;
+    }
+    let to_full = !matches!(win.mode, WindowMode::BorderlessFullscreen(_));
+    win.mode = if to_full { WindowMode::BorderlessFullscreen(MonitorSelection::Current) } else { WindowMode::Windowed };
+    set.window = if to_full { "borderless" } else { "windowed" }.into();
+    set.save();
+}
+
+/// POP_PERF=1: average frame time and room rebuilds per 300 frames.
+fn perf_log(time: Res<Time<Real>>, mut acc: Local<(u32, f32, u32)>) {
+    acc.0 += 1;
+    acc.1 += time.delta_secs();
+    if acc.0 == 300 {
+        let rebuilds = room::REBUILDS.load(std::sync::atomic::Ordering::Relaxed);
+        info!("perf: {:.3} ms/frame avg over 300 frames, {} room rebuilds", acc.1 / 300.0 * 1000.0, rebuilds - acc.2);
+        *acc = (0, 0.0, rebuilds);
+    }
 }
 
 fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>) {
@@ -198,6 +306,23 @@ fn screenshot_and_quit(mut cmds: Commands, mut frame: Local<u32>, mut exit: Mess
 
 #[cfg(test)]
 mod tests {
+    /// The first candidate holding the required files wins; incomplete folders are skipped.
+    #[test]
+    fn find_data_picks_first_complete_folder() {
+        let base = std::env::temp_dir().join(format!("pop_find_data_{}", std::process::id()));
+        let (a, b) = (base.join("a"), base.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("LEVELS.DAT"), "").unwrap(); // incomplete
+        for f in super::REQUIRED {
+            std::fs::write(b.join(f), "").unwrap();
+        }
+        let c = [base.join("missing"), a.clone(), b.clone()];
+        assert_eq!(super::find_data(&c), Some(&b));
+        assert_eq!(super::find_data(&c[..2]), None);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// ds:2BBA = file offset 0x1E47A (ds + 112832): 16 RGB triples, equal to the table above.
     #[test]
     fn ega_table_matches_ds_2bba() {

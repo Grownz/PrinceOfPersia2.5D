@@ -1,6 +1,7 @@
 //! Audio (M7): plays the simulation's sound log (`World::sounds`) once per fixed step, so sounds follow the logic ticks
-//! (including the 5/6-unit frame length). Default: the procedural set of `synth`; `POP_SOUND=original` uses the game's own
+//! (including the 5/6-unit frame length). Default: the procedural set of `synth`; `POP_SOUND=original` (or "sound": "original" in settings.json) uses the game's own
 //! digitized effects (DIGISND*.DAT) and PC-speaker tunes (IBM_SND*.DAT) instead. M = mute, - / = volume. docs/audio.md.
+use crate::settings::Settings;
 use crate::Game;
 use bevy::audio::{AddAudioSource, ChannelCount, Decodable, Sample, SampleRate, Source, Volume};
 use bevy::prelude::*;
@@ -107,8 +108,9 @@ fn decode(r: &[u8]) -> Option<Pcm> {
     }
 }
 
-fn setup(mut cmds: Commands, mut pcms: ResMut<Assets<Pcm>>) {
-    let orig = std::env::var("POP_SOUND").is_ok_and(|v| v == "original");
+fn setup(mut cmds: Commands, mut pcms: ResMut<Assets<Pcm>>, mut a: ResMut<AudioState>, set: Res<Settings>) {
+    (a.volume, a.muted) = (set.volume.clamp(0.0, 1.0), set.muted);
+    let orig = std::env::var("POP_SOUND").map_or(set.sound == "original", |v| v == "original");
     let dir = crate::data_dir();
     let dats: Vec<Dat> = if orig { ["DIGISND1", "DIGISND2", "DIGISND3", "IBM_SND1", "IBM_SND2"].iter().filter_map(|f| Dat::open(format!("{dir}/{f}.DAT")).ok()).collect() } else { vec![] };
     let clips = (0..IDS)
@@ -208,6 +210,7 @@ pub fn keys(
     k: Res<ButtonInput<KeyCode>>,
     mut a: ResMut<AudioState>,
     mut g: ResMut<Game>,
+    mut set: ResMut<Settings>,
     mut sinks: Query<&mut AudioSink, With<Sfx>>,
     mut pending: Query<&mut PlaybackSettings, (With<Sfx>, Without<AudioSink>)>,
 ) {
@@ -224,6 +227,8 @@ pub fn keys(
     let v = a.gain();
     sinks.iter_mut().for_each(|mut s| s.set_volume(v));
     pending.iter_mut().for_each(|mut p| p.volume = v);
+    (set.volume, set.muted) = (a.volume, a.muted);
+    set.save();
     g.banner = (24, if a.muted { "SOUND OFF".into() } else { format!("VOLUME {}%", (a.volume * 100.0).round()) });
 }
 

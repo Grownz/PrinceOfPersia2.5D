@@ -77,6 +77,7 @@ fn at(t: &Trace, i: usize) -> (u8, u8, u8, usize) {
 
 #[test]
 fn vector_a_run_right_into_wall() {
+    if crate::no_game_data() { return; }
     let r = rig(1, &[(1, 6, 1, 20)], &[], &[]);
     let t = run(&r, stand(&r, 86, false), 28, |_| R);
     assert_eq!(at(&t, 0).3, 1, "t0 starts the run");
@@ -89,6 +90,7 @@ fn vector_a_run_right_into_wall() {
 
 #[test]
 fn vector_b_run_left_into_wall() {
+    if crate::no_game_data() { return; }
     let r = rig(1, &[(1, 1, 1, 20)], &[], &[]);
     let t = run(&r, stand(&r, 184, true), 36, |_| L);
     assert_eq!((t[30].0, t[30].2), (92, 7), "{:?}", t[30]);
@@ -97,6 +99,7 @@ fn vector_b_run_left_into_wall() {
 
 #[test]
 fn vector_c_other_phase() {
+    if crate::no_game_data() { return; }
     let r = rig(1, &[(1, 6, 1, 20)], &[], &[]);
     let t = run(&r, stand(&r, 90, false), 25, |_| R);
     assert_eq!((t[20].0, t[20].2), (149, 13), "{:?}", t[20]);
@@ -105,6 +108,7 @@ fn vector_c_other_phase() {
 
 #[test]
 fn vector_d_start_next_to_wall() {
+    if crate::no_game_data() { return; }
     let r = rig(1, &[(1, 6, 1, 20)], &[], &[]);
     let t = run(&r, stand(&r, 139, false), 10, |_| R);
     assert_eq!(t[0].3, 1);
@@ -114,6 +118,7 @@ fn vector_d_start_next_to_wall() {
 
 #[test]
 fn vector_e_safe_step_does_not_bump() {
+    if crate::no_game_data() { return; }
     let r = rig(1, &[(1, 6, 1, 20)], &[], &[]);
     let t = run(&r, stand(&r, 143, false), 30, |i| if i < 12 { R } else { NONE });
     assert_eq!(t[0].3, 34, "safe step 28 + 6: {:?}", t[0]);
@@ -124,6 +129,7 @@ fn vector_e_safe_step_does_not_bump() {
 
 #[test]
 fn vector_f_standing_jump_into_wall() {
+    if crate::no_game_data() { return; }
     let r = rig(1, &[(1, 6, 1, 20)], &[], &[]);
     // (a) far enough: no bump
     let t = run(&r, stand(&r, 110, false), 30, |i| if i == 0 { RU } else { NONE });
@@ -139,6 +145,7 @@ fn vector_f_standing_jump_into_wall() {
 
 #[test]
 fn vector_g_running_jump_into_wall_over_floor() {
+    if crate::no_game_data() { return; }
     let r = rig(1, &[(1, 7, 1, 20)], &[], &[]);
     let t = run(&r, stand(&r, 86, false), 22, |i| if i == 8 { RU } else { R });
     assert_eq!((t[8].0, t[8].2, t[8].3), (105, 34, 4), "{:?}", t[8]);
@@ -147,6 +154,7 @@ fn vector_g_running_jump_into_wall_over_floor() {
 
 #[test]
 fn vector_h_running_jump_into_wall_over_pit() {
+    if crate::no_game_data() { return; }
     let r = rig(1, &[(1, 7, 1, 20), (1, 6, 1, 0)], &[], &[]);
     let t = run(&r, stand(&r, 86, false), 22, |i| if i == 8 { RU } else { R });
     assert_eq!((t[18].0, t[18].1, t[18].2, t[18].3), (160, 121, 102, 45), "{:?}", t[18]);
@@ -154,6 +162,7 @@ fn vector_h_running_jump_into_wall_over_pit() {
 
 #[test]
 fn vector_i_falling_past_a_wall() {
+    if crate::no_game_data() { return; }
     let r = rig(1, &[(1, 6, 1, 20)], &[], &[]);
     let env = r.env();
     let mut k = Kid::spawn_standing(&env);
@@ -165,6 +174,7 @@ fn vector_i_falling_past_a_wall() {
 
 #[test]
 fn vector_j_wall_in_right_neighbour_room() {
+    if crate::no_game_data() { return; }
     let r = rig(2, &[(2, 0, 1, 20)], &[(1, 1, 2), (2, 0, 1)], &[]);
     let t = run(&r, stand(&r, 150, false), 22, |_| R);
     assert_eq!((t[18].0, t[18].4), (62, 2), "room change at t18: {:?}", t[18]);
@@ -173,6 +183,7 @@ fn vector_j_wall_in_right_neighbour_room() {
 
 #[test]
 fn vector_k_wall_in_left_neighbour_room() {
+    if crate::no_game_data() { return; }
     let r = rig(2, &[(1, 9, 1, 20)], &[(1, 1, 2), (2, 0, 1)], &[]);
     let env = r.env();
     let mut k = Kid::spawn_standing(&env);
@@ -184,6 +195,7 @@ fn vector_k_wall_in_left_neighbour_room() {
 
 #[test]
 fn vector_l_closed_gate_bumps_open_gate_does_not() {
+    if crate::no_game_data() { return; }
     let r = rig(1, &[(1, 6, 1, 4)], &[], &[(1, 6, 1, 0)]);
     let t = run(&r, stand(&r, 86, false), 30, |_| R);
     assert_eq!((t[25].0, t[25].2, t[25].3), (155, 50, 47), "{:?}", t[25]);
@@ -195,6 +207,7 @@ fn vector_l_closed_gate_bumps_open_gate_does_not() {
 
 #[test]
 fn vector_m_closing_gate_pushes_the_standing_kid() {
+    if crate::no_game_data() { return; }
     let r = rig(1, &[(1, 5, 1, 4)], &[], &[(1, 5, 1, 100)]);
     let t = run(&r, stand(&r, 146, false), 4, |_| NONE);
     assert_eq!(t[0].0, 146, "no push on the first tick (previous flags unknown)");

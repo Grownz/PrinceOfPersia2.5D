@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --workspace
+      # The game data is copyrighted and never in the repo: tests that need it print "skipping" and pass.
+      - name: Test
+        run: cargo test --workspace
+      - name: Clippy (non-blocking)
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets

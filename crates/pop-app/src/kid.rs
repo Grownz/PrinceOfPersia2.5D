@@ -1,6 +1,7 @@
 //! The kid in the app: input latching, per-tick control (pop-core), and drawing with the original sprites (KID.DAT).
 //! Sequence viewer: `,` / `.` = previous/next sequence (kid no longer controlled), Space = restart it, F = flip,
 //! C = back to the controlled kid at the level start.
+use crate::settings::KeyMap;
 use crate::Game;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
@@ -82,22 +83,24 @@ fn ctrl_held(k: &ButtonInput<KeyCode>) -> bool {
     k.pressed(KeyCode::ControlLeft) || k.pressed(KeyCode::ControlRight) // Ctrl+arrows navigate rooms instead
 }
 
-fn pressed(k: &ButtonInput<KeyCode>) -> Keys {
-    if ctrl_held(k) {
-        return Keys::default();
+/// The kid's keys held now: the bound keyboard keys (settings.json) or any controller (d-pad / left stick, A = Shift).
+pub fn pressed(k: &ButtonInput<KeyCode>, m: &KeyMap, pads: &Query<&Gamepad>) -> Keys {
+    use GamepadButton::*;
+    let mut keys = if ctrl_held(k) { Keys::default() } else { Keys { left: k.any_pressed(m.left.iter().copied()), right: k.any_pressed(m.right.iter().copied()), up: k.any_pressed(m.up.iter().copied()), down: k.any_pressed(m.down.iter().copied()), shift: k.any_pressed(m.shift.iter().copied()) } };
+    for p in pads {
+        let s = p.left_stick();
+        keys.left |= p.pressed(DPadLeft) || s.x < -0.5;
+        keys.right |= p.pressed(DPadRight) || s.x > 0.5;
+        keys.up |= p.pressed(DPadUp) || s.y > 0.5;
+        keys.down |= p.pressed(DPadDown) || s.y < -0.5;
+        keys.shift |= p.pressed(South) || p.pressed(West);
     }
-    Keys {
-        left: k.pressed(KeyCode::ArrowLeft),
-        right: k.pressed(KeyCode::ArrowRight),
-        up: k.pressed(KeyCode::ArrowUp),
-        down: k.pressed(KeyCode::ArrowDown),
-        shift: k.pressed(KeyCode::ShiftLeft) || k.pressed(KeyCode::ShiftRight),
-    }
+    keys
 }
 
 /// Runs every frame: remember keys that were down at any point since the last logic tick.
-pub fn latch_keys(k: Res<ButtonInput<KeyCode>>, mut l: ResMut<Latch>) {
-    let p = pressed(&k);
+pub fn latch_keys(k: Res<ButtonInput<KeyCode>>, m: Res<KeyMap>, pads: Query<&Gamepad>, mut l: ResMut<Latch>) {
+    let p = pressed(&k, &m, &pads);
     l.0 = Keys { left: l.0.left | p.left, right: l.0.right | p.right, up: l.0.up | p.up, down: l.0.down | p.down, shift: l.0.shift | p.shift };
 }
 
@@ -169,11 +172,12 @@ pub fn start(g: &mut Game, a: &KidAssets, p: Progress) {
 }
 
 /// Restart keys; with the debug text on (F3) also the sequence viewer and respawn keys. Exits are handled in `flow::playing`.
-pub fn keys(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAssets>) {
-    // restart keys (0000:054D): Shift held or Enter after death, Ctrl+A any time
+pub fn keys(k: Res<ButtonInput<KeyCode>>, m: Res<KeyMap>, pads: Query<&Gamepad>, mut g: ResMut<Game>, a: Res<KidAssets>) {
+    // restart keys (0000:054D): Shift held or Enter after death, Ctrl+A (controller: Back/Select) any time
     let enter = k.just_pressed(KeyCode::Enter) || k.just_pressed(KeyCode::NumpadEnter);
-    let shift = k.pressed(KeyCode::ShiftLeft) || k.pressed(KeyCode::ShiftRight);
-    g.world.restart_input(shift || enter, ctrl_held(&k) && k.just_pressed(KeyCode::KeyA));
+    let shift = pressed(&k, &m, &pads).shift;
+    let back = pads.iter().any(|p| p.just_pressed(GamepadButton::Select));
+    g.world.restart_input(shift || enter, (ctrl_held(&k) && k.just_pressed(KeyCode::KeyA)) || back);
     if !g.debug || g.world.exit.is_some() {
         return;
     }
@@ -197,14 +201,14 @@ pub fn keys(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAssets>
 }
 
 /// 60 Hz step of the world; on logic ticks the latched keys are consumed (or the test script is played).
-pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: &ButtonInput<KeyCode>) {
+pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: Keys) {
     if g.world.exit.is_some() {
         return; // an exit is pending: Update consumes it before any further tick mutates the carried state
     }
     if latch.1 != g.gen {
         // a new world: taps latched before it (the key that skipped a card, started the game or ended the demo) must not reach
         // its first tick; keys still held count
-        (latch.0, latch.1) = (pressed(held), g.gen);
+        (latch.0, latch.1) = (held, g.gen);
     }
     if g.world.next_is_tick() {
         let env = mk_env(&a.data, &g.world.level, g.world.guard_type);
@@ -216,7 +220,7 @@ pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: &ButtonI
         keys = sc.get(g.world.tick as usize).copied().unwrap_or_default();
     }
     if g.world.step(keys) {
-        latch.0 = pressed(held);
+        latch.0 = held;
         g.banner.0 = g.banner.0.saturating_sub(1);
         if g.world.kid.controlled {
             if (1..=pop_core::level::ROOMS as u8).contains(&g.world.kid.room) {

@@ -189,12 +189,16 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef) {
     }
 }
 
+/// Room rebuilds so far (POP_PERF).
+pub static REBUILDS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 /// Despawn and rebuild whenever level or room changed.
 pub fn rebuild_on_change(mut cmds: Commands, g: Res<Game>, old: Query<Entity, With<RoomEntity>>, p: Res<Palette>, mut last: Local<(usize, usize, u32)>) {
     if *last == (g.level, g.room, g.world.version) {
         return;
     }
     *last = (g.level, g.room, g.world.version);
+    REBUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     for e in &old {
         cmds.entity(e).despawn();
     }

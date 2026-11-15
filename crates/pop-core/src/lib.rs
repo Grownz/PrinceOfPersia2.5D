@@ -11,6 +11,16 @@ mod world_tests;
 #[cfg(test)]
 mod coll_tests;
 
+/// Tests that need the user's own game files (never in the repo, e.g. on CI) return early when they are absent.
+#[cfg(test)]
+pub(crate) fn no_game_data() -> bool {
+    let missing = !std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Original_data/PRINCE.EXE")).is_file();
+    if missing {
+        eprintln!("skipping: Original_data not found (game data tests need your own copy)");
+    }
+    missing
+}
+
 #[cfg(test)]
 mod tests {
     use super::{dat::Dat, level::*};
@@ -23,6 +33,7 @@ mod tests {
 
     #[test]
     fn level1_basics() {
+        if crate::no_game_data() { return; }
         let (_, l) = levels().remove(1);
         assert_eq!(l.links[0], [5, 0, 0, 2]);
         assert_eq!((l.start_room, l.start_tile, l.start_dir), (1, 0, 255));
@@ -31,6 +42,7 @@ mod tests {
 
     #[test]
     fn every_button_targets_a_gate_or_exit() {
+        if crate::no_game_data() { return; }
         let mut n = 0;
         for (id, l) in levels() {
             for room in 1..=ROOMS {
@@ -51,6 +63,7 @@ mod tests {
 
     #[test]
     fn room_links_valid() {
+        if crate::no_game_data() { return; }
         // resource 2015 deviates (links padded with 255); it is not a regular level.
         for (_, l) in levels().into_iter().take(15) {
             assert!(l.links.iter().flatten().all(|&r| r as usize <= ROOMS));
@@ -59,6 +72,7 @@ mod tests {
 
     #[test]
     fn all_images_decode() {
+        if crate::no_game_data() { return; }
         let mut n = 0;
         for e in std::fs::read_dir(DIR).unwrap().map(|e| e.unwrap().path()) {
             let name = e.file_name().unwrap().to_string_lossy().to_uppercase();
@@ -83,6 +97,7 @@ mod tests {
 
     #[test]
     fn exe_tables() {
+        if crate::no_game_data() { return; }
         use super::exe::*;
         let e = Exe::open(format!("{DIR}PRINCE.EXE")).unwrap();
         let f = e.kid_frames();
@@ -157,6 +172,7 @@ mod tests {
 
     #[test]
     fn kid_stands_idle() {
+        if crate::no_game_data() { return; }
         let r = Rig::new(["", "##########", "##########"], (3, 1));
         let env = r.env();
         let mut k = Kid::spawn_standing(&env);
@@ -171,6 +187,7 @@ mod tests {
 
     #[test]
     fn kid_runs_and_stops() {
+        if crate::no_game_data() { return; }
         let r = Rig::new(["", "##########", "##########"], (1, 1));
         let env = r.env();
         let mut k = Kid::spawn_standing(&env);
@@ -192,6 +209,7 @@ mod tests {
 
     #[test]
     fn kid_turns() {
+        if crate::no_game_data() { return; }
         let r = Rig::new(["", "##########", "##########"], (3, 1));
         let env = r.env();
         let mut k = Kid::spawn_standing(&env);
@@ -207,6 +225,7 @@ mod tests {
 
     #[test]
     fn standing_jump_travels_39_units() {
+        if crate::no_game_data() { return; }
         let r = Rig::new(["", "##########", "##########"], (2, 1));
         let env = r.env();
         let mut k = Kid::spawn_standing(&env);
@@ -222,6 +241,7 @@ mod tests {
 
     #[test]
     fn kid_falls_off_ledge_and_lands() {
+        if crate::no_game_data() { return; }
         // row 1 floor only on columns 0..=4, row 2 floor everywhere below
         let r = Rig::new(["", "#####", "##########"], (3, 1));
         let env = r.env();
@@ -243,6 +263,7 @@ mod tests {
 
     #[test]
     fn kid_bumps_into_wall_and_does_not_pass() {
+        if crate::no_game_data() { return; }
         let mut b = test_bytes(["", "##########", "##########"], (2, 1));
         b[16] = 20; // wall at col 6, row 1
         let r = Rig::with_level(Level::parse(&b).unwrap());
@@ -260,6 +281,7 @@ mod tests {
 
     #[test]
     fn kid_runs_into_next_room() {
+        if crate::no_game_data() { return; }
         let mut b = test_bytes(["", "##########", "##########"], (6, 1));
         b[1952 + 1] = 2; // room 1: right neighbour = room 2
         for c in 0..10 {
@@ -278,6 +300,7 @@ mod tests {
 
     #[test]
     fn kid_jumps_up_grabs_ledge_and_climbs() {
+        if crate::no_game_data() { return; }
         let mut b = test_bytes(["", "##########", "##########"], (4, 1));
         for c in 5..10 {
             b[c] = 1; // ledge: row 0, columns 5..9
@@ -311,6 +334,7 @@ mod start_tests {
 
     #[test]
     fn level1_starts_with_a_fall() {
+        if crate::no_game_data() { return; }
         let d = "../../Original_data/";
         let exe = super::exe::Exe::open(format!("{d}PRINCE.EXE")).unwrap();
         let frames = exe.kid_frames();
