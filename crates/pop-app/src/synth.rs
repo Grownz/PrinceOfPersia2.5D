@@ -119,7 +119,7 @@ fn beats(notes: &[(i8, f32)], bpm: f32) -> f32 {
     notes.iter().map(|n| n.1).sum::<f32>() * 60.0 / bpm + 0.5
 }
 
-/// The synthesized clip for sound `id` (None for ids the game never plays here). Mono, `RATE` Hz, peak 0.8.
+/// The synthesized clip for sound `id` (None for ids the game never plays here). Mono, `RATE` Hz, peak 0.5 (headroom: two overlapping clips at the default volume stay below 1.0).
 pub fn sound(id: u8) -> Option<Vec<f32>> {
     use Wave::*;
     let jingle = |notes: &[(i8, f32)], bpm: f32, total: Option<f32>, root: i8| tune(notes, bpm, total.unwrap_or_else(|| beats(notes, bpm)), root);
@@ -187,7 +187,7 @@ pub fn sound(id: u8) -> Option<Vec<f32>> {
         49 => mix(&[(tone(0.15, 1800.0, 3000.0, Sine, 20.0), 0.5, 0.0), (noise(0.1, 7000.0, 7000.0, 40.0, 43), 0.4, 0.0)]), // spikes come out
         _ => return None,
     };
-    normalize(&mut v, 0.8);
+    normalize(&mut v, 0.5);
     // 5 ms fade-out against clicks
     let f = len(0.005).min(v.len());
     let k = v.len();
@@ -209,7 +209,7 @@ mod tests {
             let secs = v.len() as f32 / RATE as f32;
             assert!((0.03..=19.0).contains(&secs), "{id}: {secs} s");
             let peak = v.iter().fold(0.0f32, |m, x| m.max(x.abs()));
-            assert!(peak > 0.5 && peak <= 0.8 + 1e-6, "{id}: peak {peak}");
+            assert!(peak > 0.45 && peak <= 0.5 + 1e-6, "{id}: peak {peak}");
             assert!(v.iter().all(|x| x.is_finite()));
             let rms = (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt();
             assert!(rms > 0.01, "{id}: rms {rms}");
@@ -219,5 +219,7 @@ mod tests {
             assert_eq!(sound(id).unwrap().len(), len(secs));
         }
         assert!(sound(31).is_none());
+        // overlapping clips at the default volume (0.7) must not clip
+        assert!(2.0 * 0.5 * 0.7 < 1.0);
     }
 }
