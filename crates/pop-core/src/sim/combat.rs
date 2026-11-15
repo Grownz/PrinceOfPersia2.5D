@@ -431,7 +431,7 @@ impl World {
         }
         self.guard_rec = Opp::of(&g); // saveshad: the record outlives clear_char
         if clear {
-            self.guard_rec.alive = false; // clear_char (0000:8388): direction 0x56, alive = 0, action = 0
+            self.guard_rec = cleared(self.guard_rec);
             return;
         }
         self.guard = Some(g);
@@ -512,7 +512,7 @@ impl World {
             if action == 4 {
                 // 0000:3975: loadshad, clear_char (alive = 0), saveshad. On level 12 a fallen shadow therefore kills the kid
                 // through check_killed_shadow, like a killed one
-                self.guard_rec = Opp { alive: false, ..Opp::of(g) };
+                self.guard_rec = cleared(Opp::of(g));
                 self.guard = None;
             }
             return;
@@ -572,6 +572,12 @@ impl World {
 }
 
 /// check_hurting (0000:444A): `att` strikes `vic` on its frames 153/154.
+/// clear_char (0000:8388) on a saved record: direction 0x56 (">= 0", so facing right; the port's "no guard" is `guard: None`),
+/// alive = 0, action = 0. charid, room and position stay (check_killed_shadow on level 12 reads charid and alive).
+fn cleared(o: Opp) -> Opp {
+    Opp { facing_left: false, alive: false, action: 0, ..o }
+}
+
 fn check_hurting(att: &mut Kid, vic: &mut Kid, env: &Env, sounds: &mut Vec<u8>) {
     att.opp = Opp::of(vic);
     vic.opp = Opp::of(att);
@@ -1102,7 +1108,7 @@ mod tests {
         (s.charid, s.y, s.action) = (1, 220, 4);
         w.guard = Some(s);
         w.check_guard_fallout();
-        assert!(w.guard.is_none() && w.guard_rec.charid == 1 && !w.guard_rec.alive);
+        assert!(w.guard.is_none() && w.guard_rec.charid == 1 && !w.guard_rec.alive && w.guard_rec.action == 0);
         tick(&mut w, NONE, 1);
         assert_eq!((w.kid.hp, w.flash), (0, (15, 5)));
         // another level: no rule

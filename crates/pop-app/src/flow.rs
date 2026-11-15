@@ -166,11 +166,15 @@ fn write_save(text: &str) -> std::io::Result<()> {
     use std::io::Write;
     let path = save_path();
     let tmp = path.with_extension("SAV.tmp");
-    let mut f = std::fs::File::create(&tmp)?;
-    f.write_all(text.as_bytes())?;
-    f.sync_all()?;
-    drop(f);
-    std::fs::rename(&tmp, &path)
+    let r = std::fs::File::create(&tmp).and_then(|mut f| {
+        f.write_all(text.as_bytes())?;
+        f.sync_all()
+    });
+    let r = r.and_then(|()| std::fs::rename(&tmp, &path));
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp); // best effort: no stale temp file
+    }
+    r
 }
 
 /// Ctrl+L (key 0x0C, title/demo only, 0000:0507 -> 1E6F): load PRINCE.SAV.
