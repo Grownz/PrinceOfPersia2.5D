@@ -28,7 +28,7 @@ cargo test --workspace               # tests needing Original_data print "skippi
 
 Environment variables: `POP_DATA` (data folder), `POP_LEVEL` / `POP_ROOM` (skip the title), `POP_SOUND=original`
 (the game's own sounds), `POP_PERF=1` (log frame time and room rebuilds every 300 frames, vsync off),
-`POP_SHOT=file.png` (screenshot after `POP_SHOT_FRAME`, default 400 frames, then quit), `POP_SCRIPT` (scripted keys),
+`POP_SHOT=file.png` (screenshot after `POP_SHOT_FRAME`, default 400 frames, or at logic tick `POP_SHOT_TICK`, then quit), `POP_SCRIPT` (scripted keys),
 `POP_CUTSCENE=<level>|end|timeout|intro` (play that cutscene at once; `POP_REM_MIN` = minutes left for the hourglass).
 
 ## Controls
@@ -41,7 +41,7 @@ Settings (window mode and size, volume, mute, sound mode, key bindings, data pat
 `shadow_quality`, `ssao`, `tile_textures`) live in `settings.json` next to the exe, created on the first run. `render_mode`: `classic`
 (default) or `enhanced` (torch and sun shadows, ambient occlusion, bloom; any GPU; F5; `shadow_quality` `off|low|high` and
 `ssao` `true|false` tune it), `rt_experimental` is reserved and falls back to classic; env `POP_RENDER`. `character_style`: `sprite` (default)
-or `voxel` (3D voxel figures built at runtime from your own sprite files, nothing is written to disk), env `POP_CHARS`, F6. `tile_textures`: `original` (default: the tile images of your VDUNGEON.DAT / VPALACE.DAT on the room pieces, decoded at runtime) or `procedural` (plain coloured boxes), env `POP_TILES`.
+or `voxel` (3D voxel figures built at runtime from your own sprite files, nothing is written to disk), env `POP_CHARS`, F6. `tile_textures`: `original` (default: the tile images of your VDUNGEON.DAT / VPALACE.DAT on the room pieces, decoded at runtime) or `procedural` (plain coloured boxes), env `POP_TILES`. With `original`, the skeleton floor and the potions are voxel models built at runtime from the skeleton tile images and the PRINCE.DAT bottle and bubble images (independent of `character_style`; there is no separate item setting), bubbles glow in the potion's colour; `procedural` keeps simple boxes.
 
 ## Package
 
