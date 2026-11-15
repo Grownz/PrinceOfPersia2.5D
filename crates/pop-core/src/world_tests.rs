@@ -38,8 +38,8 @@ fn world(start_col: usize, tiles: &[(usize, usize, u8)], links: &[(u8, u8)]) -> 
 }
 
 fn tick(w: &mut World, keys: Keys, n: usize) {
-    for _ in 0..n * 5 {
-        w.step(keys);
+    for _ in 0..n {
+        while !w.step(keys) {}
     }
 }
 
@@ -120,6 +120,65 @@ fn chompers_start_staggered() {
     let w = world(0, &[(1, 1, 18), (2, 1, 18), (3, 1, 18)], &[]);
     let m: Vec<u8> = (11..14).map(|i| w.level.tile_at(1, i).modifier).collect();
     assert_eq!(m, [15, 12, 9]);
+}
+
+/// The kid crouches on a potion of `kind` and drinks it (docs/edge_cases.md 5.1). Returns the world after the
+/// pick-up frame and every flash seen on the way.
+fn drink(kind: u8, hp: i32) -> (World, Vec<(u8, u8)>) {
+    let mut w = world(3, &[], &[]);
+    tick(&mut w, NONE, 10);
+    let col = w.kid.col(&crate::sim::mk_env(&w.data, &w.level, w.guard_type));
+    w.set_tile_for_test(1, 10 + col as u8, Tile::Potion);
+    w.set_mod_for_test(1, 10 + col as u8, kind << 5);
+    w.kid.hp = hp;
+    let down = Keys { down: true, ..NONE };
+    for _ in 0..20 {
+        if w.kid.frame == 109 {
+            break;
+        }
+        tick(&mut w, down, 1);
+    }
+    tick(&mut w, Keys { shift: true, ..down }, 1);
+    assert_eq!(w.kid.seq, 78, "drinking");
+    let mut flashes = vec![];
+    for _ in 0..30 {
+        tick(&mut w, NONE, 1);
+        if w.flash.1 > 0 {
+            flashes.push(w.flash);
+        }
+    }
+    assert_eq!(w.level.tile_at(1, 10 + col as usize).kind, Tile::Floor);
+    (w, flashes)
+}
+
+#[test]
+fn potions_5_1() {
+    let (w, f) = drink(2, 3); // life: one more heart, full health
+    assert_eq!((w.kid.hp_max, w.kid.hp), (4, 4));
+    assert!(w.sounds.contains(&30) && f.contains(&(4, 4)));
+    let (w, f) = drink(1, 2); // heal
+    assert_eq!(w.kid.hp, 3);
+    assert!(w.sounds.contains(&33) && f == [(4, 2), (4, 1)]);
+    let (w, f) = drink(1, 3); // heal at full health: nothing
+    assert!(!w.sounds.contains(&33) && f.is_empty());
+    let (w, f) = drink(5, 3); // hurt: -1 and the red hurt flash
+    assert_eq!(w.kid.hp, 2);
+    assert!(w.sounds.contains(&13) && f == [(12, 1)]);
+    let (w, f) = drink(3, 3); // feather
+    assert!(w.shared.feather > 0 && w.sounds.contains(&39) && f.contains(&(2, 3)));
+    let (w, _) = drink(4, 3); // invert: display only
+    assert!(w.upside);
+    let (w, _) = drink(0, 3); // empty flask
+    assert_eq!((w.kid.hp, w.kid.hp_max, w.upside), (3, 3, false));
+}
+
+#[test]
+fn have_sword_except_on_level_1() {
+    let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
+    for n in [0usize, 1, 2] {
+        let w = World::new(data(), Level::parse(lv.get(2000 + n as u16).unwrap()).unwrap(), n);
+        assert_eq!(w.kid.have_sword, n != 1, "level {n}");
+    }
 }
 
 #[test]

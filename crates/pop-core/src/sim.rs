@@ -16,8 +16,12 @@ mod combat;
 pub use combat::{GuardSlot, ShadowState, GUARD_TYPE, mk_env};
 
 pub const TICKS_PER_SEC: u32 = 12;
+/// 60 Hz steps per logic frame normally; `SWORD_SUBSTEPS` while the kid's sword is drawn (0000:4D6A, docs/edge_cases.md 5.2)
 pub const SUBSTEPS: u32 = 5;
+pub const SWORD_SUBSTEPS: u32 = 6;
 pub const STEP_HZ: f64 = (TICKS_PER_SEC * SUBSTEPS) as f64;
+/// UNVERIFIED: the original ends feather fall when sound 39 stops playing; we use a fixed length (18.75 s, SDLPoP's default).
+pub const FEATHER_TICKS: u8 = 225;
 
 const MAX_TROBS: usize = 30;
 const MAX_MOBS: usize = 14;
@@ -64,6 +68,12 @@ pub struct World {
     /// original logic ticks (12 Hz)
     pub tick: u64,
     sub: u32,
+    /// 60 Hz steps of the current logic frame (5, or 6 with the kid's sword drawn)
+    frame_len: u32,
+    /// screen flash (colour index, frames left), docs/edge_cases.md 3.6: shown while frames > 0
+    pub flash: (u8, u8),
+    /// upside-down display (ds:4FD0, invert potion); display only
+    pub upside: bool,
     pub data: Arc<Data>,
     /// runtime tile state (the level as loaded, modified by the mechanics)
     pub level: Level,
@@ -87,6 +97,8 @@ pub struct World {
     pub guard_type: i8,
     pub shared: Shared,
     pub shadow: ShadowState,
+    /// the Guard record as last saved (saveshad); it outlives clear_char and is the kid's Opp for check_killed_shadow
+    guard_rec: crate::kid::Opp,
 }
 
 impl World {
@@ -95,7 +107,7 @@ impl World {
         let kid = {
             let env = mk_env(&data, &level, guard_type);
             let mut k = Kid::spawn(&env, level_no);
-            k.have_sword = level_no >= 2; // the sword is picked up on level 1
+            k.have_sword = level_no != 1; // 0000:49A6: the sword is picked up on level 1 (the demo level 0 has it)
             k
         };
         let slots = World::init_guard_slots(&level, level_no);
@@ -103,6 +115,10 @@ impl World {
         let mut w = World {
             tick: 0,
             sub: 0,
+            frame_len: SUBSTEPS,
+            flash: (0, 0),
+            upside: false,
+            guard_rec: Default::default(),
             data,
             level,
             level_no,
@@ -138,8 +154,11 @@ impl World {
 
     /// One 60 Hz step; returns true if a logic tick ran.
     pub fn step(&mut self, keys: Keys) -> bool {
+        if self.sub == 0 {
+            self.frame_len = self.next_frame_len();
+        }
         self.sub += 1;
-        if self.sub < SUBSTEPS {
+        if self.sub < self.frame_len {
             return false;
         }
         self.sub = 0;
@@ -148,9 +167,14 @@ impl World {
         true
     }
 
+    /// Frame length decided at the start of a frame from the kid's sword as the last tick left it.
+    fn next_frame_len(&self) -> u32 {
+        if self.kid.sword == 2 { SWORD_SUBSTEPS } else { SUBSTEPS }
+    }
+
     /// True if the next `step` runs a logic tick (lets callers snapshot state for interpolation first).
     pub fn next_is_tick(&self) -> bool {
-        self.sub + 1 >= SUBSTEPS
+        self.sub + 1 >= if self.sub == 0 { self.next_frame_len() } else { self.frame_len }
     }
 
     /// Sequence viewer: play sequence `seq` without control and physics.
@@ -162,11 +186,16 @@ impl World {
 
     /// Progress from the last logic tick to the next, in [0, 1), for render interpolation.
     pub fn alpha(&self) -> f32 {
-        self.sub as f32 / SUBSTEPS as f32
+        self.sub as f32 / self.frame_len as f32
     }
 
     fn logic_tick(&mut self, keys: Keys) {
         let room_before = self.kid.room;
+        self.flash.1 = self.flash.1.saturating_sub(1); // remove_flash_if_hurt of the previous frame
+        self.shared.feather = self.shared.feather.saturating_sub(1);
+        if !self.kid.alive {
+            self.upside = false; // 0000:0EE7
+        }
         // hit point deltas are cleared at the start of the frame and applied at its end (0000:4D7F, 0000:12A6)
         self.kid.hp_delta = 0;
         if let Some(g) = self.guard.as_mut() {
@@ -184,11 +213,9 @@ impl World {
                 self.shadow.united = -1; // the hidden floor trick of level 12 is enabled from here
             }
         }
-        if self.shadow.killed {
-            self.shadow.killed = false;
-            if self.kid.alive {
-                self.kid.take_hp(100); // check_killed_shadow (0000:84B1): killing the shadow kills the kid
-            }
+        let opp = self.guard.as_ref().map_or(self.guard_rec, crate::kid::Opp::of);
+        if check_killed_shadow(self.level_no, &mut self.kid, &opp) {
+            self.flash = (15, 5);
         }
         self.kid.opp = self.guard.as_ref().map_or_else(Default::default, crate::kid::Opp::of);
         self.kid.sh = self.shared;
@@ -213,6 +240,9 @@ impl World {
             self.check_shadow();
         }
         self.check_guard_fallout();
+        if self.flash.1 == 0 && self.kid.hp_delta < 0 {
+            self.flash = (12, 1); // flash_if_hurt (0000:5374): red for the frame the kid lost hit points
+        }
         if self.dirty {
             self.dirty = false;
             self.version = self.version.wrapping_add(1);
@@ -257,7 +287,38 @@ impl World {
                 }
                 Event::StartChompers { room, row } => self.start_chompers(room, row),
                 Event::Sound(id) => self.sounds.push(id),
+                Event::GetObject(kind) => self.get_object(kind),
             }
+        }
+    }
+
+    /// proc_get_object (0000:81AB), the world part; hit points and have_sword were set by the kid. (Stop-sounds not modelled.)
+    fn get_object(&mut self, kind: i8) {
+        match kind {
+            -1 => {
+                self.sound(37);
+                self.flash = (14, 8);
+            }
+            1 => {
+                self.sound(33);
+                self.flash = (4, 2);
+            }
+            2 => {
+                self.sound(30);
+                self.flash = (4, 4);
+            }
+            3 => {
+                self.shared.feather = FEATHER_TICKS; // set_feather_fall (0000:162B)
+                self.sound(39);
+                self.flash = (2, 3);
+            }
+            4 => {
+                self.upside = !self.upside; // toggle_upside (0000:161C)
+                self.dirty = true;
+            }
+            5 => self.sound(13),
+            6 => self.trigger_button(false, 0, -1, 8, 0), // level 15: get_tile(8, 0, 0); trigger_button(0, 0, -1)
+            _ => {}
         }
     }
 
@@ -807,10 +868,24 @@ impl World {
     }
 }
 
+/// check_killed_shadow (0000:84B1): level 12, the kid and the shadow; `ch` alive and `opp` dead -> `ch` dies too.
+/// Called at the start of the kid tick (Char = Kid) and of the guard tick (Char = Guard). Returns true if it fired
+/// (the caller flashes white for 5 frames).
+pub(crate) fn check_killed_shadow(level_no: usize, ch: &mut Kid, opp: &crate::kid::Opp) -> bool {
+    if level_no != 12 || (ch.charid | opp.charid) != 1 || !ch.alive || opp.alive {
+        return false;
+    }
+    ch.take_hp(100);
+    true
+}
+
 #[cfg(test)]
 impl World {
     pub(crate) fn set_mod_for_test(&mut self, room: u8, idx: u8, m: u8) {
         self.set_mod(room, idx, m);
+    }
+    pub(crate) fn set_tile_for_test(&mut self, room: u8, idx: u8, t: Tile) {
+        self.set_tile(room, idx, t);
     }
     pub(crate) fn start_spike_for_test(&mut self, room: u8, idx: u8) {
         self.start_anim_spike(room, idx);

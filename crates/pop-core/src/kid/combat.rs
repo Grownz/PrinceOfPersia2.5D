@@ -43,6 +43,8 @@ pub struct Shared {
     pub level: usize,
     /// the room the kid is in (= drawn room)
     pub drawn_room: u8,
+    /// feather fall (ds:409E), global: ticks left (the original ends it with sound 39, see `sim::FEATHER_TICKS`)
+    pub feather: u8,
 }
 
 /// prandom (0C83:0412): the original's linear congruential generator.
@@ -535,10 +537,11 @@ impl Kid {
             if behind != Tile::Empty || dist < 4 {
                 self.start_seq(env, 85);
                 if self.charid != 0 && self.facing_left {
-                    // on or next to a gate (INFERRED reading of the gate special case)
-                    let t = self.tile(env, col, self.row);
-                    if t == Tile::Gate {
-                        self.x = (X0 + COL_W * col + 7) as u8;
+                    // the tile behind is a gate, else the own tile (0000:431A): x from that gate's normalised column
+                    let gate = if behind == Tile::Gate { Some(col - d) } else { (self.tile(env, col, self.row) == Tile::Gate).then_some(col) };
+                    if let Some(gc) = gate {
+                        let (_, nc, _) = norm(env.level, self.room as i32, gc, self.row);
+                        self.x = (X0 + COL_W * nc + 7) as u8;
                         self.forward(10);
                     }
                 }
