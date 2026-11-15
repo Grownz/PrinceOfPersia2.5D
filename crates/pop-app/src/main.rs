@@ -1,5 +1,8 @@
-//! Room viewer: draws one room of a level as procedural 3D geometry (placeholder art).
-//! Keys: arrows + Shift = kid, Ctrl+arrows = neighbouring room, PageUp/PageDown = level, Tab = debug text.
+//! Prince of Persia remake: title -> game (procedural 3D rooms, original sprites) -> title.
+//! Keys: arrows + Shift = kid, Esc/P = pause, Ctrl+A = restart, Ctrl+G = save, Ctrl+L = load (title/demo), F3 = debug text
+//! (with it on: Ctrl+arrows = neighbouring room, PageUp/PageDown = level, sequence viewer keys).
+//! POP_LEVEL / POP_ROOM skip the title.
+mod flow;
 mod kid;
 mod room;
 
@@ -18,15 +21,21 @@ struct Game {
     kid_prev: (Vec2, u8),
     guard_prev: (Vec2, u8),
     kid_respawn: bool,
-    /// "Level N" banner: (logic ticks left, number shown)
-    banner: (u32, usize),
+    /// HUD message ("LEVEL N", "GAME SAVED"): (logic ticks left, text)
+    banner: (u32, String),
+    /// debug text and debug keys (F3)
+    debug: bool,
+}
+
+pub fn data_dir() -> String {
+    std::env::var("POP_DATA").unwrap_or_else(|_| "Original_data".into())
 }
 
 #[derive(Component)]
 struct DebugText;
 
 fn main() {
-    let dir = std::env::var("POP_DATA").unwrap_or_else(|_| "Original_data".into());
+    let dir = data_dir();
     let dat = Dat::open(format!("{dir}/LEVELS.DAT")).expect("cannot open LEVELS.DAT (set POP_DATA)");
     let levels: Vec<Level> = (2000..=2014).map(|id| Level::parse(dat.get(id).expect("level")).expect("bad level")).collect();
     let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<usize>().ok());
@@ -34,6 +43,8 @@ fn main() {
     let assets = kid::KidAssets::load(&dir);
     let world = sim::World::new(assets.data.clone(), levels[level].clone(), level);
     let room = env("POP_ROOM").filter(|r| (1..=ROOMS).contains(r)).unwrap_or(world.kid.room as usize);
+    let skip_title = env("POP_LEVEL").is_some() || env("POP_ROOM").is_some();
+    let playing = || in_state(flow::Screen::Playing);
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -42,14 +53,37 @@ fn main() {
         }))
         .insert_resource(ClearColor(BACKGROUND))
         .insert_resource(Time::<Fixed>::from_hz(sim::STEP_HZ))
-        .insert_resource(Game { world, levels, level, room, kid_prev: (Vec2::ZERO, 0), guard_prev: (Vec2::ZERO, 0), kid_respawn: false, banner: (0, 0) })
+        .insert_resource(Game { world, levels, level, room, kid_prev: (Vec2::ZERO, 0), guard_prev: (Vec2::ZERO, 0), kid_respawn: false, banner: (0, String::new()), debug: false })
         .insert_resource(kid::Latch::default())
         .insert_resource(assets)
-        .add_systems(Startup, (setup, kid::setup)) // first room is built by room::rebuild_on_change
-        .add_systems(FixedUpdate, |mut g: ResMut<Game>, a: Res<kid::KidAssets>, mut latch: ResMut<kid::Latch>, keys: Res<ButtonInput<KeyCode>>| {
-            kid::fixed_step(&mut g, &a, &mut latch, &keys);
-        })
-        .add_systems(Update, (kid::latch_keys, navigate, kid::keys, room::rebuild_on_change, kid::render, flash, debug_text, screenshot_and_quit).chain())
+        .init_resource::<flow::Flow>()
+        .insert_state(if skip_title { flow::Screen::Playing } else { flow::Screen::Title })
+        .add_systems(Startup, (setup, kid::setup, flow::setup)) // first room is built by room::rebuild_on_change
+        .add_systems(OnEnter(flow::Screen::Title), flow::reset_idle)
+        .add_systems(
+            FixedUpdate,
+            (|mut g: ResMut<Game>, a: Res<kid::KidAssets>, mut latch: ResMut<kid::Latch>, keys: Res<ButtonInput<KeyCode>>| {
+                kid::fixed_step(&mut g, &a, &mut latch, &keys);
+            })
+            .run_if(playing()),
+        )
+        .add_systems(
+            Update,
+            (
+                kid::latch_keys,
+                flow::pause,
+                flow::title.run_if(in_state(flow::Screen::Title)),
+                flow::card_step.run_if(in_state(flow::Screen::Card)),
+                (navigate, kid::keys, flow::playing).chain().run_if(playing()),
+                room::rebuild_on_change,
+                kid::render,
+                flash,
+                flow::overlay,
+                debug_text,
+                screenshot_and_quit,
+            )
+                .chain(),
+        )
         .run();
 }
 
@@ -66,11 +100,21 @@ fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<
     cmds.spawn((
         Text::new(""),
         Node { position_type: PositionType::Absolute, left: Val::Px(8.0), top: Val::Px(8.0), ..default() },
+        Visibility::Hidden,
         DebugText,
     ));
 }
 
 fn navigate(keys: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, mut text: Query<&mut Visibility, With<DebugText>>) {
+    if keys.just_pressed(KeyCode::F3) {
+        g.debug = !g.debug;
+        for mut v in &mut text {
+            *v = if g.debug { Visibility::Inherited } else { Visibility::Hidden };
+        }
+    }
+    if !g.debug {
+        return;
+    }
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     for (key, dir) in [(KeyCode::ArrowLeft, 0), (KeyCode::ArrowRight, 1), (KeyCode::ArrowUp, 2), (KeyCode::ArrowDown, 3)] {
         if ctrl && keys.just_pressed(key) {
@@ -84,11 +128,6 @@ fn navigate(keys: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, mut text: Quer
     if step != 0 {
         g.level = (g.level as i32 + step).rem_euclid(g.levels.len() as i32) as usize;
         g.kid_respawn = true;
-    }
-    if keys.just_pressed(KeyCode::Tab) {
-        for mut v in &mut text {
-            *v = if *v == Visibility::Hidden { Visibility::Inherited } else { Visibility::Hidden };
-        }
     }
 }
 
@@ -115,27 +154,20 @@ fn flash(g: Res<Game>, mut clear: ResMut<ClearColor>) {
 }
 
 fn debug_text(g: Res<Game>, mut q: Query<&mut Text, With<DebugText>>) {
+    if !g.debug {
+        return;
+    }
     let l = &g.world.level;
     let [left, right, up, down] = l.links[g.room - 1];
     for mut t in &mut q {
         t.0 = format!(
-            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}  kid: seq {} frame {} action {} x {} y {} room {} row {} fall {} hp {}/{} sword {}{}\narrows+Shift kid  Ctrl+arrows room  PgUp/PgDn level  , . sequence viewer  Space restart  F flip  C control  Tab text",
+            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}  kid: seq {} frame {} action {} x {} y {} room {} row {} fall {} hp {}/{} sword {}{}\narrows+Shift kid  Ctrl+arrows room  PgUp/PgDn level  , . sequence viewer  Space restart  F flip  C control  F3 text",
             g.level, g.room, left, right, up, down, l.start_room, l.start_tile, g.world.tick, g.world.kid.seq, g.world.kid.frame, g.world.kid.action, g.world.kid.x, g.world.kid.y, g.world.kid.room, g.world.kid.row, g.world.kid.fall_y, g.world.kid.hp, g.world.kid.hp_max, g.world.kid.sword,
             g.world.guard.as_ref().map_or(String::new(), |gd| format!("   guard: seq {} frame {} x {} hp {}/{} sword {} skill {} see {}", gd.seq, gd.frame, gd.x, gd.hp, gd.hp_max, gd.sword, gd.skill, g.world.shared.can_see))
         );
         let w = &g.world;
-        t.0 += &format!(
-            "
-time {}:{:03}  death {}  flash {:?}{}{}{}",
-            w.progress.rem_min, w.progress.rem_tick, w.death_count, w.flash,
-            if w.demo { "  DEMO (any key starts the game)" } else { "" },
-            if g.banner.0 > 0 { format!("
-
-          LEVEL {}", g.banner.1) } else { String::new() },
-            if w.continue_text() { "
-
-          Press Button to Continue  (Shift/Enter; Ctrl+A restarts any time)" } else { "" },
-        );
+        t.0 += &format!("
+time {}:{:03}  death {}  flash {:?}  text timer {}", w.progress.rem_min, w.progress.rem_tick, w.death_count, w.flash, w.text_timer);
     }
 }
 

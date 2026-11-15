@@ -84,6 +84,29 @@ impl Progress {
     pub fn new_game(level: usize) -> Progress {
         Progress { level, rem_min: 60, rem_tick: 719, hitp_beg_lev: 3, checkpoint: false, carry_hp: None }
     }
+
+    /// Save file text. The original (Ctrl+G, 0000:1D78, levels 3..13) writes rem_min, rem_tick, level and hitp_beg_lev as
+    /// four words to PRINCE.SAV; this one is JSON with the same values (`hitp_max` is informational, a level always
+    /// starts with hitp_max = hitp_beg_lev).
+    pub fn save_text(&self, hitp_max: i32) -> String {
+        format!(
+            "{{\"level\": {}, \"hitp_max\": {}, \"rem_min\": {}, \"rem_tick\": {}, \"hitp_beg_lev\": {}}}
+",
+            self.level, hitp_max, self.rem_min, self.rem_tick, self.hitp_beg_lev
+        )
+    }
+
+    /// Parse `save_text`; `None` if a key is missing or a value is out of range (the file is user-editable).
+    pub fn from_save(text: &str) -> Option<Progress> {
+        let num = |key: &str| -> Option<i32> {
+            let rest = text.split_once(&format!("\"{key}\""))?.1.trim_start().strip_prefix(':')?.trim_start();
+            let end = rest.find(|c: char| !(c.is_ascii_digit() || c == '-')).unwrap_or(rest.len());
+            rest[..end].parse().ok()
+        };
+        let (level, rem_min, rem_tick, hp) = (num("level")?, num("rem_min")?, num("rem_tick")?, num("hitp_beg_lev")?);
+        let ok = (1..=14).contains(&level) && (1..=60).contains(&rem_min) && (1..=719).contains(&rem_tick) && (1..=10).contains(&hp);
+        ok.then_some(Progress { level: level as usize, rem_min, rem_tick, hitp_beg_lev: hp, checkpoint: false, carry_hp: None })
+    }
 }
 
 /// Why the world wants to be replaced; the app builds the next `World` with `World::progress_after`.
@@ -97,6 +120,8 @@ pub enum Exit {
     Title,
     /// a key during the demo starts the game
     NewGame,
+    /// level 14, the kid entered room 5 (check_the_end 0000:100A): the ending, then the title
+    End,
 }
 
 /// Demo move list (ds:0F36): (time, move) for do_auto_moves.
@@ -351,6 +376,9 @@ impl World {
         if self.level_no == 12 && self.kid.room == 23 {
             self.set_exit(Exit::NextLevel { seamless: true });
         }
+        if self.level_no == 14 && self.kid.room == 5 {
+            self.set_exit(Exit::End); // check_the_end runs on room entry; the exit is set once, so testing every tick is the same
+        }
         self.show_time();
         if let Some(col) = self.mirror_jump.take() {
             self.jump_through_mirror(col); // check_mirror runs in the drawing pass, after play_frame
@@ -412,10 +440,12 @@ impl World {
                 Event::Sound(id) => self.sounds.push(id),
                 Event::GetObject(kind) => self.get_object(kind),
                 Event::NextLevel => self.set_exit(Exit::NextLevel { seamless: false }),
-                Event::Mirror { room, tilepos, col } => {
+                // is_obstacle fires on every probe of frames 39..43; the 0x56 modifier marks the jump as done (one shadow per jump)
+                Event::Mirror { room, tilepos, col } if self.modifier(room, tilepos) != 0x56 => {
                     self.set_mod(room, tilepos, 0x56);
                     self.mirror_jump = Some(col);
                 }
+                Event::Mirror { .. } => {}
             }
         }
     }
@@ -475,14 +505,14 @@ impl World {
     pub fn progress_after(&self, exit: Exit) -> Progress {
         let mut p = Progress { carry_hp: None, ..self.progress };
         match exit {
-            Exit::Restart => {}
+            Exit::Restart => p.checkpoint &= p.level != 0, // level 0: the checkpoint is the demo's guard-killed flag
             Exit::NextLevel { seamless } => {
                 p.level += 1;
                 p.hitp_beg_lev = self.kid.hp_max;
                 p.checkpoint = false;
                 p.carry_hp = seamless.then_some(self.kid.hp);
             }
-            Exit::Title => p = Progress::new_game(0),
+            Exit::Title | Exit::End => p = Progress::new_game(0),
             Exit::NewGame => p = Progress::new_game(1),
         }
         p
