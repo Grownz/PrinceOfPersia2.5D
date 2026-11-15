@@ -131,8 +131,16 @@ impl AudioState {
     }
 }
 
+/// Fixed steps sound `id` lasts by the known (synth) length table; 0 for ids without one.
+fn synth_steps(id: u8) -> u32 {
+    crate::synth::sound(id).map_or(0, |v| (v.len() as u64 * pop_core::sim::STEP_HZ as u64).div_ceil(crate::synth::RATE as u64) as u32)
+}
+
 pub fn play(cmds: &mut Commands, s: &Sounds, a: &mut AudioState, id: u8, playing: &Query<(Entity, &Sfx)>) {
-    let Some(Some((h, steps))) = s.0.get(id as usize) else { return };
+    let Some(Some((h, steps))) = s.0.get(id as usize) else {
+        a.busy = a.busy.max(synth_steps(id)); // no clip: still "playing" for its known length, so Len::Quiet waits the same
+        return;
+    };
     // the same sound again restarts it (the original has one channel; this keeps repeated door/gate ticks from piling up)
     for (e, _) in playing.iter().filter(|(_, x)| x.0 == id) {
         cmds.entity(e).despawn();
@@ -248,6 +256,14 @@ mod tests {
         assert_eq!(a.begin_step(0), (false, true)); // busy 3 -> hold, drains
         assert_eq!(a.begin_step(1), (true, false)); // new World: cleared
         assert_eq!(a.busy, 0);
+    }
+
+    /// A missing clip still holds the wait for the cue's known length (intro music 54 = 24.74 s).
+    #[test]
+    fn missing_clip_keeps_its_length() {
+        let want = (24.74f32 * pop_core::sim::STEP_HZ as f32) as u32;
+        assert!(super::synth_steps(54).abs_diff(want) <= 2, "{}", super::synth_steps(54));
+        assert_eq!(super::synth_steps(255), 0);
     }
 
     /// busy counts fixed steps: a 3-step sound holds exactly the next 3 steps, then releases; a new World clears it.

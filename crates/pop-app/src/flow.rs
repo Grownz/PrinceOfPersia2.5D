@@ -312,6 +312,13 @@ pub fn pad_any(pads: &Query<&Gamepad>) -> bool {
     pads.iter().any(|p| p.get_just_pressed().next().is_some())
 }
 
+/// Longest frame delta the attract/title timers accept: a stall (window drag, alt-tab) must not skip phases.
+const MAX_DT: f32 = 0.1;
+
+fn clamp_dt(dt: f32) -> f32 {
+    dt.clamp(0.0, MAX_DT)
+}
+
 /// Title / attract loop and ending pages: timers in 1/60 s units, sounds at phase starts, "until no sound" waits on the
 /// deterministic `AudioState::busy`. Any key (or a controller button) during the attract loop starts the game at level 1,
 /// Ctrl+L loads (process_key 0000:04E2); during the ending pages a key skips to the final fade.
@@ -358,7 +365,7 @@ pub fn title(
             return;
         }
     }
-    f.t += time.delta_secs() * 60.0;
+    f.t += clamp_dt(time.delta_secs()) * 60.0;
     let done = match f.cur().2 {
         Len::Units(n) => f.t >= n as f32,
         Len::Quiet => audio.busy == 0,
@@ -566,6 +573,7 @@ mod tests {
         }
         assert_eq!(shown, [(Pic::Title(0), 0), (Pic::Title(1), 130), (Pic::Title(0), 335), (Pic::Title(2), 400), (Pic::Title(0), 670), (Pic::Title(3), 905)]);
         assert_eq!(ATTRACT.iter().filter(|p| p.0 == Pic::Intro).count(), 1);
+        assert_eq!((clamp_dt(5.0), clamp_dt(0.016), clamp_dt(-1.0)), (MAX_DT, 0.016, 0.0));
         assert_eq!(ATTRACT.iter().filter(|p| p.2 == Len::Quiet).count(), 4, "logo, before the intro, page 43, before the demo");
         assert_eq!(ENDING[0].3, Some(56));
     }
