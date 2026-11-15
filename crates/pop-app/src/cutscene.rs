@@ -250,7 +250,7 @@ pub fn render(
 ) {
     use crate::flow::Screen;
     let s = *state.get();
-    let in_scene = s == Screen::Cutscene && c.cs.is_some();
+    let in_scene = s == Screen::Cutscene && c.cs.is_some() && c.ended.is_none(); // ended (e.g. skipped): no stale frame
     let on_set = in_scene || s == Screen::Title;
     // camera: the set for cutscenes and the title/story screens, the level otherwise
     for mut t in &mut q.p6() {
