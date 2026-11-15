@@ -431,7 +431,8 @@ impl World {
         }
         self.guard_rec = Opp::of(&g); // saveshad: the record outlives clear_char
         if clear {
-            return; // clear_char: the guard record is gone
+            self.guard_rec.alive = false; // clear_char (0000:8388): direction 0x56, alive = 0, action = 0
+            return;
         }
         self.guard = Some(g);
     }
@@ -448,10 +449,12 @@ impl World {
     }
 
     /// jump_through_mirror (0000:5082): the kid's mirror image becomes the shadow (charid 1), the kid keeps 1 hit point.
-    /// INFERRED: tile_col is the mirror's column (the original uses whatever the last get_tile left).
-    pub(super) fn jump_through_mirror(&mut self, col: i32) {
+    /// check_mirror_image (0000:50D3) reflects about x_bump[Char.curr_col + 5] + 10 with Char = loadkid (0000:718B copies the
+    /// whole Kid record), so the column is the kid's stored curr_col, not the mirror's (VERIFIED); byte arithmetic.
+    pub(super) fn jump_through_mirror(&mut self) {
         let mut g = self.kid.clone();
-        g.x = (2 * (crate::kid::X0 + crate::kid::COL_W * col + 10) - g.x as i32) as u8; // check_mirror_image: x_bump[col + 5] + 10
+        let col = self.kid.curr_col();
+        g.x = (2 * (crate::kid::X0 + crate::kid::COL_W * col + 10) - g.x as i32) as u8;
         g.facing_left = !g.facing_left;
         g.charid = 1;
         (g.hp, g.hp_max, g.hp_delta) = (self.kid.hp_max, self.kid.hp_max, 0);
@@ -507,6 +510,9 @@ impl World {
         let (charid, action, room) = (g.charid, g.action, g.room);
         if charid == 1 {
             if action == 4 {
+                // 0000:3975: loadshad, clear_char (alive = 0), saveshad. On level 12 a fallen shadow therefore kills the kid
+                // through check_killed_shadow, like a killed one
+                self.guard_rec = Opp { alive: false, ..Opp::of(g) };
                 self.guard = None;
             }
             return;
@@ -626,10 +632,14 @@ mod tests {
         World::new(data(), Level::parse(&b).unwrap(), level_no)
     }
 
-    /// n logic ticks (5 or 6 steps each)
+    /// n logic ticks (5 or 6 steps each); a longer frame fails instead of hanging
     fn tick(w: &mut World, keys: Keys, n: usize) {
         for _ in 0..n {
-            while !w.step(keys) {}
+            let mut steps = 1;
+            while !w.step(keys) {
+                steps += 1;
+                assert!(steps <= crate::sim::SWORD_SUBSTEPS, "a logic frame took more than {} steps", crate::sim::SWORD_SUBSTEPS);
+            }
         }
     }
 
@@ -1071,5 +1081,79 @@ mod tests {
         assert_eq!(w.kid.hp_delta, -1);
         assert!(w.kid.take_hp(100));
         assert_eq!(w.kid.hp_delta, -3);
+    }
+
+    #[test]
+    fn level12_no_stale_shadow_record_after_uniting() {
+        // united: the shadow's record is saved with charid 0 (0000:4805..4831), so check_killed_shadow stays off afterwards
+        let mut w = world(12, 7, 1);
+        let mut s = w.kid.clone();
+        s.charid = 1;
+        w.guard = Some(s);
+        w.shadow.unite = true;
+        tick(&mut w, NONE, 1);
+        assert!(w.guard.is_none() && w.shadow.united == 42);
+        assert_eq!((w.guard_rec.charid, w.guard_rec.alive), (0, false), "cleared record (alive 0) but charid 0");
+        tick(&mut w, NONE, 50);
+        assert!(w.kid.alive && w.kid.hp > 0, "the kid survives the cleared shadow record");
+        // a killed shadow kills the kid (5.3), and so does one that fell out: clear_char leaves its record with alive = 0
+        let mut w = world(12, 7, 1);
+        let mut s = w.kid.clone();
+        (s.charid, s.y, s.action) = (1, 220, 4);
+        w.guard = Some(s);
+        w.check_guard_fallout();
+        assert!(w.guard.is_none() && w.guard_rec.charid == 1 && !w.guard_rec.alive);
+        tick(&mut w, NONE, 1);
+        assert_eq!((w.kid.hp, w.flash), (0, (15, 5)));
+        // another level: no rule
+        let mut w = world(11, 7, 1);
+        w.guard_rec = Opp { charid: 1, alive: false, ..Opp::default() };
+        w.guard = None;
+        tick(&mut w, NONE, 5);
+        assert!(w.kid.alive && w.kid.hp > 0);
+    }
+
+    #[test]
+    fn dead_guard_pointer_at_a_sequence_end_loops_in_its_own_sequence() {
+        // the resting pointer of every death sequence is the final Jmp of its decoded run; one play_seq follows that loop back
+        // into the same sequence's bytes instead of running on into the next sequence (whose bytes follow in memory)
+        for (seq, plays, frame) in [(71, 10, 185), (51, 6, 177), (54, 5, 178), (22, 8, 185)] {
+            let w = world(2, 7, 1);
+            let env = mk_env(&w.data, &w.level, w.guard_type);
+            let mut g = w.guard.clone().unwrap();
+            g.start_seq(&env, seq);
+            for _ in 0..plays {
+                g.play_seq(&env);
+            }
+            let (at, pc) = g.seq_ptr();
+            let ops = env.exe.ops_from(at).unwrap();
+            let crate::exe::Op::Jmp(target) = ops[pc] else { panic!("seq {seq}: pointer not at the sequence end: {:?}", ops.get(pc)) };
+            assert_eq!(pc, ops.len() - 1);
+            let own = env.exe.sequence(seq).unwrap();
+            assert_eq!(own.last(), Some(&crate::exe::Op::Jmp(target)), "seq {seq}: the pointer sits at the sequence's own final jump");
+            assert!(target >= env.exe.seq_offset(seq).unwrap(), "seq {seq}: loops back into itself");
+            let mut r = w.guard.clone().unwrap();
+            r.set_seq_ptr(&env, (at, pc));
+            r.play_seq(&env);
+            assert_eq!((r.frame, r.seq_ptr().0), (frame, target), "seq {seq}");
+        }
+    }
+
+    #[test]
+    fn mirror_image_reflects_about_the_kids_curr_col() {
+        // x_bump (ds:24BA, VERIFIED bytes) = X0 + COL_W * (i - 5); check_mirror_image uses ds:24BF[Char.curr_col] = x_bump[col + 5]
+        let x_bump: [i32; 20] = [-12, 2, 16, 30, 44, 58, 72, 86, 100, 114, 128, 142, 156, 170, 184, 198, 212, 226, 240, 254];
+        for (i, &x) in x_bump.iter().enumerate() {
+            assert_eq!(crate::kid::X0 + crate::kid::COL_W * (i as i32 - 5), x);
+        }
+        let mut w = world(4, 7, 1);
+        tick(&mut w, NONE, 2);
+        w.guard = None;
+        let (col, x, left) = (w.kid.curr_col(), w.kid.x, w.kid.facing_left);
+        w.kid.x = x.wrapping_add(20); // x moved after the column was stored (a bump): the stored column still decides
+        w.jump_through_mirror();
+        let g = w.guard.as_ref().unwrap();
+        assert_eq!(g.x, (2 * (x_bump[(col + 5) as usize] + 10) - (x as i32 + 20)) as u8);
+        assert_eq!((g.facing_left, g.charid, w.kid.hp), (!left, 1, 1));
     }
 }

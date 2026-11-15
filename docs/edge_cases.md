@@ -350,7 +350,7 @@ Then do_startpos `4A0F`, **have_sword = (level != 1)** (`49A6`), start.
 | level 12 -> 13 seamless (`[59C8]`) | | HP **not** reset (`4A8B`) | |
 | rem_min / rem_tick | **unchanged** (time keeps its value; it does not run while dead, combat.md 8) | unchanged | 60 / 719 |
 | have_sword | level != 1 | level != 1 | |
-| checkpoint `[4CAC]` | kept (level 3: start room 2, tile 6, facing right, tile (7, 4, 0) set to 0) | cleared (`4DDD`) | cleared (`4884`) |
+| checkpoint `[4CAC]` | kept (level 3: start room 2, tile 6, start_dir 0xFF -> direction NOT 0xFF = right, then seq 5's flip: **facing left** (corrected, `4A24`/`4A86`), tile (7, 4, 0) set to 0) | cleared (`4DDD`) | cleared (`4884`) |
 | upside-down `[4FD0]`, feather `[409E]` | cleared by set_start_pos `4B17/4B1A` | cleared | cleared |
 
 Consequence: a life potion drunk on a level is lost if the kid dies there (unless the level-3 checkpoint was passed after it).
@@ -372,7 +372,8 @@ flash_if_hurt:   if flash_time [438E] != 0: flash(flash_color [4ED2]) elif hitp_
 remove_flash:    if flash_time != 0: flash_time--, unflash() elif hitp_delta < 0: unflash()
 ```
 flash(c) `2E60` on VGA (`[3035]` == 5): `0C83:198F(c, 0)` sets **palette entry 0** (the background black) to the EGA colour c from
-`ds:2BBA` (6-bit RGB triples); unflash sets entry 0 back to colour 0. Only the background changes colour; sprites/tiles keep theirs.
+`ds:2BBA` (6-bit RGB triples, read by `0C83:198F`; all 16 entries are the standard EGA palette, VERIFIED by a pop-app test); unflash
+sets entry 0 back to colour 0. Only the background changes colour; sprites/tiles keep theirs.
 A flash with flash_time N lasts **N frames**; the red hurt flash lasts the one frame in which the kid's HP delta was negative (only the
 kid, never guard damage). Table:
 
@@ -461,7 +462,9 @@ Frames 186..188 come from the kid table (charid 24). The mouse is never seen by 
 - check_mirror `5010` runs in the **drawing pass** (`09DD -> B7C0 -> BF52`), not in play_frame: if `[42E0]` == -1 ->
   jump_through_mirror `5082`; else, kid on a mirror tile -> draw the reflection. The draw pass skips this call on frames that do a full
   redraw (`[4C46]` set by a room change or upside toggle, `0A23`), INFERRED harmless.
-- jump_through_mirror: Char = Kid, mirror image (x = 2*(x_bump[col+5] + 10) - x, direction flipped), `[42E0]` = 0, **charid = 1**,
+- jump_through_mirror: Char = Kid (loadkid `718B` copies the whole record), mirror image check_mirror_image `50D3`:
+  x = 2*(x_bump[col+5] + 10) - x in byte arithmetic with **col = Char.curr_col `[3D66]`, i.e. the kid's stored column** (not the
+  mirror's; VERIFIED), direction flipped, `[42E0]` = 0, **charid = 1**,
   sound 45, saveshad (the shadow continues the kid's running-jump sequence, mirrored), guardhp_curr = guardhp_max = hitp_max,
   **hitp_curr = 1**, both HP bars redrawn.
 - autocontrol level 4 `46F4`: Char.room 4: x < 80 -> clear_char, else move_1_forward (runs away). It is never fought.
@@ -517,6 +520,8 @@ tile -> floor, seq 78; the pick-up frame runs op F3 1 -> proc_get_object `81AB` 
 
 - Feather: fall_accel (`72BF`) in action 4: fall_y += 1, max **4** (normal += 3, max 33); seq op F7 branches on it. It ends in timers
   `4FD0` on the first frame where **no sound is playing** (i.e. when sound 39 ends, or immediately if sound is off: INFERRED quirk).
+  With the 18.61 s speaker tune and 5/60 s frames that is frame T0+224 (223 * 5/60 = 18.58 s still plays): the port's
+  `FEATHER_TICKS` = 224 (was 225, SDLPoP's 18.75 s); a sound that interrupts the tune would end it earlier (UNVERIFIED).
   Cleared by set_start_pos.
 - Upside-down is **display only**: every reader of `[4FD0]` is drawing/text code (`0A65`, `0A93`, `15A6`, `4D1F`, `4D3A`) plus the
   resets; the controls are not swapped. Cleared when the kid dies (`0EE7`) and at every (re)start.

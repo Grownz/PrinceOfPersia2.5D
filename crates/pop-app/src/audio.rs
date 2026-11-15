@@ -202,8 +202,15 @@ pub fn resume(sinks: Query<&AudioSink, With<Sfx>>) {
     sinks.iter().for_each(|s| s.play());
 }
 
-/// M = mute, - / = = master volume (10 % steps); applied to playing sounds too.
-pub fn keys(k: Res<ButtonInput<KeyCode>>, mut a: ResMut<AudioState>, mut g: ResMut<Game>, mut sinks: Query<&mut AudioSink, With<Sfx>>) {
+/// M = mute, - / = = master volume (10 % steps); applied to every sound (effects, music cues, card cues all carry `Sfx`),
+/// including ones spawned this frame whose sink does not exist yet.
+pub fn keys(
+    k: Res<ButtonInput<KeyCode>>,
+    mut a: ResMut<AudioState>,
+    mut g: ResMut<Game>,
+    mut sinks: Query<&mut AudioSink, With<Sfx>>,
+    mut pending: Query<&mut PlaybackSettings, (With<Sfx>, Without<AudioSink>)>,
+) {
     let step = (k.just_pressed(KeyCode::Equal) || k.just_pressed(KeyCode::NumpadAdd)) as i32 - (k.just_pressed(KeyCode::Minus) || k.just_pressed(KeyCode::NumpadSubtract)) as i32;
     let mute = k.just_pressed(KeyCode::KeyM);
     if step == 0 && !mute {
@@ -216,6 +223,7 @@ pub fn keys(k: Res<ButtonInput<KeyCode>>, mut a: ResMut<AudioState>, mut g: ResM
     }
     let v = a.gain();
     sinks.iter_mut().for_each(|mut s| s.set_volume(v));
+    pending.iter_mut().for_each(|mut p| p.volume = v);
     g.banner = (24, if a.muted { "SOUND OFF".into() } else { format!("VOLUME {}%", (a.volume * 100.0).round()) });
 }
 
@@ -231,6 +239,33 @@ mod tests {
         assert_eq!(a.begin_step(0), (false, true)); // busy 3 -> hold, drains
         assert_eq!(a.begin_step(1), (true, false)); // new World: cleared
         assert_eq!(a.busy, 0);
+    }
+
+    /// busy counts fixed steps: a 3-step sound holds exactly the next 3 steps, then releases; a new World clears it.
+    #[test]
+    fn busy_drains_one_step_at_a_time() {
+        let mut a = super::AudioState { busy: 3, gen: 7, volume: 1.0, muted: false };
+        let holds: Vec<_> = (0..5).map(|_| a.begin_step(7)).collect();
+        assert_eq!(holds, [(false, true), (false, true), (false, true), (false, false), (false, false)]);
+        a.busy = 100;
+        assert_eq!(a.begin_step(8), (true, false));
+        assert_eq!((a.busy, a.begin_step(8)), (0, (false, false)));
+        // mute does not change the timing, only the gain
+        let m = super::AudioState { busy: 2, gen: 0, volume: 0.5, muted: true };
+        assert!(matches!(m.gain(), bevy::audio::Volume::Linear(v) if v == 0.0));
+    }
+
+    /// Feather fall ends with sound 39 (edge_cases.md 5.1): the speaker tune's length, rounded up to whole 5/60 s frames,
+    /// is sim::FEATHER_TICKS (see its doc comment for the off-by-one).
+    #[test]
+    fn feather_ticks_match_the_speaker_tune() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Original_data");
+        let Ok(s) = pop_core::dat::Dat::open(format!("{dir}/IBM_SND1.DAT")) else { return };
+        let dats = [s, pop_core::dat::Dat::open(format!("{dir}/IBM_SND2.DAT")).unwrap()];
+        let p = super::original(&dats, 39).unwrap();
+        let secs = p.samples.len() as f64 / p.rate as f64;
+        assert!((secs - 18.61).abs() < 0.02, "{secs}");
+        assert_eq!(pop_core::sim::FEATHER_TICKS as f64, (secs * 12.0).ceil());
     }
 
     /// The original decoders: digitized footstep-like click (id 0, 11000 Hz) and the PC-speaker death tune (id 24, 2.97 s).

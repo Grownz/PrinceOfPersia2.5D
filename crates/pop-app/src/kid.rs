@@ -46,9 +46,9 @@ fn palace(level: usize) -> bool {
     matches!(level, 4 | 5 | 6 | 10 | 11 | 14)
 }
 
-/// Keys seen since the last logic tick (a tap shorter than one tick must not be lost).
+/// Keys seen since the last logic tick (a tap shorter than one tick must not be lost), and the `Game::gen` they belong to.
 #[derive(Resource, Default)]
-pub struct Latch(Keys);
+pub struct Latch(Keys, u32);
 
 impl KidAssets {
     pub fn load(dir: &str) -> Self {
@@ -200,6 +200,11 @@ pub fn keys(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAssets>
 pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: &ButtonInput<KeyCode>) {
     if g.world.exit.is_some() {
         return; // an exit is pending: Update consumes it before any further tick mutates the carried state
+    }
+    if latch.1 != g.gen {
+        // a new world: taps latched before it (the key that skipped a card, started the game or ended the demo) must not reach
+        // its first tick; keys still held count
+        (latch.0, latch.1) = (pressed(held), g.gen);
     }
     if g.world.next_is_tick() {
         let env = mk_env(&a.data, &g.world.level, g.world.guard_type);
