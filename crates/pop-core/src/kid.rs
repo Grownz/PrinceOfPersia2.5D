@@ -40,8 +40,10 @@ pub enum Event {
     StartChompers { room: u8, row: i32 },
     /// sound id (docs/tiles.md section 9; sequence sound ops are mapped to ids)
     Sound(u8),
-    /// the sword on this tile was picked up: it becomes floor
+    /// the sword or potion on this tile was picked up: it becomes floor
     Pickup { room: u8, tilepos: u8 },
+    /// proc_get_object (0000:81AB) took effect for this pickup_obj_type: the world part (sound, flash, feather, upside, open)
+    GetObject(i8),
 }
 
 /// Everything the kid needs to look at besides itself.
@@ -171,7 +173,13 @@ pub struct Kid {
     repeat: u8,
     pub seq: usize,
     cur: Vec<Op>,
+    /// data-segment offset `cur` was decoded from: (cur_at, pc) is the original's raw sequence pointer
+    cur_at: u16,
     pc: usize,
+    /// pickup_obj_type (ds:50BE): -1 sword, else the potion kind (docs/edge_cases.md 5.1)
+    pub pickup: i8,
+    /// clear_char requested by the character's own tick (guard start_fall at row 3, column 10)
+    pub clear: bool,
     pub hp: i32,
     pub alive: bool,
     /// edge-triggered flags in raw (left/right) terms; see `Ctrl`
@@ -318,8 +326,26 @@ impl Kid {
 
     pub fn start_seq(&mut self, env: &Env, seq: usize) {
         self.seq = seq;
-        self.cur = env.exe.sequence(seq).unwrap_or_default();
-        self.pc = 0;
+        self.set_seq_ptr(env, (env.exe.seq_offset(seq).unwrap_or(0), 0));
+    }
+
+    /// The raw sequence pointer (Char.curr_seq): data-segment offset of the decoded op list and the index in it.
+    pub fn seq_ptr(&self) -> (u16, usize) {
+        (self.cur_at, self.pc)
+    }
+
+    /// Restore a pointer from `seq_ptr` (offset 0 = no sequence).
+    pub fn set_seq_ptr(&mut self, env: &Env, (at, pc): (u16, usize)) {
+        self.cur_at = at;
+        self.cur = if at == 0 { vec![] } else { env.exe.ops_from(at).unwrap_or_default() };
+        self.pc = pc;
+    }
+
+    /// savekid after uniting (0000:4805..4831): the kid takes over the Char record of the shadow (HP and charid stay).
+    pub fn copy_char_from(&mut self, o: &Kid) {
+        (self.x, self.y, self.facing_left, self.frame, self.action, self.room, self.row) = (o.x, o.y, o.facing_left, o.frame, o.action, o.room, o.row);
+        (self.fall_x, self.fall_y, self.repeat, self.sword, self.alive) = (o.fall_x, o.fall_y, o.repeat, o.sword, o.alive);
+        (self.seq, self.cur, self.cur_at, self.pc) = (o.seq, o.cur.clone(), o.cur_at, o.pc);
     }
 
     fn frame_rec(&self, env: &Env) -> Frame {
@@ -473,7 +499,9 @@ impl Kid {
     /// fall_accel (0000:72B8) and fall_speed (0000:72EA)
     fn fall_accel_speed(&mut self) {
         if self.action == 4 {
-            self.fall_y = (self.fall_y as i32 + 3).min(33) as i8;
+            // feather fall (0000:72BF): += 1 up to 4
+            let (acc, max) = if self.sh.feather > 0 { (1, 4) } else { (3, 33) };
+            self.fall_y = (self.fall_y as i32 + acc).min(max) as i8;
         }
         self.y = self.y.wrapping_add(self.fall_y as u8);
         if self.action == 4 {
@@ -495,10 +523,70 @@ impl Kid {
         }
         self.fall_accel_speed();
         self.refresh_snap(env);
+        self.check_guard_bumped(env);
         self.check_action(env);
         self.check_press(env);
         self.check_spike_below(env);
         self.check_spiked(env);
+        self.check_chomped_guard(env);
+    }
+
+    /// check_guard_bumped (0000:5C6B): an en-garde guard that stepped into a wall/doortop/gate is shoved out (seq 65).
+    fn check_guard_bumped(&mut self, env: &Env) {
+        if self.action != 1 || !self.alive || self.sword < 2 {
+            return;
+        }
+        let h = self.snap_box.height;
+        let blocks = |t: Tile, m: u8, wall: bool| (wall && t == Tile::Wall) || t == Tile::DoortopWithFloor || (t == Tile::Gate && gate_bumpable(m, h));
+        let (room, col, row) = norm(env.level, self.room as i32, self.snap_col, self.row);
+        let mut ot = (room, col, row);
+        if !blocks(tile_n(env.level, room, col, row), mod_n(env.level, room, col, row), true) {
+            if self.facing_left {
+                return;
+            }
+            ot = norm(env.level, room, col - 1, row); // the column to the left: a plain wall does not count there
+            if !blocks(tile_n(env.level, ot.0, ot.1, ot.2), mod_n(env.level, ot.0, ot.1, ot.2), false) {
+                return;
+            }
+        }
+        // is_obstacle always holds for these tiles: it only sets coll_tile_left_x
+        let t = tile_n(env.level, ot.0, ot.1, ot.2);
+        let ctlx = self.xpos_in_drawn_room(env, ot.0, X0 + COL_W * ot.1) + 7;
+        // dist_from_wall_behind (0000:5E23)
+        let wt = wall_type(t);
+        let b = self.snap_box;
+        let dx = if self.facing_left { WALL_DIST_FROM_LEFT[wt] + ctlx - b.right_coll } else { WALL_DIST_FROM_RIGHT[wt] + b.left_coll - ctlx - 13 };
+        if dx >= 0 || dx <= -13 {
+            return;
+        }
+        self.forward(-dx);
+        self.start_seq(env, 65);
+        self.play_seq(env);
+        self.load_fram_det_col(env);
+    }
+
+    /// check_chomped_guard (0000:5D31): the guard's own column, then the one to its right; no resurrect test.
+    fn check_chomped_guard(&mut self, env: &Env) {
+        let (room, col, row) = norm(env.level, self.room as i32, self.snap_col, self.row);
+        if !self.chomped_here(env, (room, col, row)) {
+            let next = norm(env.level, room, col + 1, row);
+            self.chomped_here(env, next);
+        }
+    }
+
+    /// check_chomped_here (0000:5D58)
+    fn chomped_here(&mut self, env: &Env, (room, col, row): (i32, i32, i32)) -> bool {
+        if tile_n(env.level, room, col, row) != Tile::Chomper || mod_n(env.level, room, col, row) & 0x7F != 2 {
+            return false;
+        }
+        self.ot = (room, col, row);
+        self.coll_tile_left_x = X0 + COL_W * col + 7; // no xpos_in_drawn_room correction here
+        let b = self.snap_box;
+        if self.obstacle_wall_x(env, true) >= b.right_coll || self.obstacle_wall_x(env, false) <= b.left_coll {
+            return false;
+        }
+        self.chomped(env, room, col, row);
+        true
     }
 
     /// take_hp (0000:73F9): sets the hit point delta; returns true if this kills.
@@ -860,15 +948,21 @@ impl Kid {
     }
 
     fn control_crouched(&mut self, env: &Env, c: &mut Ctrl) {
-        // pick up a sword lying under the kid (get_item, 0000:65AA): Shift while crouching
+        // pick up a sword or drink a potion under the kid (get_item, 0000:65AA): Shift while crouching
         if c.shift2 == -1 {
             let (col, row) = (self.col(env), self.row);
-            if self.tile(env, col, row) == Tile::Sword {
+            let item = match self.tile(env, col, row) {
+                Tile::Sword => Some((-1, 91)),
+                Tile::Potion => Some(((self.tile_mod(env, col, row) >> 5) as i8, 78)), // do_pickup(mod >> 5)
+                _ => None,
+            };
+            if let Some((kind, seq)) = item {
                 if let Some((room, tilepos)) = self.locate(env, col, row) {
                     self.events.push(Event::Pickup { room, tilepos });
                 }
+                self.pickup = kind;
                 c.shift2 = 1;
-                self.start_seq(env, 91);
+                self.start_seq(env, seq);
                 return;
             }
         }
@@ -878,6 +972,23 @@ impl Kid {
             c.fwd = 1;
             self.start_seq(env, 79);
         }
+    }
+
+    /// proc_get_object (0000:81AB), the kid's part: hit points and the sword (docs/edge_cases.md 5.1).
+    fn proc_get_object(&mut self) {
+        match self.pickup {
+            -1 => self.have_sword = true,
+            1 if self.hp == self.hp_max => return, // heal does nothing at full health
+            1 => self.hp_delta = 1,
+            2 => {
+                // add_life (0000:1217)
+                self.hp_max = (self.hp_max + 1).min(10);
+                self.hp_delta = self.hp_max - self.hp;
+            }
+            5 => self.hp_delta = if self.sh.level == 15 { -((self.hp_max + 1) >> 1) } else { -1 },
+            _ => {}
+        }
+        self.events.push(Event::GetObject(self.pickup));
     }
 
     // ---------------------------------------------------------------- sequences and physics
@@ -919,16 +1030,15 @@ impl Kid {
                         self.events.push(Event::Sound(id));
                     }
                 }
-                Op::Jmp(t) => {
-                    self.cur = env.exe.ops_from(t).unwrap_or_default();
-                    self.pc = 0;
+                Op::Jmp(t) => self.set_seq_ptr(env, (t, 0)),
+                Op::JmpIfFeather(t) => {
+                    if self.sh.feather > 0 {
+                        self.set_seq_ptr(env, (t, 0));
+                    }
                 }
-                // feather fall is never active; items and level end are not simulated yet
-                Op::GetItem(1) => {
-                    self.have_sword = true;
-                    self.events.push(Event::Sound(37));
-                }
-                Op::JmpIfFeather(_) | Op::GetItem(_) | Op::EndLevel | Op::Nop => {}
+                Op::GetItem(1) if self.charid == 0 => self.proc_get_object(),
+                // level end is not simulated yet
+                Op::GetItem(_) | Op::EndLevel | Op::Nop => {}
             }
         }
     }
@@ -1200,20 +1310,25 @@ impl Kid {
             if tile_n(env.level, room, c, r) != Tile::Chomper || mod_n(env.level, room, c, r) & 0x7F != 2 {
                 continue;
             }
-            if (1..=24).contains(&room) {
-                self.events.push(Event::Chomped { room: room as u8, tilepos: (r * 10 + c) as u8 });
-            }
-            if self.frame == 178 || room != self.room as i32 {
-                continue;
-            }
-            self.x = (X0 + COL_W * c + 7) as u8;
-            self.forward(7 - (!self.facing_left) as i32);
-            self.y = Y_LAND[(self.row + 1).clamp(0, 4) as usize] as u8;
-            self.take_hp(100);
-            self.events.push(Event::Sound(46));
-            self.start_seq(env, 54);
-            self.play_seq(env);
+            self.chomped(env, room, c, r);
         }
+    }
+
+    /// chomped (0000:5B67), shared by the kid and the guards
+    fn chomped(&mut self, env: &Env, room: i32, c: i32, r: i32) {
+        if (1..=24).contains(&room) {
+            self.events.push(Event::Chomped { room: room as u8, tilepos: (r * 10 + c) as u8 });
+        }
+        if self.frame == 178 || room != self.room as i32 {
+            return;
+        }
+        self.x = (X0 + COL_W * c + 7) as u8;
+        self.forward(7 - (!self.facing_left) as i32);
+        self.y = Y_LAND[(self.row + 1).clamp(0, 4) as usize] as u8;
+        self.take_hp(100);
+        self.events.push(Event::Sound(46));
+        self.start_seq(env, 54);
+        self.play_seq(env);
     }
 
     /// running_jump (0000:6963): decides where a running jump starts relative to a pit or spikes ahead.
@@ -1401,9 +1516,22 @@ impl Kid {
                 self.load_fram_det_col(env);
                 19
             }
-            150..=179 if self.charid >= 2 => {
-                // guards pushed off a ledge (INFERRED: 83 when moving forward, else 82)
-                if self.fall_x > 0 { 83 } else { 82 }
+            150..=179 if self.charid == 2 => {
+                // guards (not the skeleton or shadow), 0000:7698
+                if self.row == 3 && self.snap_col == 10 {
+                    self.sword = 0;
+                    self.clear = true; // clear_char, skips the rest of start_fall
+                    return;
+                }
+                if self.fall_x < 0 {
+                    if self.facing_left && self.dist_weight_snap() <= 7 {
+                        self.forward(-5);
+                    }
+                    82
+                } else {
+                    self.sh.droppedout = false;
+                    83
+                }
             }
             150..=179 => {
                 self.sh.droppedout = true;
@@ -1472,13 +1600,16 @@ impl Kid {
         }
         self.events.push(Event::StartChompers { room: self.room, row: self.row });
         let fy = self.fall_y;
-        let mut seq = if fy < 22 {
-            17
-        } else if fy < 33 {
-            if self.take_hp(1) { 22 } else { 20 }
-        } else {
+        // land (0000:5F48..6016): dead or fall_y >= 33 fatal; 22..33 fatal for guards (charid 2), short for the shadow
+        let mut seq = if !self.alive || fy >= 33 || (fy >= 22 && self.charid == 2) {
             self.take_hp(100);
             22
+        } else if fy < 22 || self.charid == 1 {
+            17
+        } else if self.take_hp(1) {
+            22
+        } else {
+            20
         };
         // fighters (guards, or a drawn sword) land in the en garde sequence (0000:5F85)
         if (self.charid >= 2 || self.sword == 2) && seq == 17 {
@@ -1545,5 +1676,11 @@ impl Kid {
         (self.x, self.y, self.row, self.facing_left, self.frame, self.action) = (x, y, row, facing_left, frame, action);
         (self.fall_x, self.fall_y) = fall;
         self.start_seq(env, seq);
+    }
+
+    /// (char_x_left_coll, char_x_right_coll) for the current frame and x
+    pub(crate) fn box_lr(&self, env: &Env) -> (i32, i32) {
+        let b = self.coll_box(env);
+        (b.left_coll, b.right_coll)
     }
 }

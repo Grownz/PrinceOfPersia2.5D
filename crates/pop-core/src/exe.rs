@@ -133,8 +133,13 @@ impl Exe {
         }
     }
 
+    /// Data-segment offset of sequence `n` (1-based).
+    pub fn seq_offset(&self, n: usize) -> Option<u16> {
+        self.sequence_offsets().get(n.checked_sub(1)?).copied()
+    }
+
     /// Sequence `n` (1-based).
     pub fn sequence(&self, n: usize) -> Option<Vec<Op>> {
-        self.ops_from(*self.sequence_offsets().get(n.checked_sub(1)?)?)
+        self.ops_from(self.seq_offset(n)?)
     }
 }

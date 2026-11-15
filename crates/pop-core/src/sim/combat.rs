@@ -15,8 +15,8 @@ pub struct GuardSlot {
     pub dir: u8,
     pub skill: u8,
     pub colour: u8,
-    /// a dead guard lies here: the sequence that shows it
-    pub dead: Option<usize>,
+    /// a dead guard lies here: (seq number, raw sequence pointer `Kid::seq_ptr`) saved by leave_guard
+    pub dead: Option<(usize, (u16, usize))>,
 }
 
 pub const NO_SLOT: GuardSlot = GuardSlot { tile: 0xFF, x: 0, dir: 0, skill: 0, colour: 0, dead: None };
@@ -24,8 +24,6 @@ pub const NO_SLOT: GuardSlot = GuardSlot { tile: 0xFF, x: 0, dir: 0, skill: 0, c
 /// State of the scripted shadows (docs/combat.md 7.1)
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ShadowState {
-    /// the level 12 shadow died: the kid dies with it on the next tick
-    pub killed: bool,
     pub demo_time: u8,
     pub demo_index: usize,
     pub initialized: bool,
@@ -42,34 +40,52 @@ pub fn mk_env<'a>(data: &'a Data, level: &'a Level, gtype: i8) -> Env<'a> {
 }
 
 /// The level-5 shadow's scripted moves (ds:0F16): (time, move)
-const SHADOW5_MOVES: [(u8, u8); 7] = [(0, 1), (14, 0), (18, 6), (29, 7), (45, 2), (49, 1), (255, 0)];
+const SHADOW5_MOVES: [(i16, i16); 8] = [(0, 0), (1, 1), (14, 0), (18, 6), (29, 7), (45, 2), (49, 1), (255, -2)];
+
+/// do_auto_moves (0000:4633): the index advances by at most one entry per call. Returns the move applied.
+fn do_auto_moves(table: &[(i16, i16)], st: &mut ShadowState, c: &mut Ctrl) -> i16 {
+    if st.demo_time >= 254 {
+        return -2;
+    }
+    st.demo_time += 1;
+    let i = if table[st.demo_index.min(table.len() - 1)].0 <= st.demo_time as i16 {
+        st.demo_index += 1;
+        st.demo_index - 1
+    } else {
+        st.demo_index.saturating_sub(1)
+    };
+    let m = table[i.min(table.len() - 1)].1;
+    match m {
+        0 => *c = Ctrl::default(),
+        1 => c.move_forward(),
+        2 => c.move_backward(),
+        3 => c.move_up(),
+        4 => c.move_down(),
+        5 => {
+            c.move_up();
+            c.move_forward();
+        }
+        6 => c.move_shift(),
+        7 => (c.shift, c.shift2) = (0, 0),
+        _ => {} // -1 sets a flag nothing reads; others do nothing
+    }
+    m
+}
 
 /// autocontrol_shadow (0000:3F11) for the levels 5, 6 and 12 (level 4's mirror shadow is not simulated).
 fn shadow_moves(g: &mut Kid, env: &Env, level_no: usize, st: &mut ShadowState, rng: &mut Rng) -> Ctrl {
     let mut c = Ctrl::default();
     match level_no {
         5 => {
+            // 0000:470E
             if g.room == 24 {
-                let gate = env.level.modifier_wrapped(24, 1, 0);
-                if st.demo_time != 0 || gate >= 80 {
-                    // do_auto_moves (0000:4633)
-                    if st.demo_time < 0xFE {
-                        st.demo_time += 1;
-                        let m = SHADOW5_MOVES.iter().take_while(|e| e.0 <= st.demo_time).last().map_or(0, |e| e.1);
-                        match m {
-                            1 => c.move_forward(),
-                            2 => c.move_backward(),
-                            3 => c.move_up(),
-                            4 => c.move_down(),
-                            5 => {
-                                c.move_up();
-                                c.move_forward();
-                            }
-                            6 => c.move_shift(),
-                            _ => {}
-                        }
+                if st.demo_time == 0 {
+                    if env.level.modifier_wrapped(24, 1, 0) < 80 {
+                        return c; // waits for the gate; x is not checked meanwhile
                     }
+                    st.demo_index = 0;
                 }
+                do_auto_moves(&SHADOW5_MOVES, st, &mut c);
                 if g.x < 15 {
                     st.clear = true;
                 }
@@ -149,16 +165,20 @@ impl World {
         let row = (slot.tile / 10) as i32;
         let skill = slot.skill;
         let hp = guard_hp(skill, self.level_no);
-        let (sword, seq) = if let Some(dead_seq) = slot.dead { (0, dead_seq) } else if charid == 4 { (2, 63) } else { (0, 77) };
+        let (sword, seq) = if slot.dead.is_some() { (0, 0) } else if charid == 4 { (2, 63) } else { (0, 77) };
         let mut g = self.new_fighter(charid, room, slot.x, row, slot.dir == 255, skill, hp, sword, seq);
-        if slot.dead.is_some() {
-            // a dead guard lies where it fell: play its sequence to the last frame
+        if let Some((seq, ptr)) = slot.dead {
+            // 0000:38D4: the saved pointer is restored as-is and played ONE step; the frame decides dead or alive
+            // (a body left mid-death comes back alive with full HP, docs/edge_cases.md 2.2)
             let env = self.guard_env();
-            for _ in 0..24 {
-                g.play_seq(&env);
+            g.seq = seq;
+            g.set_seq_ptr(&env, ptr);
+            g.play_seq(&env);
+            (g.action, g.fall_x, g.fall_y) = (1, 0, 0);
+            if matches!(g.frame, 185 | 177 | 178) {
+                g.alive = false;
+                g.hp = 0;
             }
-            g.alive = false;
-            g.hp = 0;
         }
         g.colour = slot.colour;
         self.shared.droppedout = false;
@@ -173,7 +193,7 @@ impl World {
             return;
         }
         if (1..=24).contains(&g.room) {
-            let dead = if g.alive { None } else { Some(match g.frame { 177 => 51, 178 => 54, _ => 71 }) };
+            let dead = if g.alive { None } else { Some((g.seq, g.seq_ptr())) };
             let colour = g.colour;
             self.slots[g.room as usize - 1] = GuardSlot { tile: 10 * g.row.clamp(0, 2) as u8, x: g.x, dir: if g.facing_left { 255 } else { 0 }, skill: g.skill, colour, dead };
         }
@@ -254,8 +274,7 @@ impl World {
         g.frame = frame;
         g.y = y;
         g.start_seq(&env, seq); // do_init_shad only sets the sequence pointer: the first frame comes next tick
-        self.shadow.demo_time = 0;
-        self.shadow.demo_index = 0;
+        self.shadow.demo_time = 0; // demo_index is reset by the level-5 autocontrol when the gate opens
         self.guard = Some(g);
     }
 
@@ -323,20 +342,17 @@ impl World {
         g.opp = Opp::of(&self.kid);
         g.sh = self.shared;
         let (mut killed, mut clear) = (false, false);
+        let level_no = self.level_no;
+        let opp = g.opp;
+        if super::check_killed_shadow(level_no, &mut g, &opp) {
+            self.flash = (15, 5); // the kid died: the level 12 shadow dies with him
+        }
         if g.alive && g.hp <= 0 {
             g.alive = false;
             killed = true;
         }
         if !g.alive && g.charid == 1 {
             clear = true;
-        }
-        let level_no = self.level_no;
-        if g.charid == 1 && level_no == 12 {
-            if clear {
-                self.shadow.killed = true; // the shadow died
-            } else if g.alive && !self.kid.alive {
-                g.take_hp(100); // ... and the kid's death takes the shadow with it
-            }
         }
         if !g.alive && g.charid != 1 {
             g.tick_timers();
@@ -364,7 +380,11 @@ impl World {
             } else {
                 g.autocontrol(&env, &mut self.rng)
             };
+            if self.shadow.unite {
+                self.kid.copy_char_from(&g); // savekid in the autocontrol: the kid takes over the shadow's record
+            }
             g.tick_input(&env, Input::Moves(moves));
+            clear |= std::mem::take(&mut g.clear);
         }
         self.shared = g.sh;
         let evs = std::mem::take(&mut g.events);
@@ -379,13 +399,16 @@ impl World {
             clear = true;
         }
         if self.shadow.unite {
-            // united with the shadow: a new heart, full health (add_life, 0000:1217)
+            // united with the shadow: a new heart, full health (add_life, 0000:1217), Char.charid = 0
             self.shadow.unite = false;
             self.kid.hp_max = (self.kid.hp_max + 1).min(10);
             self.kid.hp_delta = self.kid.hp_max - self.kid.hp;
             self.shadow.united = 42;
+            self.flash = (15, 18);
+            g.charid = 0;
             clear = true;
         }
+        self.guard_rec = Opp::of(&g); // saveshad: the record outlives clear_char
         if clear {
             return; // clear_char: the guard record is gone
         }
@@ -399,6 +422,7 @@ impl World {
         }
         if self.level_no == 13 {
             self.leveldoor_open = 2;
+            self.flash = (15, 18); // 0000:835A
             self.sounds.push(43);
         } else {
             self.sounds.push(37);
@@ -460,16 +484,11 @@ impl World {
         }
     }
 
-    /// do_delta_hp (0000:12A6) and check_killed_shadow (0000:84B1)
+    /// do_delta_hp (0000:12A6)
     pub(super) fn do_delta_hp(&mut self) {
         if let Some(g) = &mut self.guard {
-            if self.level_no == 12 && g.charid == 1 {
-                if g.hp_delta != 0 {
-                    self.kid.hp_delta = g.hp_delta; // damage to the shadow hurts the kid
-                }
-                if !g.alive && self.kid.alive {
-                    self.kid.take_hp(100); // killing the shadow kills the kid
-                }
+            if self.level_no == 12 && g.charid == 1 && g.hp_delta != 0 {
+                self.kid.hp_delta = g.hp_delta; // damage to the shadow hurts the kid (overwrites)
             }
             g.hp = (g.hp + g.hp_delta).clamp(0, g.hp_max);
         }
@@ -538,9 +557,10 @@ mod tests {
         World::new(data(), Level::parse(&b).unwrap(), level_no)
     }
 
+    /// n logic ticks (5 or 6 steps each)
     fn tick(w: &mut World, keys: Keys, n: usize) {
-        for _ in 0..n * 5 {
-            w.step(keys);
+        for _ in 0..n {
+            while !w.step(keys) {}
         }
     }
 
@@ -644,9 +664,7 @@ mod tests {
                 11..=14 => Keys { up: true, ..NONE },
                 _ => NONE,
             };
-            for _ in 0..5 {
-                w.step(keys);
-            }
+            tick(&mut w, keys, 1);
             w.sounds.retain(|&s| s != 0);
             hurt |= w.sounds.iter().any(|&s| s == 12 || s == 13);
             w.sounds.clear();
@@ -691,6 +709,274 @@ mod tests {
         w.shadow.united = 3;
         tick(&mut w, NONE, 5);
         assert_eq!(w.shadow.united, -1);
+    }
+
+    // ------------------------------------------------------------ docs/edge_cases.md test vectors
+
+    #[test]
+    fn frame_length_is_six_steps_while_the_sword_is_drawn() {
+        let mut w = world(2, 7, 1);
+        tick(&mut w, NONE, 40);
+        assert_eq!(w.kid.sword, 2);
+        let mut steps = 0;
+        for _ in 0..30 {
+            let s = w.kid.sword;
+            let mut n = 1;
+            while !w.step(NONE) {
+                n += 1;
+            }
+            assert_eq!(n, if s == 2 { 6 } else { 5 });
+            steps += n;
+        }
+        assert_eq!(steps, 180, "30 ticks with the sword drawn = 180 steps at 60 Hz");
+        w.step(NONE);
+        assert!((w.alpha() - 1.0 / 6.0).abs() < 1e-6);
+    }
+
+    /// The level-1 guard of `world` put en garde (frame 171 loop of seq 63) at (x, row 1).
+    fn en_garde(w: &World, x: u8, left: bool) -> Kid {
+        let env = w.guard_env();
+        let mut g = w.guard.clone().unwrap();
+        g.force(&env, x, 118, 1, left, 171, 1, 63, (0, 0));
+        for _ in 0..3 {
+            g.play_seq(&env);
+        }
+        g.sword = 2;
+        g.sh.drawn_room = g.room;
+        g.sh.can_see = 0;
+        g
+    }
+
+    fn gtick(w: &World, g: &mut Kid) {
+        let env = w.guard_env();
+        g.tick_input(&env, Input::Moves(Ctrl::default()));
+    }
+
+    /// First x for which the guard (after the next play_seq) stands in `col` and `ok(left_coll, right_coll, kid)` holds.
+    fn find_x(w: &World, mk: impl Fn(u8) -> Kid, col: i32, ok: impl Fn(i32, i32, &Kid) -> bool) -> Kid {
+        let env = w.guard_env();
+        (40u8..220)
+            .map(&mk)
+            .find(|g| {
+                let mut p = g.clone();
+                p.play_seq(&env);
+                let (l, r) = p.box_lr(&env);
+                p.col(&env) == col && ok(l, r, &p)
+            })
+            .expect("no x found")
+    }
+
+    /// A guard retreating (seq 57) on f160: the next play_seq shows f157 (the box of en garde f171 cannot reach a
+    /// doortop behind it when facing right).
+    fn retreating(w: &World, x: u8, left: bool) -> Kid {
+        let env = w.guard_env();
+        let mut g = en_garde(w, x, left);
+        g.start_seq(&env, 57);
+        g.play_seq(&env);
+        g
+    }
+
+    #[test]
+    fn guard_bumped_vectors_1_1() {
+        // A: facing left, own column 3 is a wall: dist = 0 + 107 - right_coll, shoved forward by |dist|, seq 65
+        let mut w = world(2, 7, 1);
+        w.set_tile(1, 13, Tile::Wall);
+        let mut g = find_x(&w, |x| en_garde(&w, x, true), 3, |_, r, _| (-12..0).contains(&(107 - r)));
+        let x0 = g.x as i32;
+        let r = {
+            let env = w.guard_env();
+            let mut p = g.clone();
+            p.play_seq(&env);
+            p.box_lr(&env).1
+        };
+        gtick(&w, &mut g);
+        assert_eq!((g.seq, g.frame, g.x as i32), (65, 160, x0 + (107 - r)));
+        // E: sword sheathed: nothing
+        let mut g = find_x(&w, |x| en_garde(&w, x, true), 3, |_, r, _| (-12..0).contains(&(107 - r)));
+        g.sword = 0;
+        gtick(&w, &mut g);
+        assert_ne!(g.seq, 65);
+
+        // B: facing right, own column 3 floor, column 2 doortop: dist = 0 + left_coll - 93 - 13
+        let mut w = world(2, 7, 1);
+        w.set_tile(1, 12, Tile::DoortopWithFloor);
+        let mut g = find_x(&w, |x| retreating(&w, x, false), 3, |l, _, _| (-12..0).contains(&(l - 93 - 13)));
+        let (x0, l) = {
+            let env = w.guard_env();
+            let mut p = g.clone();
+            p.play_seq(&env);
+            (p.x as i32, p.box_lr(&env).0)
+        };
+        gtick(&w, &mut g);
+        assert_eq!((g.seq, g.x as i32), (65, x0 - (l - 106)));
+
+        // C: same, but column 2 is a plain wall: walls count only in the own column
+        let mut w = world(2, 7, 1);
+        w.set_tile(1, 12, Tile::Wall);
+        let mut g = find_x(&w, |x| retreating(&w, x, false), 3, |l, _, _| (-12..0).contains(&(l - 93 - 13)));
+        gtick(&w, &mut g);
+        assert_eq!((g.seq, g.frame), (57, 157), "no bump");
+    }
+
+    #[test]
+    fn guard_chomped_vector_1_2() {
+        let mut w = world(2, 7, 1);
+        w.set_tile(1, 14, Tile::Chomper);
+        w.set_mod(1, 14, 2);
+        for (left, want_x) in [(false, 127), (true, 114)] {
+            let fresh = |x: u8| {
+                let env = w.guard_env();
+                let mut g = w.guard.clone().unwrap();
+                g.force(&env, x, 118, 1, left, 166, 1, 77, (0, 0));
+                g.sh.drawn_room = g.room;
+                g
+            };
+            let mut g = find_x(&w, fresh, 4, |l, r, _| 120 < r && 121 > l);
+            gtick(&w, &mut g);
+            assert_eq!((g.x, g.y, g.seq, g.frame, g.hp_delta), (want_x, 118, 54, 178, -g.hp));
+            assert!(g.events.contains(&Event::Sound(46)));
+            assert!(g.events.contains(&Event::Chomped { room: 1, tilepos: 14 }));
+        }
+    }
+
+    #[test]
+    fn guard_falls_off_a_ledge_1_3() {
+        // backing off (fall_x -1): seq 82; one row down, landing en garde (seq 63) with fall_y 21
+        let mut w = world(2, 7, 1);
+        let mut g = en_garde(&w, 130, true);
+        g.fall_x = -1;
+        let col = {
+            let env = w.guard_env();
+            let mut p = g.clone();
+            p.play_seq(&env);
+            p.col(&env)
+        };
+        w.set_tile(1, 10 + col as u8, Tile::Empty);
+        let mut trace = vec![];
+        for _ in 0..6 {
+            gtick(&w, &mut g);
+            trace.push((g.frame, g.y));
+        }
+        assert_eq!(trace, [(102, 117), (103, 123), (104, 132), (105, 144), (106, 162), (158, 181)]);
+        assert_eq!((g.seq, g.sword, g.row, g.fall_y), (63, 2, 2, 0));
+
+        // fall_x 0 (never moved): seq 83 and droppedout cleared; the skeleton takes the kid's branch (81, droppedout set)
+        for (charid, fx, seq, dropped) in [(2, 0, 83, false), (4, -1, 81, true)] {
+            let mut g = en_garde(&w, 130, true);
+            (g.charid, g.fall_x, g.sh.droppedout) = (charid, fx, !dropped);
+            gtick(&w, &mut g);
+            assert_eq!((g.seq, g.sh.droppedout, g.sword), (seq, dropped, 0));
+        }
+    }
+
+    #[test]
+    fn guard_landing_from_two_rows_is_fatal() {
+        let w = world(2, 7, 1);
+        for (charid, seq, dhp) in [(2, 22, -3), (4, 20, -1)] {
+            let env = w.guard_env();
+            let mut g = w.guard.clone().unwrap();
+            g.force(&env, 120, 100, 1, false, 106, 4, 12, (0, 27));
+            (g.charid, g.sh.drawn_room) = (charid, g.room);
+            gtick(&w, &mut g);
+            assert_eq!((g.seq, g.hp_delta), (seq, dhp), "charid {charid}: fall_y 30 lands");
+        }
+    }
+
+    #[test]
+    fn death_placement_vectors_1_4() {
+        // guard facing left, killed en garde in column 5; behind = column 6
+        for (own, behind, dist9, want_dx, want_seq) in
+            [(Tile::Floor, Tile::Gate, false, None, 85), (Tile::Gate, Tile::Floor, false, Some(125), 85), (Tile::Floor, Tile::Floor, false, Some(-1), 85), (Tile::Floor, Tile::Empty, true, Some(-2), 81)]
+        {
+            let mut w = world(2, 7, 1);
+            w.set_tile(1, 15, own);
+            w.set_tile(1, 16, behind);
+            let mut g = find_x(&w, |x| en_garde(&w, x, true), 5, |_, _, p| {
+                let env = w.guard_env();
+                let d = (p.foot_x(&env) - 65).rem_euclid(14);
+                if dist9 { d == 9 } else { d >= 4 }
+            });
+            let env = w.guard_env();
+            g.play_seq(&env);
+            let (x0, row0) = (g.x as i32, g.row);
+            g.hp = 1;
+            g.hurt_by_sword(&env);
+            let want_x = match want_dx {
+                None => 139,
+                Some(-1) => x0,
+                Some(-2) => x0 + 11,
+                Some(x) => x,
+            };
+            assert_eq!((g.x as i32, g.seq), (want_x, want_seq), "own {own:?} behind {behind:?}");
+            assert_eq!(g.row, if want_seq == 81 { row0 + 1 } else { row0 });
+        }
+    }
+
+    #[test]
+    fn dead_guards_come_back_on_their_resting_frame() {
+        // (seq, plays, frame): resting pointers 0x20CF, 0x20DA, 0x20E2, 0x20BA; one play_seq after re-entry shows the frame
+        for (seq, plays, frame) in [(71, 10, 185), (51, 6, 177), (54, 5, 178), (22, 8, 185)] {
+            let mut w = world(2, 7, 1);
+            {
+                let env = mk_env(&w.data, &w.level, w.guard_type);
+                let g = w.guard.as_mut().unwrap();
+                g.start_seq(&env, seq);
+                for _ in 0..plays {
+                    g.play_seq(&env);
+                }
+                (g.alive, g.hp, g.x, g.row) = (false, 0, 150, 1);
+                assert_eq!(g.frame, frame);
+            }
+            w.kid.room = 2;
+            w.guard_after_room_change(1);
+            assert!(w.guard.is_none() && w.slots[0].dead.is_some());
+            assert_eq!((w.slots[0].tile, w.slots[0].x), (10, 150));
+            w.kid.room = 1;
+            w.enter_guard(1);
+            let g = w.guard.as_ref().unwrap();
+            assert_eq!((g.frame, g.alive, g.x, g.seq), (frame, false, 150, seq), "seq {seq}");
+        }
+        // left mid-death (seq 71 on f180): back alive with full HP, the animation continues
+        let mut w = world(2, 7, 1);
+        {
+            let env = mk_env(&w.data, &w.level, w.guard_type);
+            let g = w.guard.as_mut().unwrap();
+            g.start_seq(&env, 71);
+            g.play_seq(&env);
+            g.play_seq(&env);
+            (g.alive, g.hp) = (false, 0);
+        }
+        w.kid.room = 2;
+        w.guard_after_room_change(1);
+        w.kid.room = 1;
+        w.enter_guard(1);
+        let g = w.guard.as_ref().unwrap();
+        assert_eq!((g.frame, g.alive, g.hp), (181, true, 3));
+    }
+
+    #[test]
+    fn check_killed_shadow_rule() {
+        let mut k = Kid::default();
+        (k.alive, k.hp) = (true, 3);
+        let dead_shadow = Opp { charid: 1, alive: false, ..Opp::default() };
+        assert!(!super::super::check_killed_shadow(11, &mut k, &dead_shadow));
+        assert!(!super::super::check_killed_shadow(12, &mut k, &Opp { alive: true, ..dead_shadow }));
+        assert!(!super::super::check_killed_shadow(12, &mut k, &Opp { charid: 2, ..dead_shadow }));
+        assert!(super::super::check_killed_shadow(12, &mut k, &dead_shadow));
+        assert_eq!(k.hp_delta, -3);
+    }
+
+    #[test]
+    fn level5_shadow_auto_moves_5_4() {
+        let mut st = ShadowState::default();
+        let moves: Vec<i16> = (0..60).map(|_| do_auto_moves(&SHADOW5_MOVES, &mut st, &mut Ctrl::default())).collect();
+        let want = |a: usize, b: usize, m: i16| moves[a - 1..b].iter().all(|&x| x == m);
+        assert_eq!(moves[0], 0);
+        assert!(want(2, 13, 1) && want(14, 17, 0) && want(18, 28, 6) && want(29, 44, 7) && want(45, 48, 2) && want(49, 60, 1), "{moves:?}");
+        for _ in 0..300 {
+            do_auto_moves(&SHADOW5_MOVES, &mut st, &mut Ctrl::default());
+        }
+        assert_eq!(st.demo_time, 254);
     }
 
     #[test]
