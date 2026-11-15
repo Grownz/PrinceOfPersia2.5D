@@ -7,6 +7,8 @@
 //! POP_LEVEL / POP_ROOM skip the title; POP_CUTSCENE=<level>|end|timeout|intro plays that cutscene at once (then quits
 //! back into the normal flow); POP_SOUND=original uses the game's own sounds; POP_DATA = game data folder;
 //! POP_PERF=1 logs the average frame time (vsync off) and room rebuilds every 300 frames.
+//! POP_RENDER / POP_CHARS override settings.json "render_mode" / "character_style"; F6 toggles sprite / voxel characters,
+//! F7 (debug text on, or POP_DEBUG_CAM=1) a closer, turned camera on the kid.
 mod audio;
 mod cutscene;
 mod flow;
@@ -14,6 +16,7 @@ mod kid;
 mod room;
 mod settings;
 mod synth;
+mod voxel;
 
 use bevy::prelude::*;
 use bevy::window::{MonitorSelection, PresentMode, PrimaryWindow, WindowMode};
@@ -129,6 +132,7 @@ fn main() {
     let playing = || in_state(flow::Screen::Playing);
 
     let perf = std::env::var("POP_PERF").is_ok();
+    let (render_mode, char_style) = set.render();
     let window = Window {
         title: "Prince of Persia x64".into(),
         resolution: (set.width.max(320), set.height.max(200)).into(),
@@ -142,6 +146,8 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }).set(bevy::log::LogPlugin { custom_layer: log_file_layer, ..default() }))
         .insert_resource(set.key_map())
+        .insert_resource(render_mode)
+        .insert_resource(char_style)
         .insert_resource(set)
         .add_plugins(audio::plugin)
         .insert_resource(ClearColor(BACKGROUND))
@@ -152,7 +158,7 @@ fn main() {
         .init_resource::<flow::Flow>()
         .insert_state(if skip_title { flow::Screen::Playing } else { flow::Screen::Title })
         .insert_resource(cutscene::Cut::load(&dir))
-        .add_systems(Startup, ((setup, cutscene::setup, debug_cutscene).chain(), kid::setup, flow::setup)) // first room is built by room::rebuild_on_change
+        .add_systems(Startup, ((setup, cutscene::setup, debug_cutscene).chain(), kid::setup, flow::setup, probe_gpu)) // first room is built by room::rebuild_on_change
         .add_systems(OnEnter(flow::Screen::Title), audio::enter_title)
         .add_systems(OnEnter(flow::Screen::Cutscene), audio::enter_cutscene)
         .add_systems(OnEnter(flow::Screen::Paused), audio::pause)
@@ -179,9 +185,11 @@ fn main() {
                 kid::render,
                 flash,
                 cutscene::render,
+                debug_camera,
                 flow::overlay,
                 debug_text,
                 fullscreen,
+                char_style_key,
                 perf_log.run_if(move || perf),
                 screenshot_and_quit,
             )
@@ -211,6 +219,40 @@ fn fullscreen(k: Res<ButtonInput<KeyCode>>, mut win: Single<&mut Window, With<Pr
     win.mode = if to_full { WindowMode::BorderlessFullscreen(MonitorSelection::Current) } else { WindowMode::Windowed };
     set.window = if to_full { "borderless" } else { "windowed" }.into();
     set.save();
+}
+
+/// F6: sprite <-> voxel characters, remembered in settings.json. (Render modes cycle here once more than classic exists.)
+fn char_style_key(k: Res<ButtonInput<KeyCode>>, mut style: ResMut<settings::CharacterStyle>, mut set: ResMut<Settings>) {
+    use settings::CharacterStyle::*;
+    if !k.just_pressed(KeyCode::F6) {
+        return;
+    }
+    *style = if *style == Sprite { Voxel } else { Sprite };
+    set.character_style = if *style == Voxel { "voxel" } else { "sprite" }.into();
+    set.save();
+    info!("character style: {}", set.character_style);
+}
+
+/// R1 capability probe: log the adapter and whether it could do ray queries. Nothing is requested from the device here
+/// (asking for an unsupported feature would fail startup); the classic renderer runs whatever the answer.
+fn probe_gpu(info: Option<Res<bevy::render::renderer::RenderAdapterInfo>>, adapter: Option<Res<bevy::render::renderer::RenderAdapter>>, mode: Res<settings::RenderMode>) {
+    let Some(info) = info else {
+        warn!("no render adapter info; renderer {:?}", *mode);
+        return;
+    };
+    let rq = adapter.is_some_and(|a| a.features().contains(bevy::render::settings::WgpuFeatures::EXPERIMENTAL_RAY_QUERY));
+    info!("GPU: {} ({:?}, {:?}, driver {}), ray queries: {}; renderer {:?}", info.name, info.backend, info.device_type, info.driver, if rq { "exposed by the adapter (not enabled)" } else { "no" }, *mode);
+}
+
+/// F7 with the debug text on (or POP_DEBUG_CAM=1): a closer camera, turned 35 degrees around the kid, to inspect voxel depth.
+fn debug_camera(k: Res<ButtonInput<KeyCode>>, g: Res<Game>, state: Res<State<flow::Screen>>, mut on: Local<Option<bool>>, kid: Query<&Transform, (With<kid::KidSprite>, Without<Camera3d>)>, mut cam: Query<&mut Transform, With<Camera3d>>) {
+    let on = on.get_or_insert_with(|| std::env::var("POP_DEBUG_CAM").is_ok());
+    *on ^= g.debug && k.just_pressed(KeyCode::F7);
+    let (true, Ok(kt), flow::Screen::Playing | flow::Screen::Paused) = (*on, kid.single(), state.get()) else { return };
+    let target = kt.translation.with_z(0.6) + Vec3::Y * 0.6;
+    for mut t in &mut cam {
+        *t = Transform::from_translation(target + Quat::from_rotation_y(0.6) * Vec3::new(0.0, 1.0, 4.0)).looking_at(target, Vec3::Y);
+    }
 }
 
 /// POP_PERF=1: average frame time and room rebuilds per 300 frames.
@@ -339,7 +381,7 @@ fn debug_text(g: Res<Game>, mut q: Query<&mut Text, With<DebugText>>) {
     let [left, right, up, down] = l.links[g.room - 1];
     for mut t in &mut q {
         t.0 = format!(
-            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}  kid: seq {} frame {} action {} x {} y {} room {} row {} fall {} hp {}/{} sword {}{}\narrows+Shift kid  Ctrl+arrows room  Ctrl+PgUp/PgDn level  , . sequence viewer  Space restart  F flip  C control  F3 text",
+            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}  kid: seq {} frame {} action {} x {} y {} room {} row {} fall {} hp {}/{} sword {}{}\narrows+Shift kid  Ctrl+arrows room  Ctrl+PgUp/PgDn level  , . sequence viewer  Space restart  F flip  C control  F3 text  F6 sprite/voxel  F7 camera",
             g.level, g.room, left, right, up, down, l.start_room, l.start_tile, g.world.tick, g.world.kid.seq, g.world.kid.frame, g.world.kid.action, g.world.kid.x, g.world.kid.y, g.world.kid.room, g.world.kid.row, g.world.kid.fall_y, g.world.kid.hp, g.world.kid.hp_max, g.world.kid.sword,
             g.world.guard.as_ref().map_or(String::new(), |gd| format!("   guard: seq {} frame {} x {} hp {}/{} sword {} skill {} see {}", gd.seq, gd.frame, gd.x, gd.hp, gd.hp_max, gd.sword, gd.skill, g.world.shared.can_see))
         );
