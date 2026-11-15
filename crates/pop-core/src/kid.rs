@@ -4,6 +4,9 @@
 use crate::exe::{Exe, Frame, Op};
 use crate::level::{Level, Tile};
 
+mod combat;
+pub use combat::{guard_hp, Opp, Rng, Shared, REFRACTIMER};
+
 /// y of the floor of row -1..=3 (`ds:22B0`); a kid standing on row r has y = Y_LAND[r + 1].
 pub const Y_LAND: [i32; 5] = [-8, 55, 118, 181, 244];
 /// x of the left edge of column 0, and column width.
@@ -37,6 +40,8 @@ pub enum Event {
     StartChompers { room: u8, row: i32 },
     /// sound id (docs/tiles.md section 9; sequence sound ops are mapped to ids)
     Sound(u8),
+    /// the sword on this tile was picked up: it becomes floor
+    Pickup { room: u8, tilepos: u8 },
 }
 
 /// Everything the kid needs to look at besides itself.
@@ -46,25 +51,65 @@ pub struct Env<'a> {
     pub level: &'a Level,
     /// (height, width) in pixels of KID.DAT image `i` (resource 401 + i), see `image::image_sizes`
     pub sizes: &'a [(u16, u16)],
+    /// guard frame table (frames 150..190) and sizes of the guard-type images (chtab 5) of this level
+    pub gframes: &'a [Frame],
+    pub gsizes: &'a [(u16, u16)],
+}
+
+const NO_FRAME: Frame = Frame { image: 255, sword: 0, dx: 0, dy: 0, flags: 0 };
+
+impl<'a> Env<'a> {
+    /// Environment without guard tables (kid only).
+    pub fn new(exe: &'a Exe, frames: &'a [Frame], level: &'a Level, sizes: &'a [(u16, u16)]) -> Env<'a> {
+        Env { exe, frames, level, sizes, gframes: &[], gsizes: &[] }
+    }
+
+    /// load_frame (0000:6E96): the frame table depends on the character id (docs/combat.md 0).
+    pub fn frame_of(&self, charid: u8, frame: u8) -> Frame {
+        let f = frame as usize;
+        let kid = |i: usize| self.frames.get(i).copied().unwrap_or(NO_FRAME);
+        let guard = |i: usize| i.checked_sub(150).and_then(|j| self.gframes.get(j)).copied();
+        match charid {
+            1 => guard(f).unwrap_or_else(|| kid(f)),
+            2 | 4 => {
+                let f2 = if (102..=106).contains(&f) { f + 70 } else { f };
+                guard(f2).unwrap_or_else(|| kid(f2))
+            }
+            _ => kid(f),
+        }
+    }
+
+    /// Image size (height, width): chtab = 2 + (sword >> 6); 5 = guard-type images, otherwise the kid images.
+    pub fn size_of(&self, f: &Frame) -> (u16, u16) {
+        let t = if f.sword >> 6 == 3 { self.gsizes } else { self.sizes };
+        t.get(f.image as usize).copied().unwrap_or((0, 0))
+    }
 }
 
 /// Control state as seen inside `control()`: x is already flipped so that -1 = forward.
 /// Flags: -1 held (fires), 0 released, 1 consumed (stays until the key is let go).
-#[derive(Clone, Copy, Default)]
-struct Ctrl {
-    x: i8,
-    y: i8,
-    shift: i8,
-    fwd: i8,
-    bwd: i8,
-    up: i8,
-    down: i8,
-    shift2: i8,
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Ctrl {
+    pub x: i8,
+    pub y: i8,
+    pub shift: i8,
+    pub fwd: i8,
+    pub bwd: i8,
+    pub up: i8,
+    pub down: i8,
+    pub shift2: i8,
+}
+
+/// What drives a character this tick: the keyboard (kid) or the control flags set by the AI (guards, shadow).
+#[derive(Clone, Copy, Debug)]
+pub enum Input {
+    Keys(Keys),
+    Moves(Ctrl),
 }
 
 impl Ctrl {
     /// `release_arrows` (0000:7B48): clears the four flags and returns 1, which the caller stores in the flag it just used.
-    fn release_arrows(&mut self) -> i8 {
+    pub(crate) fn release_arrows(&mut self) -> i8 {
         self.fwd = 0;
         self.bwd = 0;
         self.up = 0;
@@ -96,6 +141,23 @@ impl Default for CollData {
 #[derive(Clone, Debug, Default)]
 pub struct Kid {
     // original Char fields
+    /// 0 kid, 1 shadow, 2 guard (also fat guard and Jaffar), 4 skeleton
+    pub charid: u8,
+    /// 2 = sword drawn
+    pub sword: u8,
+    pub skill: u8,
+    pub hp_max: i32,
+    /// set by take_hp, applied once per tick by the world (do_delta_hp)
+    pub hp_delta: i32,
+    /// guard timers (docs/combat.md 3.4)
+    pub refrac: u8,
+    pub justblocked: u8,
+    pub have_sword: bool,
+    /// the other fighter and the state shared between them, copied in by the world before each tick
+    pub opp: Opp,
+    pub sh: Shared,
+    /// direction of the last room change (0 left, 1 right, 2 up, 3 down), consumed by the world
+    pub leave_dir: Option<u8>,
     pub x: u8,
     pub y: u8,
     pub facing_left: bool,
@@ -144,7 +206,7 @@ fn floor_div(a: i32, b: i32) -> i32 {
 }
 
 /// get_tile normalisation (0000:6D99): out-of-range columns/rows move into the neighbour room; room 0 stays 0.
-fn norm(level: &Level, mut room: i32, mut col: i32, mut row: i32) -> (i32, i32, i32) {
+pub(crate) fn norm(level: &Level, mut room: i32, mut col: i32, mut row: i32) -> (i32, i32, i32) {
     for _ in 0..8 {
         let l = if (1..=24).contains(&room) { level.links[room as usize - 1] } else { [0; 4] };
         if col < 0 {
@@ -167,7 +229,7 @@ fn norm(level: &Level, mut room: i32, mut col: i32, mut row: i32) -> (i32, i32, 
 }
 
 /// Tile at a normalised position; room 0 (outside the level) reads as a wall.
-fn tile_n(level: &Level, room: i32, col: i32, row: i32) -> Tile {
+pub(crate) fn tile_n(level: &Level, room: i32, col: i32, row: i32) -> Tile {
     if (1..=24).contains(&room) { level.tile_at(room as usize, (row * 10 + col) as usize).kind } else { Tile::Wall }
 }
 
@@ -181,7 +243,7 @@ fn gate_bumpable(modifier: u8, height: i32) -> bool {
 }
 
 /// tile_is_floor (0000:7364)
-fn is_floor(t: Tile) -> bool {
+pub(crate) fn is_floor(t: Tile) -> bool {
     use Tile::*;
     !matches!(t, Empty | BigPillarTop | Doortop | Wall | LatticePillar | LatticeSupport | SmallLattice | LatticeLeft)
 }
@@ -239,6 +301,7 @@ impl Kid {
             row,
             alive: true,
             hp: 3,
+            hp_max: 3,
             controlled: true,
             bump_left: -1,
             bump_right: -1,
@@ -259,7 +322,7 @@ impl Kid {
     }
 
     fn frame_rec(&self, env: &Env) -> Frame {
-        env.frames.get(self.frame as usize).copied().unwrap_or(Frame { image: 255, sword: 0, dx: 0, dy: 0, flags: 0 })
+        env.frame_of(self.charid, self.frame)
     }
 
     /// char_dx_forward-style move: x += dir * d
@@ -299,7 +362,7 @@ impl Kid {
     /// Collision box from the image size (7.4): obj_x as in the drawing rule, half = (w+1)/2.
     fn coll_box(&self, env: &Env) -> CollBox {
         let f = self.frame_rec(env);
-        let (h, w) = env.sizes.get(f.image as usize).copied().unwrap_or((0, 0));
+        let (h, w) = env.size_of(&f);
         let dir_byte: u8 = if self.facing_left { 0xFF } else { 0 };
         let dxs = if self.facing_left { -(f.dx as i32) } else { f.dx as i32 };
         let obj_x = 2 * (self.x as i32 + dxs) - 116 + (((f.flags ^ dir_byte) & 0x80) == 0) as i32;
@@ -365,28 +428,35 @@ impl Kid {
     /// One logic tick: control (before the sequence step, same tick), play_seq, gravity, collisions, floor checks,
     /// then the room-change test (0000:0ED4 order, docs/mechanics.md 3.1 and 10).
     pub fn tick(&mut self, env: &Env, keys: Keys) {
+        self.tick_input(env, Input::Keys(keys));
+    }
+
+    pub fn tick_input(&mut self, env: &Env, input: Input) {
         if self.room == 0 {
             return; // outside the level: the original skips the tick
         }
-        if self.controlled && self.alive {
+        if self.charid != 0 {
+            self.guard_tick(env, input);
+            return;
+        }
+        if self.controlled {
             self.grab_timer = (self.grab_timer - 1).max(0);
-            self.shift = keys.shift;
-            self.control_kid(env, keys);
+            if let Input::Keys(k) = input {
+                self.shift = k.shift;
+            }
+            // control_kid (0000:7A19): hit points at 0 end the life (docs/combat.md 6)
+            if self.alive && self.hp <= 0 {
+                self.alive = false;
+            }
+            self.control_input(env, input);
         }
         self.play_seq(env);
         if !self.controlled {
             return;
         }
-        // fall_accel
-        if self.action == 4 {
-            self.fall_y = (self.fall_y as i32 + 3).min(33) as i8;
-        }
-        // fall_speed (every tick)
-        self.y = self.y.wrapping_add(self.fall_y as u8);
-        if self.action == 4 {
-            self.forward(self.fall_x as i32);
-        }
+        self.fall_accel_speed();
         self.refresh_snap(env); // 0000:0F25..0F2F: load_frame_to_obj, load_fram_det_col, set_char_collision
+        self.bump_into_opponent(env);
         self.check_collisions(env);
         self.check_bumped(env);
         self.check_gate_push(env);
@@ -399,7 +469,56 @@ impl Kid {
         self.check_room_change(env);
     }
 
-    fn control_kid(&mut self, env: &Env, k: Keys) {
+    /// fall_accel (0000:72B8) and fall_speed (0000:72EA)
+    fn fall_accel_speed(&mut self) {
+        if self.action == 4 {
+            self.fall_y = (self.fall_y as i32 + 3).min(33) as i8;
+        }
+        self.y = self.y.wrapping_add(self.fall_y as u8);
+        if self.action == 4 {
+            self.forward(self.fall_x as i32);
+        }
+    }
+
+    /// play_guard_frame (0000:0F73) for a guard, skeleton or shadow: control, sequence step and, if the character is
+    /// in the drawn room and inside the visible x range, physics and floor checks.
+    fn guard_tick(&mut self, env: &Env, input: Input) {
+        let Input::Moves(mut c) = input else { return };
+        self.control(env, &mut c);
+        if self.room != self.sh.drawn_room {
+            return; // a guard in another room thinks but does not move
+        }
+        self.play_seq(env);
+        if !(44..211).contains(&self.x) {
+            return;
+        }
+        self.fall_accel_speed();
+        self.refresh_snap(env);
+        self.check_action(env);
+        self.check_press(env);
+        self.check_spike_below(env);
+        self.check_spiked(env);
+    }
+
+    /// take_hp (0000:73F9): sets the hit point delta; returns true if this kills.
+    pub fn take_hp(&mut self, n: i32) -> bool {
+        if n >= self.hp {
+            self.hp_delta = -self.hp;
+            true
+        } else {
+            self.hp_delta = -n;
+            false
+        }
+    }
+
+    fn control_input(&mut self, env: &Env, input: Input) {
+        let k = match input {
+            Input::Moves(mut c) => {
+                self.control(env, &mut c);
+                return;
+            }
+            Input::Keys(k) => k,
+        };
         let raw_x: i8 = if k.left { -1 } else if k.right { 1 } else { 0 };
         let raw_y: i8 = if k.up { -1 } else if k.down { 1 } else { 0 };
         let shift: i8 = if k.shift { -1 } else { 0 };
@@ -424,9 +543,24 @@ impl Kid {
     }
 
     /// control() dispatcher (0000:607B), alive kid without sword.
-    fn control(&mut self, env: &Env, c: &mut Ctrl) {
+    pub(crate) fn control(&mut self, env: &Env, c: &mut Ctrl) {
+        if !self.alive {
+            // dead and standing: the dying sequence
+            if matches!(self.frame, 15 | 166 | 158 | 171) {
+                self.start_seq(env, 71);
+            }
+            return;
+        }
         if self.action == 5 || self.action == 4 {
             c.release_arrows();
+            return;
+        }
+        if self.sword == 2 {
+            self.control_with_sword(env, c);
+            return;
+        }
+        if self.charid >= 2 {
+            self.control_guard_inactive(env, c);
             return;
         }
         match self.frame {
@@ -454,6 +588,27 @@ impl Kid {
     }
 
     fn control_standing(&mut self, env: &Env, c: &mut Ctrl) {
+        // the kid draws his sword by himself when a reachable guard is close (docs/combat.md 4.1)
+        if self.charid == 0 && self.have_sword && !(self.sh.offguard && c.shift >= 0) {
+            if self.sh.can_see >= 2 {
+                let d = self.opp_dist();
+                if (-10..90).contains(&d) {
+                    self.sh.holding_sword = true;
+                    let busy = self.opp.charid == 1 && (self.opp.action == 3 || (107..=117).contains(&self.opp.frame));
+                    if busy {
+                        self.sh.offguard = false;
+                    } else if (-6..0).contains(&d) {
+                        self.back_pressed(env, c);
+                        return;
+                    } else {
+                        self.draw_sword(env, c);
+                        return;
+                    }
+                }
+            } else {
+                self.sh.offguard = false;
+            }
+        }
         if c.shift < 0 {
             if c.bwd == -1 {
                 self.back_pressed(env, c);
@@ -490,6 +645,11 @@ impl Kid {
 
     fn back_pressed(&mut self, env: &Env, c: &mut Ctrl) {
         c.bwd = c.release_arrows();
+        if self.have_sword && self.sh.can_see >= 2 && self.opp_dist() <= 0 && self.dist_weight(env) >= 2 {
+            self.sword = 2;
+            self.start_seq(env, 89); // turn and draw
+            return;
+        }
         self.start_seq(env, 5);
     }
 
@@ -694,6 +854,18 @@ impl Kid {
     }
 
     fn control_crouched(&mut self, env: &Env, c: &mut Ctrl) {
+        // pick up a sword lying under the kid (get_item, 0000:65AA): Shift while crouching
+        if c.shift2 == -1 {
+            let (col, row) = (self.col(env), self.row);
+            if self.tile(env, col, row) == Tile::Sword {
+                if let Some((room, tilepos)) = self.locate(env, col, row) {
+                    self.events.push(Event::Pickup { room, tilepos });
+                }
+                c.shift2 = 1;
+                self.start_seq(env, 91);
+                return;
+            }
+        }
         if c.y != 1 {
             self.start_seq(env, 49);
         } else if c.fwd == -1 {
@@ -705,7 +877,7 @@ impl Kid {
     // ---------------------------------------------------------------- sequences and physics
 
     /// play_seq (0000:6F90): run ops until the next frame (exactly one frame per tick).
-    fn play_seq(&mut self, env: &Env) {
+    pub(crate) fn play_seq(&mut self, env: &Env) {
         for _ in 0..256 {
             let Some(&op) = self.cur.get(self.pc) else { return };
             self.pc += 1;
@@ -743,6 +915,10 @@ impl Kid {
                     self.pc = 0;
                 }
                 // feather fall is never active; items and level end are not simulated yet
+                Op::GetItem(1) => {
+                    self.have_sword = true;
+                    self.events.push(Event::Sound(37));
+                }
                 Op::JmpIfFeather(_) | Op::GetItem(_) | Op::EndLevel | Op::Nop => {}
             }
         }
@@ -1022,8 +1198,7 @@ impl Kid {
             self.x = (X0 + COL_W * c + 7) as u8;
             self.forward(7 - (!self.facing_left) as i32);
             self.y = Y_LAND[(self.row + 1).clamp(0, 4) as usize] as u8;
-            self.hp = 0;
-            self.alive = false;
+            self.take_hp(100);
             self.events.push(Event::Sound(46));
             self.start_seq(env, 54);
             self.play_seq(env);
@@ -1157,8 +1332,7 @@ impl Kid {
         self.forward(8);
         self.fall_y = 0;
         self.events.push(Event::Sound(48));
-        self.hp = 0;
-        self.alive = false;
+        self.take_hp(100);
         self.start_seq(env, 51);
         self.play_seq(env);
     }
@@ -1216,8 +1390,20 @@ impl Kid {
                 self.load_fram_det_col(env);
                 19
             }
-            _ => 7, // frames 150..179 (sword) are not simulated
+            150..=179 if self.charid >= 2 => {
+                // guards pushed off a ledge (INFERRED: 83 when moving forward, else 82)
+                if self.fall_x > 0 { 83 } else { 82 }
+            }
+            150..=179 => {
+                self.sh.droppedout = true;
+                if self.facing_left && self.dist_weight_snap() <= 7 {
+                    self.forward(-5);
+                }
+                81
+            }
+            _ => 7,
         };
+        self.sword = 0;
         self.start_seq(env, seq);
         self.play_seq(env);
         self.load_fram_det_col(env);
@@ -1275,16 +1461,18 @@ impl Kid {
         }
         self.events.push(Event::StartChompers { room: self.room, row: self.row });
         let fy = self.fall_y;
-        let seq = if fy < 22 {
+        let mut seq = if fy < 22 {
             17
         } else if fy < 33 {
-            self.hp -= 1;
-            if self.hp <= 0 { self.alive = false; 22 } else { 20 }
+            if self.take_hp(1) { 22 } else { 20 }
         } else {
-            self.hp = 0;
-            self.alive = false;
+            self.take_hp(100);
             22
         };
+        // fighters (guards, or a drawn sword) land in the en garde sequence (0000:5F85)
+        if (self.charid != 0 || self.sword == 2) && seq != 22 {
+            seq = 63;
+        }
         self.start_seq(env, seq);
         self.play_seq(env);
         self.fall_y = 0;
@@ -1316,6 +1504,7 @@ impl Kid {
         };
         let Some(dir) = dir else { return };
         let links = &env.level.links[(self.room as usize).wrapping_sub(1).min(23)];
+        self.leave_dir = Some(dir as u8);
         self.room = links[dir];
         match dir {
             0 => self.x = (self.x as i32 + 140) as u8,

@@ -148,7 +148,7 @@ mod tests {
             Rig { exe, frames, level, sizes }
         }
         fn env(&self) -> super::kid::Env<'_> {
-            super::kid::Env { exe: &self.exe, frames: &self.frames, level: &self.level, sizes: &self.sizes }
+            super::kid::Env::new(&self.exe, &self.frames, &self.level, &self.sizes)
         }
     }
     use super::kid::{Keys, Kid};
@@ -317,7 +317,7 @@ mod start_tests {
         let sizes = super::image::image_sizes(&Dat::open(format!("{d}KID.DAT")).unwrap(), 401, 220);
         let lv = Dat::open(format!("{d}LEVELS.DAT")).unwrap();
         let level = Level::parse(lv.get(2001).unwrap()).unwrap();
-        let env = Env { exe: &exe, frames: &frames, level: &level, sizes: &sizes };
+        let env = Env::new(&exe, &frames, &level, &sizes);
         let mut k = Kid::spawn(&env, 1);
         assert_eq!((k.seq, k.room, k.facing_left), (7, 1, false)); // level 1: seq 7, facing right
         let none = Keys::default();
