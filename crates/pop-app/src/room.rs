@@ -55,8 +55,13 @@ struct B<'a, 'w, 's> {
 impl B<'_, '_, '_> {
     /// Box from `lo` to `hi` (corner coordinates).
     fn put(&mut self, mat: &Handle<StandardMaterial>, lo: Vec3, hi: Vec3) {
+        self.put_id(mat, lo, hi);
+    }
+
+    fn put_id(&mut self, mat: &Handle<StandardMaterial>, lo: Vec3, hi: Vec3) -> Entity {
         let e = self.cmds.spawn((Mesh3d(self.p.cube.clone()), MeshMaterial3d(mat.clone()), Transform::from_translation(self.origin + (lo + hi) / 2.0).with_scale(hi - lo))).id();
         self.tag(e);
+        e
     }
 
     fn tag(&mut self, e: Entity) {
@@ -202,7 +207,9 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef) {
         Torch | TorchDebris => {
             floor(b, &stone);
             let top = Vec3::new(x + 0.5, y + TILE_H * 0.65, -0.8);
-            b.put(&p.flame, top - Vec3::new(0.06, 0.0, 0.06), top + Vec3::new(0.06, 0.25, 0.06));
+            let flame = b.put_id(&p.flame, top - Vec3::new(0.06, 0.0, 0.06), top + Vec3::new(0.06, 0.25, 0.06));
+            // the flame sits next to its own light: it must not shadow it (only matters for enhanced-mode shadow maps)
+            b.cmds.entity(flame).insert(bevy::light::NotShadowCaster);
             let e = b.cmds.spawn((torch_light(), Transform::from_translation(b.origin + top + Vec3::new(0.0, 0.3, 0.6)))).id();
             b.tag(e);
         }

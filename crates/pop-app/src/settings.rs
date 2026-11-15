@@ -18,20 +18,26 @@ pub struct Settings {
     pub keys: Bindings,
     /// folder with the user's own game files (LEVELS.DAT, PRINCE.EXE, ...); tried after POP_DATA, exe dir and cwd
     pub data_path: Option<String>,
-    /// "classic" (today's renderer), "enhanced" or "rt_experimental" (reserved: accepted, run as classic with a log line
-    /// until implemented); POP_RENDER overrides
+    /// "classic" (the original look), "enhanced" (shadows, SSAO, bloom) or "rt_experimental" (reserved: accepted, run as
+    /// classic with a log line until implemented); POP_RENDER overrides, F5 toggles classic / enhanced
     pub render_mode: String,
     /// "sprite" (the original images on quads) or "voxel" (built from them at runtime); POP_CHARS overrides, F6 toggles
     pub character_style: String,
+    /// enhanced mode only: "off", "low" (2 torch shadows, small maps) or "high" (4 torch shadows)
+    pub shadow_quality: String,
+    /// enhanced mode only: screen-space ambient occlusion (turns MSAA off and uses SMAA instead)
+    pub ssao: bool,
 }
 
 pub const RENDER_MODES: [&str; 3] = ["classic", "enhanced", "rt_experimental"];
 pub const CHARACTER_STYLES: [&str; 2] = ["sprite", "voxel"];
+pub const SHADOW_QUALITIES: [&str; 3] = ["off", "low", "high"];
 
-/// The renderer actually used. Only `Classic` exists so far; the other `render_mode` values fall back to it.
+/// The renderer actually used; `rt_experimental` falls back to `Classic`.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderMode {
     Classic,
+    Enhanced,
 }
 
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,12 +49,18 @@ pub enum CharacterStyle {
 /// The effective (mode, style) from the settings values and the env overrides (`env` = POP_RENDER, POP_CHARS); unknown
 /// values and modes that are not implemented yet fall back with a log line.
 pub fn resolve_render(mode: &str, style: &str, env_mode: Option<&str>, env_style: Option<&str>) -> (RenderMode, CharacterStyle) {
-    let mode = env_mode.unwrap_or(mode);
-    match mode {
-        "classic" => {}
-        m if RENDER_MODES.contains(&m) => info!("render mode {m:?} is not implemented yet; using classic"),
-        m => warn!("unknown render mode {m:?}; using classic"),
-    }
+    let mode = match env_mode.unwrap_or(mode) {
+        "classic" => RenderMode::Classic,
+        "enhanced" => RenderMode::Enhanced,
+        m if RENDER_MODES.contains(&m) => {
+            info!("render mode {m:?} is not implemented yet; using classic");
+            RenderMode::Classic
+        }
+        m => {
+            warn!("unknown render mode {m:?}; using classic");
+            RenderMode::Classic
+        }
+    };
     let style = match env_style.unwrap_or(style) {
         "voxel" => CharacterStyle::Voxel,
         "sprite" => CharacterStyle::Sprite,
@@ -57,7 +69,7 @@ pub fn resolve_render(mode: &str, style: &str, env_mode: Option<&str>, env_style
             CharacterStyle::Sprite
         }
     };
-    (RenderMode::Classic, style)
+    (mode, style)
 }
 
 /// Bevy `KeyCode` names per kid key, e.g. "ArrowLeft", "KeyA", "ShiftLeft".
@@ -80,7 +92,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into() }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true }
     }
 }
 
@@ -115,6 +127,8 @@ impl Settings {
             data_path: field(&o, "data_path", d.data_path, |_| true),
             render_mode: field(&o, "render_mode", d.render_mode, |m| RENDER_MODES.contains(&m.as_str())),
             character_style: field(&o, "character_style", d.character_style, |s| CHARACTER_STYLES.contains(&s.as_str())),
+            shadow_quality: field(&o, "shadow_quality", d.shadow_quality, |s| SHADOW_QUALITIES.contains(&s.as_str())),
+            ssao: field(&o, "ssao", d.ssao, |_| true),
         }
     }
 
@@ -259,12 +273,26 @@ mod tests {
         use super::{CharacterStyle::*, RenderMode::*};
         assert_eq!(resolve_render("classic", "sprite", None, None), (Classic, Sprite));
         assert_eq!(resolve_render("classic", "voxel", None, None), (Classic, Voxel));
-        // reserved modes are accepted but run classic until implemented
-        assert_eq!(resolve_render("enhanced", "sprite", None, None).0, Classic);
+        assert_eq!(resolve_render("enhanced", "sprite", None, None).0, Enhanced);
+        // the reserved RT mode is accepted but runs classic until implemented
         assert_eq!(resolve_render("rt_experimental", "sprite", None, None).0, Classic);
         // env wins over the file; bad env values fall back instead of failing
         assert_eq!(resolve_render("classic", "sprite", Some("rt_experimental"), Some("voxel")), (Classic, Voxel));
-        assert_eq!(resolve_render("classic", "voxel", Some("nonsense"), Some("cubes")), (Classic, Sprite));
+        assert_eq!(resolve_render("classic", "sprite", Some("enhanced"), None), (Enhanced, Sprite));
+        assert_eq!(resolve_render("enhanced", "voxel", Some("nonsense"), Some("cubes")), (Classic, Sprite));
+    }
+
+    #[test]
+    fn enhanced_quality_settings_parse_and_fall_back() {
+        let d = Settings::default();
+        assert_eq!((d.shadow_quality.as_str(), d.ssao), ("high", true));
+        let s = Settings::parse(r#"{"render_mode": "enhanced", "shadow_quality": "low", "ssao": false}"#);
+        assert_eq!((s.render_mode.as_str(), s.shadow_quality.as_str(), s.ssao), ("enhanced", "low", false));
+        assert_eq!(Settings::parse(&s.to_json()), s);
+        // a file from before R2 (no quality keys) and bad values both give the defaults, per field
+        assert_eq!(Settings::parse(r#"{"render_mode": "enhanced"}"#).shadow_quality, "high");
+        let s = Settings::parse(r#"{"shadow_quality": "ultra", "ssao": "yes", "volume": 0.5}"#);
+        assert_eq!((s.shadow_quality, s.ssao, s.volume), (d.shadow_quality, d.ssao, 0.5));
     }
 
     #[test]

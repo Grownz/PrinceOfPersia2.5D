@@ -34,12 +34,13 @@ Environment variables: `POP_DATA` (data folder), `POP_LEVEL` / `POP_ROOM` (skip 
 ## Controls
 
 Arrow keys + Shift; Esc/P pause; Ctrl+A restart; Ctrl+G save; Ctrl+L load; M mute; - / = volume; F11 fullscreen;
-F3 debug; F6 sprite / voxel characters. Controllers: d-pad/left stick, A = Shift, Start = pause, Back = restart. Full list and key rebinding:
+F3 debug; F5 classic / enhanced rendering; F6 sprite / voxel characters. Controllers: d-pad/left stick, A = Shift, Start = pause, Back = restart. Full list and key rebinding:
 [docs/controls.md](docs/controls.md).
 
-Settings (window mode and size, volume, mute, sound mode, key bindings, data path, `render_mode`, `character_style`) live
-in `settings.json` next to the exe, created on the first run. `render_mode`: `classic` (default; `enhanced` and
-`rt_experimental` are reserved and fall back to classic for now), env `POP_RENDER`. `character_style`: `sprite` (default)
+Settings (window mode and size, volume, mute, sound mode, key bindings, data path, `render_mode`, `character_style`,
+`shadow_quality`, `ssao`) live in `settings.json` next to the exe, created on the first run. `render_mode`: `classic`
+(default) or `enhanced` (torch and sun shadows, ambient occlusion, bloom; any GPU; F5; `shadow_quality` `off|low|high` and
+`ssao` `true|false` tune it), `rt_experimental` is reserved and falls back to classic; env `POP_RENDER`. `character_style`: `sprite` (default)
 or `voxel` (3D voxel figures built at runtime from your own sprite files, nothing is written to disk), env `POP_CHARS`, F6.
 
 ## Package

@@ -18,6 +18,7 @@
 | - / = (numpad - / +) | Master volume down / up (10 % steps) |
 | F11 | Windowed / borderless fullscreen |
 | F3 | Debug text and debug keys |
+| F5 | Rendering: classic / enhanced (torch and sun shadows, SSAO, bloom; saved as `render_mode`) |
 | F6 | Characters: original sprites / voxel figures built from them (saved as `character_style`) |
 
 The keypad is fixed like the original (its key handler `0000:1533` reads scancodes 0x47..0x50): keypad 1, 3 and 0 (End, PgDn, Ins)
@@ -62,13 +63,19 @@ Created next to the exe on the first run; unknown keys are ignored, missing ones
   "keys": { "left": ["ArrowLeft"], "right": ["ArrowRight"], "up": ["ArrowUp"], "down": ["ArrowDown"], "shift": ["ShiftLeft", "ShiftRight"] },
   "data_path": null,
   "render_mode": "classic",
-  "character_style": "sprite"
+  "character_style": "sprite",
+  "shadow_quality": "high",
+  "ssao": true
 }
 ```
 
 `window`: `windowed` or `borderless` (F11 saves it). `sound`: `synth` (generated effects) or `original` (the game's own
 sounds; the environment variable `POP_SOUND=original` overrides). Volume, mute and F11 are saved when changed.
-`render_mode`: `classic` (default); `enhanced` and `rt_experimental` are reserved names, accepted but run as `classic`
-with a log line until implemented (`POP_RENDER` overrides). `character_style`: `sprite` (default) or `voxel` (F6 toggles
+`render_mode`: `classic` (default, the original look), `enhanced` (shadow maps from the nearest torches and a soft sun
+light, screen-space ambient occlusion, bloom on the flames, a brighter fill light; any GPU, F5 toggles and saves it) or
+`rt_experimental` (reserved, accepted but run as `classic` with a log line); `POP_RENDER` overrides. Enhanced only:
+`shadow_quality` `off`, `low` (2 torch shadows, small maps) or `high` (default, 4 torch shadows), `ssao` `true` (default;
+turns MSAA off and uses SMAA) or `false`. If enhanced averages too slow a frame time after its warm-up (over 12 ms, at
+least 1.25 refresh periods, window focused), it falls back to classic for the session with a log line (not saved). `character_style`: `sprite` (default) or `voxel` (F6 toggles
 and saves it, `POP_CHARS` overrides). Unknown values fall back to the default; the log names the GPU, the backend and
 whether the adapter offers ray queries.

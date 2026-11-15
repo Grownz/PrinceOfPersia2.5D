@@ -1,6 +1,6 @@
 # Render roadmap: ray-tracing mode (A) and voxel characters (B)
 
-Status: R1 and V1 implemented (see section 9); the rest is plan. Written 2026-11-15 against Bevy 0.20.1 (released 2026-10-08) and wgpu 30.
+Status: R1, R2, V1 and V2 implemented (see section 9); the rest is plan. Written 2026-11-15 against Bevy 0.20.1 (released 2026-10-08) and wgpu 30.
 Effort sizes assume one developer who knows this codebase and Bevy: S = up to 1 person-week (pw), M = 2-4 pw, L = 4-8 pw,
 XL = more than 8 pw. Risk = chance that the estimate or the result is badly off.
 
@@ -240,7 +240,7 @@ Where sources were thin: DX12 ray-query support in wgpu, Solari's handling of al
 like ours. These are left as spike questions (R3) rather than stated as facts. The 0.20.1 API docs on docs.rs did not build,
 so crate details come from the tagged source.
 
-## 9. Status of R1, V1 and V2 (2026-11-15)
+## 9. Status of R1, R2, V1 and V2 (2026-11-15)
 
 **R1 done (minus the `rt` Cargo feature, which waits for the R3 spike).** `settings.json` keys `render_mode`
 (`classic` default, `enhanced` / `rt_experimental` accepted and run as classic with a log line) and `character_style`
@@ -251,6 +251,52 @@ device, so startup cannot fail on it (RTX 3090 / Vulkan: "exposed by the adapter
 saves it; no render-mode key yet (only classic exists). Classic is pixel-identical to the build before R1: `POP_SHOT`
 diff = 0 pixels against a HEAD build on level 1 start, level 2 room 1 (torches) and the level-2 cutscene (the cutscene
 itself differs between two runs of the same build, timing).
+
+**R2 done: `render_mode = "enhanced"`** (`enhanced.rs`; F5 toggles classic / enhanced at runtime and saves it, `POP_RENDER=enhanced`).
+Classic stays the default and adds nothing at startup: `POP_SHOT` diff against the build before R2 = 0 pixels on level 1
+start, level 2 room 1 and level 3 start, sprite and voxel style (a first run differed by 12 / 1 pixels; the repeat and the
+base build against itself gave 0, i.e. run-to-run timing, not the change). New settings, parsed per field like the rest:
+`shadow_quality` `off|low|high` (default high) and `ssao` (default true). What enhanced turns on (all Bevy 0.20.1, checked in
+the registry source):
+
+- **Torch shadows** (point-light cube maps): only the 4 torches nearest the view (2 on low) cast shadows, re-picked every
+  frame; the rest stay shadowless (6 passes per shadowed light). The flame boxes and the cutscene flame sprites are
+  `NotShadowCaster` (the earlier attempt's flames shadowed their own light). In enhanced the light moves from z -0.2 to
+  -0.6, 0.3 in front of the back wall's face: at -0.2 the exit/door boxes next to the torches stood beside the light and threw
+  big shadows over the wall glow. Biases: depth 0.2, normal 2.5 (defaults 0.08 / 0.6 still hatched the voxel creases;
+  1.2 still left diagonal hatching in the robe fold and a checker at the feet, 2.5 removed it with no visible peter-panning).
+  Torch intensity x1.4 in enhanced (shadows and the wall-near position take light away). Maps 1024 (512 low); filter
+  Gaussian (Hardware2x2 on low: harder, jagged edges). The original has no torch flicker and none was added.
+- **Sun shadows**: the existing fill `DirectionalLight` casts shadows (one cascade, 1-30 units, map 2048 / 1024 low, normal
+  bias 2.5 against blotches on stacked wall boxes), illuminance 4000 -> 3300. This is where the clear character shadows
+  come from: characters stand at z 0.6, in front of the floor slabs (front edge z 0.5), so torch shadows (lights behind
+  them) fall into the void; the sun, from the front-left above, puts the kid's/guards' shadows on the back wall and doors
+  and a soft patch on the floor at the feet.
+- **SSAO** (`ScreenSpaceAmbientOcclusion`, Medium): requires depth + normal prepass and does nothing with MSAA on (Bevy logs
+  an error and skips it), so with SSAO the camera gets `Msaa::Off` + SMAA (High). TAA rejected: needs motion vectors and
+  ghosts on sprites that change image at 12 Hz. SSAO is skipped (logged) where the adapter has fewer than 5 storage
+  textures per shader stage (Bevy disables its plugin there). Unlit sprite quads ignore it (SSAO only scales the lit
+  ambient term); no halo around sprites was visible.
+- **Bloom** (`Bloom::NATURAL`, intensity 0.12) with `Hdr`: only the emissive flame boxes (8, 3, 0.5) glow. Tonemapping stays
+  Bevy's default TonyMcMapface, which classic already uses, so colours stay close.
+- **Ambient**: (0.78, 0.76, 0.86) at 220 instead of the blue (0.6, 0.65, 0.9) at 150, so voxel faces turned away from the
+  torches no longer sink into blue-black. No extra rim light needed.
+- **Dropped**: contact shadows (`ContactShadows` exists in 0.20.1 but the sun shadow already grounds the figures and the
+  torch side cannot help, see above), volumetric/distance fog (no benefit in these closed rooms), TAA (above).
+- **Fallback**: after a 600-frame warm-up, a 300-frame window averaging over max(12 ms, 1.25 refresh periods of the slowest
+  monitor), counted only while the window is focused, switches to classic for the session (logged, not saved, fires once).
+  The refresh floor came from testing: Windows throttled the unfocused test window to exactly 16.67 ms even with vsync off,
+  and a plain 12 ms rule fell back on it. Startup logs which features were enabled.
+
+Screenshots reviewed (scratchpad, enhanced vs classic, both character styles): level 1 start, level 2 room 1 (torch room),
+demo-level guard fight, cutscene 2, plus a debug-camera view of the voxel kid. No striping or acne after the bias change,
+no black rooms (enhanced is somewhat darker away from the torches and in sun-shadowed wall bands; the slab fronts are a bit
+darker than classic), soft kid/guard shadows on wall and doors, torch halos tighter but brighter and still the warm focus.
+Weak spots: kid/guard wall shadows are low-contrast on the dark back-wall material; slight light blotches on the side faces
+of stacked wall boxes. Perf (release, RTX 3090 / Vulkan, demo level, `POP_PERF=1`, 1280x720): classic ~1.9-2.4 ms/frame,
+enhanced ~2.6 ms/frame steady (voxel; first windows 6.8-7.8 ms while pipelines compile); after some seconds every run was
+capped at 16.67 ms by the window being in the background, so longer runs could not be measured. The 4 ms acceptance target
+is met on this GPU; a mid-range GPU is not measured.
 
 **V1 done for all in-game characters** (kid, shadow, guard with colour palettes and palace/dungeon palettes, fat guard,
 skeleton, vizier, both swords; cutscene actors still sprites, see V2). `voxel.rs`: `VoxelModel { w, h, d, voxels }`
@@ -279,7 +325,7 @@ to the "Prince of Persia Voxelized" reference, without cracks or floating parts.
 
 Shadows: tried shadow maps on the torch point lights in voxel style. Not kept: the torch/flame boxes sit at the light
 and shadow it, the lights are at the character plane (z 0.6), the room got much darker and the voxel steps showed
-self-shadow stripes. Needs NotShadowCaster on torch meshes, light placement and bias tuning: belongs to R2.
+self-shadow stripes. Needs NotShadowCaster on torch meshes, light placement and bias tuning: belongs to R2 (done there, see above).
 
 **V2 done: better volume, all characters, cutscene actors.** The V1 profile (2k + 1 voxels, k = 4-neighbour edge
 distance) looked like a thick cut-out from the side. `voxel.rs` now builds a *union of balls*: every pixel is a ball of
