@@ -38,6 +38,8 @@ pub struct Shared {
     /// the kid fell with his sword drawn: the guard follows
     pub droppedout: bool,
     pub notice_timer: u8,
+    /// guard_refrac (0000:436E): no advance or strike while it runs (set after a hit, or 9 when the kid sheathes)
+    pub refrac: u8,
     pub level: usize,
     /// the room the kid is in (= drawn room)
     pub drawn_room: u8,
@@ -149,8 +151,8 @@ impl Kid {
         if self.sh.kid_sword_strike > 0 {
             self.sh.kid_sword_strike -= 1;
         }
-        if self.refrac > 0 {
-            self.refrac -= 1;
+        if self.sh.refrac > 0 {
+            self.sh.refrac -= 1;
         }
     }
 
@@ -241,7 +243,7 @@ impl Kid {
             } else {
                 self.kid_in_sight(rng, c, d);
             }
-        } else if self.refrac == 0 {
+        } else if self.sh.refrac == 0 {
             let strike_window = ((7..=14).contains(&of) && d < 40) || ((34..=43).contains(&of) && d < 50);
             let in_ranges = (7..=14).contains(&of) || (34..=43).contains(&of);
             if self.facing_each_other() && strike_window {
@@ -258,7 +260,7 @@ impl Kid {
     fn kid_in_sight(&mut self, rng: &mut Rng, c: &mut Ctrl, d: i32) {
         if self.opp.sword == 2 {
             self.kid_armed(rng, c, d);
-        } else if self.refrac == 0 {
+        } else if self.sh.refrac == 0 {
             if d < 29 { c.move_shift() } else { c.move_forward() }
         }
     }
@@ -269,7 +271,7 @@ impl Kid {
             self.guard_advance(rng, c);
         } else {
             self.guard_block(rng, c);
-            if self.refrac == 0 {
+            if self.sh.refrac == 0 {
                 if d < 12 || d >= 29 {
                     self.guard_advance(rng, c);
                 } else {
@@ -420,22 +422,23 @@ impl Kid {
                 return;
             }
         }
-        if c.down == -1 && matches!(self.frame, 158 | 170 | 171) {
-            c.down = 1;
-            self.sword = 0;
-            if self.charid == 0 {
-                self.sh.offguard = true;
-                self.refrac = 9;
-                self.sh.holding_sword = false;
-                self.start_seq(env, 93); // fast sheathe
-            } else if self.charid == 1 {
-                self.start_seq(env, 92);
-            } else {
-                self.start_seq(env, 87);
+        if c.down == -1 {
+            // down held: sheathe from the en garde frames, otherwise nothing (no parry or step)
+            if matches!(self.frame, 158 | 170 | 171) {
+                c.down = 1;
+                self.sword = 0;
+                if self.charid == 0 {
+                    self.sh.offguard = true;
+                    self.sh.refrac = 9;
+                    self.sh.holding_sword = false;
+                    self.start_seq(env, 93); // fast sheathe
+                } else if self.charid == 1 {
+                    self.start_seq(env, 92);
+                } else {
+                    self.start_seq(env, 87);
+                }
             }
-            return;
-        }
-        if c.up == -1 {
+        } else if c.up == -1 {
             self.parry(env, c);
         } else if c.fwd == -1 {
             self.forward_with_sword(env, c);
