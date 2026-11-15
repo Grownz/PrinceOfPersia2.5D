@@ -7,10 +7,12 @@
 //! POP_LEVEL / POP_ROOM skip the title; POP_CUTSCENE=<level>|end|timeout|intro plays that cutscene at once (then quits
 //! back into the normal flow); POP_SOUND=original uses the game's own sounds; POP_DATA = game data folder;
 //! POP_PERF=1 logs the average frame time (vsync off) and room rebuilds every 300 frames.
-//! POP_RENDER / POP_CHARS override settings.json "render_mode" / "character_style"; F6 toggles sprite / voxel characters,
+//! POP_RENDER / POP_CHARS override settings.json "render_mode" / "character_style"; F5 toggles classic / enhanced rendering,
+//! F6 sprite / voxel characters,
 //! F7 (debug text on, or POP_DEBUG_CAM=1) a closer, turned camera on the kid (POP_CAM_ANGLE="degrees[,distance]").
 mod audio;
 mod cutscene;
+mod enhanced;
 mod flow;
 mod kid;
 mod room;
@@ -190,6 +192,7 @@ fn main() {
                 debug_text,
                 fullscreen,
                 char_style_key,
+                (enhanced::mode_key, enhanced::watchdog, enhanced::apply, enhanced::torch_shadows).chain(),
                 perf_log.run_if(move || perf),
                 screenshot_and_quit,
             )
@@ -221,7 +224,7 @@ fn fullscreen(k: Res<ButtonInput<KeyCode>>, mut win: Single<&mut Window, With<Pr
     set.save();
 }
 
-/// F6: sprite <-> voxel characters, remembered in settings.json. (Render modes cycle here once more than classic exists.)
+/// F6: sprite <-> voxel characters, remembered in settings.json.
 fn char_style_key(k: Res<ButtonInput<KeyCode>>, mut style: ResMut<settings::CharacterStyle>, mut set: ResMut<Settings>) {
     use settings::CharacterStyle::*;
     if !k.just_pressed(KeyCode::F6) {
@@ -277,9 +280,9 @@ fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<
     cmds.spawn((
         Camera3d::default(),
         game_camera(16.0 / 9.0),
-        AmbientLight { color: Color::srgb(0.6, 0.65, 0.9), brightness: 150.0, ..default() },
+        enhanced::classic_ambient(),
     ));
-    cmds.spawn((DirectionalLight { illuminance: 4000.0, ..default() }, Transform::from_xyz(-4.0, 9.0, 10.0).looking_at(centre, Vec3::Y)));
+    cmds.spawn((DirectionalLight { illuminance: enhanced::CLASSIC_SUN, ..default() }, Transform::from_xyz(-4.0, 9.0, 10.0).looking_at(centre, Vec3::Y)));
     cmds.spawn((
         Text::new(""),
         Node { position_type: PositionType::Absolute, left: Val::Px(8.0), top: Val::Px(8.0), ..default() },
@@ -386,7 +389,7 @@ fn debug_text(g: Res<Game>, mut q: Query<&mut Text, With<DebugText>>) {
     let [left, right, up, down] = l.links[g.room - 1];
     for mut t in &mut q {
         t.0 = format!(
-            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}  kid: seq {} frame {} action {} x {} y {} room {} row {} fall {} hp {}/{} sword {}{}\narrows+Shift kid  Ctrl+arrows room  Ctrl+PgUp/PgDn level  , . sequence viewer  Space restart  F flip  C control  F3 text  F6 sprite/voxel  F7 camera",
+            "level {}  room {}  (L{} R{} U{} D{})  start room {} tile {}\ntick {}  kid: seq {} frame {} action {} x {} y {} room {} row {} fall {} hp {}/{} sword {}{}\narrows+Shift kid  Ctrl+arrows room  Ctrl+PgUp/PgDn level  , . sequence viewer  Space restart  F flip  C control  F3 text  F5 classic/enhanced  F6 sprite/voxel  F7 camera",
             g.level, g.room, left, right, up, down, l.start_room, l.start_tile, g.world.tick, g.world.kid.seq, g.world.kid.frame, g.world.kid.action, g.world.kid.x, g.world.kid.y, g.world.kid.room, g.world.kid.row, g.world.kid.fall_y, g.world.kid.hp, g.world.kid.hp_max, g.world.kid.sword,
             g.world.guard.as_ref().map_or(String::new(), |gd| format!("   guard: seq {} frame {} x {} hp {}/{} sword {} skill {} see {}", gd.seq, gd.frame, gd.x, gd.hp, gd.hp_max, gd.sword, gd.skill, g.world.shared.can_see))
         );
