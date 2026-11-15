@@ -1,4 +1,5 @@
-//! settings.json next to the exe: window mode and size, volume, mute, sound mode, kid key bindings, data path.
+//! settings.json next to the exe: window mode and size, volume, mute, sound mode, kid key bindings, data path, render mode,
+//! character style.
 //! Unknown keys are ignored and missing ones take their defaults, so older and newer files both load.
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,46 @@ pub struct Settings {
     pub keys: Bindings,
     /// folder with the user's own game files (LEVELS.DAT, PRINCE.EXE, ...); tried after POP_DATA, exe dir and cwd
     pub data_path: Option<String>,
+    /// "classic" (today's renderer), "enhanced" or "rt_experimental" (reserved: accepted, run as classic with a log line
+    /// until implemented); POP_RENDER overrides
+    pub render_mode: String,
+    /// "sprite" (the original images on quads) or "voxel" (built from them at runtime); POP_CHARS overrides, F6 toggles
+    pub character_style: String,
+}
+
+pub const RENDER_MODES: [&str; 3] = ["classic", "enhanced", "rt_experimental"];
+pub const CHARACTER_STYLES: [&str; 2] = ["sprite", "voxel"];
+
+/// The renderer actually used. Only `Classic` exists so far; the other `render_mode` values fall back to it.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderMode {
+    Classic,
+}
+
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CharacterStyle {
+    Sprite,
+    Voxel,
+}
+
+/// The effective (mode, style) from the settings values and the env overrides (`env` = POP_RENDER, POP_CHARS); unknown
+/// values and modes that are not implemented yet fall back with a log line.
+pub fn resolve_render(mode: &str, style: &str, env_mode: Option<&str>, env_style: Option<&str>) -> (RenderMode, CharacterStyle) {
+    let mode = env_mode.unwrap_or(mode);
+    match mode {
+        "classic" => {}
+        m if RENDER_MODES.contains(&m) => info!("render mode {m:?} is not implemented yet; using classic"),
+        m => warn!("unknown render mode {m:?}; using classic"),
+    }
+    let style = match env_style.unwrap_or(style) {
+        "voxel" => CharacterStyle::Voxel,
+        "sprite" => CharacterStyle::Sprite,
+        s => {
+            warn!("unknown character style {s:?}; using sprite");
+            CharacterStyle::Sprite
+        }
+    };
+    (RenderMode::Classic, style)
 }
 
 /// Bevy `KeyCode` names per kid key, e.g. "ArrowLeft", "KeyA", "ShiftLeft".
@@ -39,7 +80,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into() }
     }
 }
 
@@ -72,7 +113,15 @@ impl Settings {
             sound: field(&o, "sound", d.sound, |_| true),
             keys,
             data_path: field(&o, "data_path", d.data_path, |_| true),
+            render_mode: field(&o, "render_mode", d.render_mode, |m| RENDER_MODES.contains(&m.as_str())),
+            character_style: field(&o, "character_style", d.character_style, |s| CHARACTER_STYLES.contains(&s.as_str())),
         }
+    }
+
+    /// Effective render mode and character style (settings plus POP_RENDER / POP_CHARS).
+    pub fn render(&self) -> (RenderMode, CharacterStyle) {
+        let (m, s) = (std::env::var("POP_RENDER").ok(), std::env::var("POP_CHARS").ok());
+        resolve_render(&self.render_mode, &self.character_style, m.as_deref(), s.as_deref())
     }
 
     pub fn to_json(&self) -> String {
@@ -191,6 +240,31 @@ mod tests {
         for t in ["[1,2]", "42", "", "{\"volume\": "] {
             assert_eq!(Settings::parse(t), Settings::default());
         }
+    }
+
+    #[test]
+    fn render_settings_parse_and_fall_back() {
+        let d = Settings::default();
+        assert_eq!((d.render_mode.as_str(), d.character_style.as_str()), ("classic", "sprite"));
+        let s = Settings::parse(r#"{"render_mode": "rt_experimental", "character_style": "voxel"}"#);
+        assert_eq!((s.render_mode.as_str(), s.character_style.as_str()), ("rt_experimental", "voxel"));
+        assert_eq!(Settings::parse(&s.to_json()), s);
+        // unknown or ill-typed values fall back per field, the rest of the file still loads
+        let s = Settings::parse(r#"{"render_mode": "pathtraced", "character_style": 3, "volume": 0.5}"#);
+        assert_eq!((s.render_mode, s.character_style, s.volume), (d.render_mode, d.character_style, 0.5));
+    }
+
+    #[test]
+    fn render_resolution_env_overrides_and_fallback() {
+        use super::{CharacterStyle::*, RenderMode::*};
+        assert_eq!(resolve_render("classic", "sprite", None, None), (Classic, Sprite));
+        assert_eq!(resolve_render("classic", "voxel", None, None), (Classic, Voxel));
+        // reserved modes are accepted but run classic until implemented
+        assert_eq!(resolve_render("enhanced", "sprite", None, None).0, Classic);
+        assert_eq!(resolve_render("rt_experimental", "sprite", None, None).0, Classic);
+        // env wins over the file; bad env values fall back instead of failing
+        assert_eq!(resolve_render("classic", "sprite", Some("rt_experimental"), Some("voxel")), (Classic, Voxel));
+        assert_eq!(resolve_render("classic", "voxel", Some("nonsense"), Some("cubes")), (Classic, Sprite));
     }
 
     #[test]

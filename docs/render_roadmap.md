@@ -1,6 +1,6 @@
 # Render roadmap: ray-tracing mode (A) and voxel characters (B)
 
-Status: research and plan only, no code changed. Written 2026-11-15 against Bevy 0.20.1 (released 2026-10-08) and wgpu 30.
+Status: R1 and V1 implemented (see section 9); the rest is plan. Written 2026-11-15 against Bevy 0.20.1 (released 2026-10-08) and wgpu 30.
 Effort sizes assume one developer who knows this codebase and Bevy: S = up to 1 person-week (pw), M = 2-4 pw, L = 4-8 pw,
 XL = more than 8 pw. Risk = chance that the estimate or the result is badly off.
 
@@ -239,3 +239,47 @@ Where sources were thin: DX12 ray-query support in wgpu, Solari's handling of al
 `RaytracingMesh3d`, Solari hardware requirements beyond the wgpu feature list, and any performance figures for a scene
 like ours. These are left as spike questions (R3) rather than stated as facts. The 0.20.1 API docs on docs.rs did not build,
 so crate details come from the tagged source.
+
+## 9. Status of R1 and V1 (2026-11-15)
+
+**R1 done (minus the `rt` Cargo feature, which waits for the R3 spike).** `settings.json` keys `render_mode`
+(`classic` default, `enhanced` / `rt_experimental` accepted and run as classic with a log line) and `character_style`
+(`sprite` default, `voxel`), parsed per field like the other keys (bad values fall back alone); env `POP_RENDER` /
+`POP_CHARS` override (`settings::resolve_render`, unit tests). Startup logs the adapter (`RenderAdapterInfo`: name,
+backend, device type) and whether its features include `EXPERIMENTAL_RAY_QUERY`; nothing extra is requested from the
+device, so startup cannot fail on it (RTX 3090 / Vulkan: "exposed by the adapter"). F6 toggles sprite/voxel at runtime and
+saves it; no render-mode key yet (only classic exists). Classic is pixel-identical to the build before R1: `POP_SHOT`
+diff = 0 pixels against a HEAD build on level 1 start, level 2 room 1 (torches) and the level-2 cutscene (the cutscene
+itself differs between two runs of the same build, timing).
+
+**V1 done for all in-game characters** (kid, shadow, guard with colour palettes and palace/dungeon palettes, fat guard,
+skeleton, vizier, both swords; cutscene actors still sprites, see V2). `voxel.rs`: `VoxelModel { w, h, d, voxels }`
+(palette index per voxel) built from the decoded original image at first use and cached per (kind, image, shadow,
+palette, colour, mirrored) next to `material_for`'s cache; nothing is written to disk. Depth: *inflated* extrusion, a
+column is 2k + 1 voxels thick, k = 4-neighbour distance to the silhouette edge capped at 3 (edges 3, inner body up to 7),
+centred on the sprite plane z = 0.6. Chosen over constant thickness, which reads as a cardboard cut-out from the tilted camera (2.2 B1);
+the rounded profile gives head and torso volume and keeps thin limbs thin, and the front view is unchanged by
+construction. Meshing: per-face culling (a quad per filled/empty boundary), flat normals, linear vertex colours, `U32`
+indices; lit `StandardMaterial` (roughness 0.9), so torches and ambient shade the cubes. Placement: the same `world_pos`
+/ interpolation / left-or-right edge rule as the sprite; the mesh origin is the image's bottom-left pixel, one voxel = one
+sprite pixel (1/32 x 2/63 x 1/32 world units). Mirroring uses a separately built mirrored mesh (no negative scale, so
+winding and normals stay correct). The voxel sword sits at z = 0.6 + 5/32 so it stays in front of the body as in the
+original. An image without a voxel mesh falls back to the sprite quad.
+
+Tests: front projection == original image (silhouette and palette indices), stored and mirrored, for all 219 kid images,
+all guard-type images that decode (GUARD/FAT/SKEL/VIZIER/SHADOW 751+) and the sword images; small-image tests for the
+depth profile and mirroring; every mesh triangle winds counter-clockwise around its normal. Build time: all 219 kid images
+in both facings voxelised + meshed in ~81 ms (release, includes the projection checks), i.e. ~0.2 ms per image, built lazily.
+
+Screenshots (`POP_CHARS=voxel`, `POP_SHOT_FRAME` 300-2900): kid standing (level 1 start), running right (mirrored),
+demo-level sword fight against the palace guard, plus `POP_DEBUG_CAM=1` / F7 views. From the game camera the figures
+match the sprites; from the side camera they read as chunky cube figures with per-face shading and warm torch light, close
+to the "Prince of Persia Voxelized" reference, without cracks or floating parts. Perf (release, RTX 3090, demo level,
+`POP_PERF=1`, steady state): sprite ~1.45 ms/frame, voxel ~1.35-1.4 ms/frame (no measurable cost).
+
+Shadows: tried shadow maps on the torch point lights in voxel style. Not kept: the torch/flame boxes sit at the light
+and shadow it, the lights are at the character plane (z 0.6), the room got much darker and the voxel steps showed
+self-shadow stripes. Needs NotShadowCaster on torch meshes, light placement and bias tuning: belongs to R2.
+
+Open for V2/V3: cutscene actors (princess, Jaffar, mouse from PV.DAT) as voxels, hit flash, an unlit option, greedy
+meshing (not needed for perf), smoothed normals, a 30-degree review of key poses.

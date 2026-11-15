@@ -18,13 +18,15 @@
 | - / = (numpad - / +) | Master volume down / up (10 % steps) |
 | F11 | Windowed / borderless fullscreen |
 | F3 | Debug text and debug keys |
+| F6 | Characters: original sprites / voxel figures built from them (saved as `character_style`) |
 
 The keypad is fixed like the original (its key handler `0000:1533` reads scancodes 0x47..0x50): keypad 1, 3 and 0 (End, PgDn, Ins)
 do nothing. It works alongside the rebindable keys below.
 
 With the debug text on (F3): Ctrl+arrows = neighbouring room, Ctrl+PageUp / Ctrl+PageDown = previous / next level (plain PageUp is up+right),
 `,` / `.` = previous / next animation sequence (sequence viewer), Space = restart the sequence, F = flip, C = back to the
-controlled kid at the level start.
+controlled kid at the level start. F7 = closer camera turned 35 degrees around the kid (inspect the voxel depth; also
+`POP_DEBUG_CAM=1`).
 
 The kid's five keys (left, right, up, down, shift) can be rebound in `settings.json` under `"keys"`, each as a list of
 Bevy `KeyCode` names, for example `"left": ["ArrowLeft", "KeyA"]`. Unknown names are ignored with a warning; an empty
@@ -58,9 +60,15 @@ Created next to the exe on the first run; unknown keys are ignored, missing ones
   "muted": false,
   "sound": "synth",
   "keys": { "left": ["ArrowLeft"], "right": ["ArrowRight"], "up": ["ArrowUp"], "down": ["ArrowDown"], "shift": ["ShiftLeft", "ShiftRight"] },
-  "data_path": null
+  "data_path": null,
+  "render_mode": "classic",
+  "character_style": "sprite"
 }
 ```
 
 `window`: `windowed` or `borderless` (F11 saves it). `sound`: `synth` (generated effects) or `original` (the game's own
 sounds; the environment variable `POP_SOUND=original` overrides). Volume, mute and F11 are saved when changed.
+`render_mode`: `classic` (default); `enhanced` and `rt_experimental` are reserved names, accepted but run as `classic`
+with a log line until implemented (`POP_RENDER` overrides). `character_style`: `sprite` (default) or `voxel` (F6 toggles
+and saves it, `POP_CHARS` overrides). Unknown values fall back to the default; the log names the GPU, the backend and
+whether the adapter offers ray queries.

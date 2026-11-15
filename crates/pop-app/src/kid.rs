@@ -1,7 +1,7 @@
 //! The kid in the app: input latching, per-tick control (pop-core), and drawing with the original sprites (KID.DAT).
 //! Sequence viewer: `,` / `.` = previous/next sequence (kid no longer controlled), Space = restart it, F = flip,
 //! C = back to the controlled kid at the level start.
-use crate::settings::KeyMap;
+use crate::settings::{CharacterStyle, KeyMap};
 use crate::Game;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
@@ -30,6 +30,11 @@ pub struct KidAssets {
     sword_table: Vec<(u8, i8, i8)>,
     /// (kind, image, shadow tint, palace) -> (material, width px, height px); kind 255 = kid images
     cache: HashMap<(u8, u8, bool, bool, u8), (Handle<StandardMaterial>, f32, f32)>,
+    /// voxel meshes: the material key plus mirrored -> mesh (None = image did not decode)
+    vcache: HashMap<(u8, u8, bool, bool, u8, bool), Option<Handle<Mesh>>>,
+    /// the unit quad of the sprites and the shared lit material of the voxel meshes (vertex colours), set in `setup`
+    quad: Handle<Mesh>,
+    voxel_mat: Handle<StandardMaterial>,
 }
 
 #[derive(Component)]
@@ -66,12 +71,14 @@ impl KidAssets {
         let pdat = open("PRINCE.DAT");
         let sword_pal = image::palette(pdat.get(700).unwrap()).unwrap();
         let sword_table = data.exe.sword_table();
-        KidAssets { data, dat, pal, gdats, gpals, colours, pdat, sword_pal, sword_table, cache: HashMap::new() }
+        KidAssets { data, dat, pal, gdats, gpals, colours, pdat, sword_pal, sword_table, cache: HashMap::new(), vcache: HashMap::new(), quad: default(), voxel_mat: default() }
     }
 }
 
-pub fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+pub fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>, mut a: ResMut<KidAssets>) {
     let quad = meshes.add(Rectangle::new(1.0, 1.0));
+    a.quad = quad.clone();
+    a.voxel_mat = mats.add(StandardMaterial { perceptual_roughness: 0.9, ..default() });
     cmds.spawn((Mesh3d(quad.clone()), MeshMaterial3d::<StandardMaterial>::default(), Transform::default(), Visibility::Hidden, KidSprite));
     cmds.spawn((Mesh3d(quad.clone()), MeshMaterial3d::<StandardMaterial>::default(), Transform::default(), Visibility::Hidden, GuardSprite));
     for guard in [false, true] {
@@ -133,6 +140,46 @@ fn material_for(a: &mut KidAssets, imgs: &mut Assets<Image>, mats: &mut Assets<S
     if let Some(c) = a.cache.get(&key) {
         return Some(c.clone());
     }
+    let (im, pal) = decoded(a, kind, n, pal_palace, colour)?;
+    let mut rgba = Vec::with_capacity(im.pixels.len() * 4);
+    for &p in &im.pixels {
+        let c = rgb(&pal, p, shadow);
+        rgba.extend_from_slice(&[c[0], c[1], c[2], if p == 0 { 0 } else { 255 }]);
+    }
+    let mut img = Image::new(Extent3d { width: im.width as u32, height: im.height as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default());
+    img.sampler = ImageSampler::nearest();
+    let mat = mats.add(StandardMaterial { base_color_texture: Some(imgs.add(img)), unlit: true, alpha_mode: AlphaMode::Mask(0.5), cull_mode: None, double_sided: true, ..default() });
+    let entry = (mat, im.width as f32, im.height as f32);
+    a.cache.insert(key, entry.clone());
+    Some(entry)
+}
+
+/// Colour of palette index `p` (magenta if the palette is short), darkened for the prince's shadow.
+fn rgb(pal: &[[u8; 3]], p: u8, shadow: bool) -> [u8; 3] {
+    let c = pal.get(p as usize).copied().unwrap_or([255, 0, 255]);
+    if shadow { [c[0] / 5, c[1] / 5, c[2] / 3] } else { c }
+}
+
+/// Voxel mesh of the same image as `material_for` (key plus `mirrored`), built once from the original pixels.
+#[allow(clippy::too_many_arguments)]
+fn voxel_for(a: &mut KidAssets, meshes: &mut Assets<Mesh>, kind: u8, n: u8, shadow: bool, pal_palace: bool, colour: u8, mirrored: bool) -> Option<Handle<Mesh>> {
+    let key = (kind, n, shadow, pal_palace, colour, mirrored);
+    if let Some(m) = a.vcache.get(&key) {
+        return m.clone();
+    }
+    let m = decoded(a, kind, n, pal_palace, colour).map(|(im, pal)| {
+        let model = crate::voxel::VoxelModel::from_image(im.width, im.height, &im.pixels, mirrored);
+        meshes.add(model.mesh(|p| {
+            let [r, g, b] = rgb(&pal, p, shadow);
+            Color::srgb_u8(r, g, b).to_linear().to_f32_array()
+        }))
+    });
+    a.vcache.insert(key, m.clone());
+    m
+}
+
+/// The decoded image and its palette (see `material_for`).
+fn decoded(a: &KidAssets, kind: u8, n: u8, pal_palace: bool, colour: u8) -> Option<(image::Image, Vec<[u8; 3]>)> {
     let coloured: Vec<[u8; 3]>;
     let (dat, pal) = if kind == 254 {
         (&a.pdat, &a.sword_pal)
@@ -150,20 +197,7 @@ fn material_for(a: &mut KidAssets, imgs: &mut Assets<Image>, mats: &mut Assets<S
         }
     };
     let im = image::decode(dat.get(match kind { 255 => 401, 254 => 701, _ => 751 } + n as u16)?)?;
-    let mut rgba = Vec::with_capacity(im.pixels.len() * 4);
-    for &p in &im.pixels {
-        let mut c = pal.get(p as usize).copied().unwrap_or([255, 0, 255]);
-        if shadow {
-            c = [c[0] / 5, c[1] / 5, c[2] / 3];
-        }
-        rgba.extend_from_slice(&[c[0], c[1], c[2], if p == 0 { 0 } else { 255 }]);
-    }
-    let mut img = Image::new(Extent3d { width: im.width as u32, height: im.height as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default());
-    img.sampler = ImageSampler::nearest();
-    let mat = mats.add(StandardMaterial { base_color_texture: Some(imgs.add(img)), unlit: true, alpha_mode: AlphaMode::Mask(0.5), cull_mode: None, double_sided: true, ..default() });
-    let entry = (mat, im.width as f32, im.height as f32);
-    a.cache.insert(key, entry.clone());
-    Some(entry)
+    Some((im, pal.clone()))
 }
 
 /// Drawing rule (docs/mechanics.md 7.3). KID.DAT images face LEFT as stored; the engine mirrors them when the kid faces right.
@@ -273,9 +307,11 @@ fn draw_char(
     level_no: usize,
     imgs: &mut Assets<Image>,
     mats: &mut Assets<StandardMaterial>,
+    vx: &mut Voxels,
     t: &mut Transform,
     vis: &mut Visibility,
     mat: &mut MeshMaterial3d<StandardMaterial>,
+    mesh: &mut Mesh3d,
 ) -> Option<Vec2> {
     let data = a.data.clone();
     let env = mk_env(&data, level, gtype);
@@ -283,20 +319,48 @@ fn draw_char(
     // chtab = 2 + (sword >> 6): 5 = guard-type images, otherwise the kid images (the shadow draws those dark)
     let guard_img = f.sword >> 6 == 3;
     let kind = if guard_img { gtype.max(0) as u8 } else { 255 };
-    let Some((m, w, h)) = (f.image != 255).then(|| material_for(a, imgs, mats, kind, f.image, k.charid == 1 && !guard_img, palace(level_no), k.colour)).flatten() else {
+    let key = (kind, f.image, k.charid == 1 && !guard_img, palace(level_no), k.colour);
+    let Some((m, w, h)) = (f.image != 255).then(|| material_for(a, imgs, mats, key.0, key.1, key.2, key.3, key.4)).flatten() else {
         *vis = Visibility::Hidden;
         return None;
     };
     *vis = Visibility::Inherited;
-    mat.0 = m;
     let cur = world_pos(k, &env);
     let p = if prev.1 == k.room { prev.0.lerp(cur, alpha) } else { cur };
     let (sw, sh) = (w / 32.0, h * crate::room::TILE_H / TILE_H_PX as f32);
     // facing left: p.x is the left edge, image as stored; facing right: p.x is the right edge and the image is mirrored
     let (cx, flip) = if k.facing_left { (p.x + sw / 2.0, 1.0) } else { (p.x - sw / 2.0, -1.0) };
-    t.translation = Vec3::new(cx, p.y + sh / 2.0, 0.6);
-    t.scale = Vec3::new(flip * sw, sh, 1.0);
+    show(a, vx, key, !k.facing_left, m, Vec3::new(cx, p.y + sh / 2.0, 0.6), Vec2::new(flip * sw, sh), 0.6, t, mat, mesh);
     Some(p)
+}
+
+/// The voxel side of `render`: the style in use and the mesh store.
+pub struct Voxels<'a> {
+    pub on: bool,
+    pub meshes: &'a mut Assets<Mesh>,
+}
+
+/// Show image `key` as the sprite quad (centre, size with a negative x = mirrored), or in voxel style as its voxel mesh on
+/// the same rectangle: mesh origin = the image's bottom-left corner, one voxel = one sprite pixel, depth centred on `vz`.
+/// The mirrored image is a separate mesh (no negative scale, so face winding and normals stay right). An image without a
+/// voxel mesh falls back to the sprite.
+#[allow(clippy::too_many_arguments)]
+fn show(a: &mut KidAssets, vx: &mut Voxels, key: (u8, u8, bool, bool, u8), mirrored: bool, sprite: Handle<StandardMaterial>, centre: Vec3, size: Vec2, vz: f32, t: &mut Transform, mat: &mut MeshMaterial3d<StandardMaterial>, mesh: &mut Mesh3d) {
+    let voxel = if vx.on { voxel_for(a, vx.meshes, key.0, key.1, key.2, key.3, key.4, mirrored) } else { None };
+    if let Some(v) = voxel {
+        let px = Vec3::new(1.0 / 32.0, crate::room::TILE_H / TILE_H_PX as f32, 1.0 / 32.0);
+        mesh.0 = v;
+        mat.0 = a.voxel_mat.clone();
+        t.translation = Vec3::new(centre.x - size.x.abs() / 2.0, centre.y - size.y / 2.0, vz);
+        t.scale = px;
+        return;
+    }
+    if mesh.0 != a.quad {
+        mesh.0 = a.quad.clone();
+    }
+    mat.0 = sprite;
+    t.translation = centre;
+    t.scale = Vec3::new(size.x, size.y, 1.0);
 }
 
 /// draw_sword (0000:84EC) draws the frame's sword entry when Char.sword != 0, on the sword pickup frames 229..237 (the kid
@@ -315,9 +379,11 @@ fn draw_sword(
     gtype: i8,
     imgs: &mut Assets<Image>,
     mats: &mut Assets<StandardMaterial>,
+    vx: &mut Voxels,
     t: &mut Transform,
     vis: &mut Visibility,
     mat: &mut MeshMaterial3d<StandardMaterial>,
+    mesh: &mut Mesh3d,
 ) {
     let data = a.data.clone();
     let env = mk_env(&data, level, gtype);
@@ -332,14 +398,13 @@ fn draw_sword(
         return;
     };
     *vis = Visibility::Inherited;
-    mat.0 = m;
     let dxs = if k.facing_left { -(dx as f32) } else { dx as f32 };
     let (sw, sh) = (w / 32.0, h * crate::room::TILE_H / TILE_H_PX as f32);
     let x = p.x + dxs / 32.0;
     let y = p.y - dy as f32 * crate::room::TILE_H / TILE_H_PX as f32;
     let (cx, flip) = if k.facing_left { (x + sw / 2.0, 1.0) } else { (x - sw / 2.0, -1.0) };
-    t.translation = Vec3::new(cx, y + sh / 2.0, 0.65);
-    t.scale = Vec3::new(flip * sw, sh, 1.0);
+    // voxel sword just in front of the body's thickest layers (the original draws it over the body)
+    show(a, vx, (254, img, false, false, 0), !k.facing_left, m, Vec3::new(cx, y + sh / 2.0, 0.65), Vec2::new(flip * sw, sh), 0.6 + 5.0 / 32.0, t, mat, mesh);
 }
 
 pub fn render(
@@ -347,27 +412,30 @@ pub fn render(
     a: ResMut<KidAssets>,
     mut imgs: ResMut<Assets<Image>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
-    mut q: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>), (With<KidSprite>, Without<GuardSprite>)>,
-    mut qg: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>), (With<GuardSprite>, Without<KidSprite>)>,
-    mut qs: Query<(&SwordSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>), (Without<KidSprite>, Without<GuardSprite>)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    style: Res<CharacterStyle>,
+    mut q: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d), (With<KidSprite>, Without<GuardSprite>)>,
+    mut qg: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d), (With<GuardSprite>, Without<KidSprite>)>,
+    mut qs: Query<(&SwordSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d), (Without<KidSprite>, Without<GuardSprite>)>,
 ) {
     let mut a = a;
     let w = &g.world;
     let mut kid_body = None;
     let mut guard_body = None;
-    if let Ok((mut t, mut vis, mut mat)) = q.single_mut() {
-        kid_body = draw_char(&w.kid, g.kid_prev, w.alpha(), &mut a, &w.level, w.guard_type, w.level_no, &mut imgs, &mut mats, &mut t, &mut vis, &mut mat);
+    let vx = &mut Voxels { on: *style == CharacterStyle::Voxel, meshes: &mut meshes };
+    if let Ok((mut t, mut vis, mut mat, mut mesh)) = q.single_mut() {
+        kid_body = draw_char(&w.kid, g.kid_prev, w.alpha(), &mut a, &w.level, w.guard_type, w.level_no, &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh);
     }
-    if let Ok((mut t, mut vis, mut mat)) = qg.single_mut() {
+    if let Ok((mut t, mut vis, mut mat, mut mesh)) = qg.single_mut() {
         match &w.guard {
-            Some(gd) if gd.room as usize == g.room => guard_body = draw_char(gd, g.guard_prev, w.alpha(), &mut a, &w.level, w.guard_type, w.level_no, &mut imgs, &mut mats, &mut t, &mut vis, &mut mat),
+            Some(gd) if gd.room as usize == g.room => guard_body = draw_char(gd, g.guard_prev, w.alpha(), &mut a, &w.level, w.guard_type, w.level_no, &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh),
             _ => *vis = Visibility::Hidden,
         }
     }
-    for (SwordSprite(is_guard), mut t, mut vis, mut mat) in &mut qs {
+    for (SwordSprite(is_guard), mut t, mut vis, mut mat, mut mesh) in &mut qs {
         let (k, body) = if *is_guard { (w.guard.as_ref(), guard_body) } else { (Some(&w.kid), kid_body) };
         match k {
-            Some(k) => draw_sword(k, body, &mut a, &w.level, w.guard_type, &mut imgs, &mut mats, &mut t, &mut vis, &mut mat),
+            Some(k) => draw_sword(k, body, &mut a, &w.level, w.guard_type, &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh),
             None => *vis = Visibility::Hidden,
         }
     }
