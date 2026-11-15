@@ -1048,8 +1048,8 @@ impl Kid {
                     if n <= 3 {
                         self.sh.guard_notice = true; // 0 = notice only, 1..3 = sound + notice
                     }
-                    // F2 arg: 1 = footstep (23), 2 = bump (8), 3 = drink (18); 0 and 4 (music) have no effect id here
-                    if let Some(id) = match n { 1 => Some(23), 2 => Some(8), 3 => Some(18), _ => None } {
+                    // F2 arg: 1 = footstep (23), 2 = bump (8), 3 = drink (18), 4 = level-end music (41; the world picks the level's cue)
+                    if let Some(id) = match n { 1 => Some(23), 2 => Some(8), 3 => Some(18), 4 => Some(41), _ => None } {
                         self.events.push(Event::Sound(id));
                     }
                 }

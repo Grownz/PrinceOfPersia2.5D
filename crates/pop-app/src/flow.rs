@@ -20,8 +20,15 @@ pub enum Screen {
 
 /// UNVERIFIED: the original attract loop (title, story text, demo) was not timed; a fixed delay stands in for it.
 const ATTRACT_SECS: f32 = 15.0;
-/// Levels with a cutscene before them (tbl_cutscenes ds:0FB4, docs/edge_cases.md 4.1); a text card stands in for it.
-const CUTSCENE_LEVELS: [usize; 6] = [2, 4, 6, 8, 9, 12];
+/// The cutscene before a level (tbl_cutscenes ds:0FB4, docs/edge_cases.md 4.1) by its music cue; a text card stands in for it.
+fn cutscene_sound(level: usize) -> Option<u8> {
+    match level {
+        2 | 4 | 6 => Some(27),
+        8 | 9 => Some(35),
+        12 => Some(40),
+        _ => None,
+    }
+}
 
 #[derive(Resource, Default)]
 pub struct Flow {
@@ -29,6 +36,8 @@ pub struct Flow {
     card: String,
     card_left: f32,
     card_then_title: bool,
+    /// music cue played while the card is shown
+    pub card_sound: Option<u8>,
 }
 
 #[derive(Component, PartialEq)]
@@ -122,23 +131,23 @@ pub fn setup(mut cmds: Commands, mut imgs: ResMut<Assets<Image>>) {
     });
 }
 
-/// Start a world from `p` and go to Playing (with the "Level N" banner and, on a level change, the cutscene card).
-fn begin(g: &mut Game, a: &KidAssets, f: &mut Flow, next: &mut NextState<Screen>, p: Progress, banner: bool) {
-    let new_level = p.level != g.level;
+/// Start a world from `p` and go to Playing (with the "Level N" banner and, when `entered` (a level change, new game or
+/// loaded game, never a restart), the cutscene card).
+fn begin(g: &mut Game, a: &KidAssets, f: &mut Flow, next: &mut NextState<Screen>, p: Progress, banner: bool, entered: bool) {
     kid::start(g, a, p);
     // "Level N" for 24 ticks (0000:C270): levels 1..13, not after the seamless 12 -> 13; level 13 is shown as 12
     if banner && (1..=13).contains(&g.level) {
         g.banner = (24, format!("LEVEL {}", g.level.min(12)));
     }
-    if new_level && CUTSCENE_LEVELS.contains(&g.level) {
-        card(f, next, format!("LEVEL {}\n\n(cutscene not implemented)", g.level), false);
+    if let Some(id) = cutscene_sound(g.level).filter(|_| entered) {
+        card(f, next, format!("LEVEL {}\n\n(cutscene not implemented)", g.level), false, Some(id));
     } else {
         next.set(Screen::Playing);
     }
 }
 
-fn card(f: &mut Flow, next: &mut NextState<Screen>, text: String, then_title: bool) {
-    (f.card, f.card_left, f.card_then_title) = (text, 3.0, then_title);
+fn card(f: &mut Flow, next: &mut NextState<Screen>, text: String, then_title: bool, sound: Option<u8>) {
+    (f.card, f.card_left, f.card_then_title, f.card_sound) = (text, 3.0, then_title, sound);
     next.set(Screen::Card);
 }
 
@@ -166,11 +175,11 @@ pub fn title(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAssets
     f.idle += time.delta_secs();
     let loaded = (ctrl(&k) && k.just_pressed(KeyCode::KeyL)).then(load_game).flatten();
     if let Some(p) = loaded {
-        begin(&mut g, &a, &mut f, &mut next, p, true);
+        begin(&mut g, &a, &mut f, &mut next, p, true, true);
     } else if any_key(&k) {
-        begin(&mut g, &a, &mut f, &mut next, Progress::new_game(1), true); // new game (0000:4893)
+        begin(&mut g, &a, &mut f, &mut next, Progress::new_game(1), true, true); // new game (0000:4893)
     } else if f.idle > ATTRACT_SECS {
-        begin(&mut g, &a, &mut f, &mut next, Progress::new_game(0), false); // the demo
+        begin(&mut g, &a, &mut f, &mut next, Progress::new_game(0), false, true); // the demo
     }
 }
 
@@ -190,7 +199,7 @@ pub fn pause(k: Res<ButtonInput<KeyCode>>, state: Res<State<Screen>>, mut next: 
 }
 
 /// Playing: save (Ctrl+G), the demo's keys, and the world's exit (restart, next level, title, the end).
-pub fn playing(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAssets>, mut f: ResMut<Flow>, mut next: ResMut<NextState<Screen>>) {
+pub fn playing(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAssets>, mut f: ResMut<Flow>, mut next: ResMut<NextState<Screen>>, audio: Res<crate::audio::AudioState>) {
     if ctrl(&k) && k.just_pressed(KeyCode::KeyG) && g.world.exit.is_none() {
         // Ctrl+G (key 7, 0000:05EA): only on levels 3..13; messages from ds:0AA4 / ds:0AB0 (display time UNVERIFIED)
         if (3..=13).contains(&g.level) {
@@ -201,19 +210,24 @@ pub fn playing(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAsse
     if g.world.demo {
         // any key during the demo starts the game, Ctrl+L loads (edge_cases.md 4.4); the world itself only sees the arrows/Shift
         if let Some(p) = (ctrl(&k) && k.just_pressed(KeyCode::KeyL)).then(load_game).flatten() {
-            return begin(&mut g, &a, &mut f, &mut next, p, true);
+            return begin(&mut g, &a, &mut f, &mut next, p, true, true);
         }
         if any_key(&k) && !k.just_pressed(KeyCode::Escape) && !k.just_pressed(KeyCode::KeyP) {
             g.world.exit.get_or_insert(Exit::NewGame);
         }
     }
     let Some(e) = g.world.exit else { return };
+    // play_level_2 (0000:4DA2): after the stairs the level ends only when no sound plays (the end-level music); the level-6
+    // fall and the seamless 12 -> 13 stop the sounds first, so they do not wait
+    if e == (Exit::NextLevel { seamless: false }) && g.level != 6 && audio.busy > 0 {
+        return;
+    }
     let expired = g.world.progress.rem_min == 0 && g.level != 0;
     let p = g.world.progress_after(e);
     match e {
         Exit::Title if expired => {
             kid::start(&mut g, &a, p);
-            card(&mut f, &mut next, "TIME HAS EXPIRED".into(), true); // the original plays cutscene 0000:2A1B
+            card(&mut f, &mut next, "TIME HAS EXPIRED".into(), true, Some(36)); // the original plays cutscene 0000:2A1B
         }
         Exit::Title => {
             kid::start(&mut g, &a, p);
@@ -221,11 +235,12 @@ pub fn playing(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAsse
         }
         Exit::End => {
             kid::start(&mut g, &a, p);
-            card(&mut f, &mut next, "THE END\n\nThe princess is saved.".into(), true); // placeholder for the ending 0000:2F2F
+            card(&mut f, &mut next, "THE END\n\nThe princess is saved.".into(), true, Some(26)); // placeholder for the ending 0000:2F2F
         }
-        Exit::Restart => begin(&mut g, &a, &mut f, &mut next, p, true), // "Level N" also on a restart (edge_cases.md 3.3)
-        Exit::NextLevel { seamless } => begin(&mut g, &a, &mut f, &mut next, p, !seamless),
-        Exit::NewGame => begin(&mut g, &a, &mut f, &mut next, p, true),
+        // "Level N" also on a restart (edge_cases.md 3.3), but never the cutscene
+        Exit::Restart => begin(&mut g, &a, &mut f, &mut next, p, true, false),
+        Exit::NextLevel { seamless } => begin(&mut g, &a, &mut f, &mut next, p, !seamless, true),
+        Exit::NewGame => begin(&mut g, &a, &mut f, &mut next, p, true, true),
     }
 }
 

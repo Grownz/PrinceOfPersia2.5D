@@ -1,10 +1,13 @@
 //! Prince of Persia remake: title -> game (procedural 3D rooms, original sprites) -> title.
-//! Keys: arrows + Shift = kid, Esc/P = pause, Ctrl+A = restart, Ctrl+G = save, Ctrl+L = load (title/demo), F3 = debug text
+//! Keys: arrows + Shift = kid, Esc/P = pause, Ctrl+A = restart, Ctrl+G = save, Ctrl+L = load (title/demo), M = mute,
+//! - / = = volume, F3 = debug text
 //! (with it on: Ctrl+arrows = neighbouring room, PageUp/PageDown = level, sequence viewer keys).
-//! POP_LEVEL / POP_ROOM skip the title.
+//! POP_LEVEL / POP_ROOM skip the title; POP_SOUND=original uses the game's own sounds.
+mod audio;
 mod flow;
 mod kid;
 mod room;
+mod synth;
 
 use bevy::prelude::*;
 use pop_core::{dat::Dat, level::*, sim};
@@ -51,6 +54,7 @@ fn main() {
             primary_window: Some(Window { title: "Prince of Persia x64".into(), ..default() }),
             ..default()
         }))
+        .add_plugins(audio::plugin)
         .insert_resource(ClearColor(BACKGROUND))
         .insert_resource(Time::<Fixed>::from_hz(sim::STEP_HZ))
         .insert_resource(Game { world, levels, level, room, kid_prev: (Vec2::ZERO, 0), guard_prev: (Vec2::ZERO, 0), kid_respawn: false, banner: (0, String::new()), debug: false })
@@ -59,19 +63,24 @@ fn main() {
         .init_resource::<flow::Flow>()
         .insert_state(if skip_title { flow::Screen::Playing } else { flow::Screen::Title })
         .add_systems(Startup, (setup, kid::setup, flow::setup)) // first room is built by room::rebuild_on_change
-        .add_systems(OnEnter(flow::Screen::Title), flow::reset_idle)
+        .add_systems(OnEnter(flow::Screen::Title), (flow::reset_idle, audio::enter_title))
+        .add_systems(OnEnter(flow::Screen::Card), audio::enter_card)
+        .add_systems(OnEnter(flow::Screen::Paused), audio::pause)
+        .add_systems(OnExit(flow::Screen::Paused), audio::resume)
         .add_systems(
             FixedUpdate,
             (|mut g: ResMut<Game>, a: Res<kid::KidAssets>, mut latch: ResMut<kid::Latch>, keys: Res<ButtonInput<KeyCode>>| {
                 kid::fixed_step(&mut g, &a, &mut latch, &keys);
-            })
-            .run_if(playing()),
+            }, audio::fixed)
+                .chain()
+                .run_if(playing()),
         )
         .add_systems(
             Update,
             (
                 kid::latch_keys,
                 flow::pause,
+                audio::keys,
                 flow::title.run_if(in_state(flow::Screen::Title)),
                 flow::card_step.run_if(in_state(flow::Screen::Card)),
                 (navigate, kid::keys, flow::playing).chain().run_if(playing()),

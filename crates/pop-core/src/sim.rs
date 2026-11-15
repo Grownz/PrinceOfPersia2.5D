@@ -437,6 +437,12 @@ impl World {
                     self.set_mod(room, tilepos, m | 0x80);
                 }
                 Event::StartChompers { room, row } => self.start_chompers(room, row),
+                // seq op F2 4 (0000:7049): shadow music 32 on level 4, nothing on levels 13 and 15, else end-level music 41
+                Event::Sound(41) => match self.level_no {
+                    4 => self.sounds.push(32),
+                    13 | 15 => {}
+                    _ => self.sounds.push(41),
+                },
                 Event::Sound(id) => self.sounds.push(id),
                 Event::GetObject(kind) => self.get_object(kind),
                 Event::NextLevel => self.set_exit(Exit::NextLevel { seamless: false }),

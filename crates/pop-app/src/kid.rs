@@ -212,7 +212,6 @@ pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: &ButtonI
     if g.world.step(keys) {
         latch.0 = pressed(held);
         g.banner.0 = g.banner.0.saturating_sub(1);
-        g.world.sounds.clear(); // audio comes later
         if g.world.kid.controlled {
             if (1..=pop_core::level::ROOMS as u8).contains(&g.world.kid.room) {
                 g.room = g.world.kid.room as usize; // room 0 = outside the level: keep showing the last room
