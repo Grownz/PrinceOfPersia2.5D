@@ -367,8 +367,12 @@ fn level4_mirror_shadow_4_3() {
                 assert_eq!((g.facing_left, g.hp, g.hp_max, w.kid.hp), (false, 3, 3, 1));
                 assert!(w.sounds.contains(&45));
                 assert_eq!(w.level.tile_at(4, 4).modifier, 0x56);
+                tick(&mut w, left, 4); // the rest of the running jump probes the mirror again
+                assert_eq!(w.sounds.iter().filter(|&&s| s == 45).count(), 1, "one shadow per jump");
                 // autocontrol level 4: x < 80 in room 4 -> gone
-                w.guard.as_mut().unwrap().x = 70;
+                if let Some(g) = w.guard.as_mut() {
+                    g.x = 70;
+                }
                 tick(&mut w, NONE, 1);
                 assert!(w.guard.is_none());
                 found = true;
@@ -401,4 +405,50 @@ fn demo_level_0_4_4() {
     let mut w = World::new(data(), Level::parse(lv.get(2000).unwrap()).unwrap(), 0);
     tick(&mut w, RIGHT, 1);
     assert_eq!(w.exit, Some(Exit::NewGame));
+}
+
+#[test]
+fn level_chain_end_and_audit_fixes() {
+    let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
+    let lvl = |n: u16| Level::parse(lv.get(2000 + n).unwrap()).unwrap();
+    let d = data();
+    // every level hands over to the next one (12 -> 13 seamless); no shipped level ends on its first ticks
+    let mut p = Progress::new_game(1);
+    for n in 1..=14usize {
+        assert_eq!(p.level, n);
+        let mut w = World::from_progress(d.clone(), lvl(n as u16), p);
+        tick(&mut w, NONE, 3);
+        assert_eq!(w.exit, None, "level {n} start");
+        p = w.progress_after(Exit::NextLevel { seamless: n == 12 });
+    }
+    // level 14: entering room 5 is the end (check_the_end)
+    let mut w = World::from_progress(d.clone(), lvl(14), Progress::new_game(14));
+    w.kid.room = 5;
+    tick(&mut w, NONE, 1);
+    assert_eq!(w.exit, Some(Exit::End));
+    assert_eq!(w.progress_after(Exit::End), Progress::new_game(0));
+    // restart on level 0 clears the demo checkpoint (the guard-killed flag), elsewhere it is kept
+    let w = World::from_progress(d.clone(), lvl(0), Progress { checkpoint: true, ..Progress::new_game(0) });
+    assert!(!w.progress_after(Exit::Restart).checkpoint);
+    let w = World::from_progress(d.clone(), lvl(3), Progress { checkpoint: true, ..Progress::new_game(3) });
+    assert!(w.progress_after(Exit::Restart).checkpoint);
+    // do_mouse leaves a live guard alone
+    let mut w = World::new(d, synth(16, 0..3, 2, 1, &[], &[]), 8);
+    w.leveldoor_open = 1;
+    let mut g = w.kid.clone();
+    g.charid = 2;
+    w.guard = Some(g);
+    tick(&mut w, NONE, 149);
+    assert!(w.leveldoor_open >= 150 && w.guard.as_ref().is_some_and(|g| g.charid != 24));
+}
+
+#[test]
+fn save_file_round_trip() {
+    let p = Progress { level: 7, rem_min: 41, rem_tick: 123, hitp_beg_lev: 5, ..Progress::new_game(7) };
+    let t = p.save_text(5);
+    assert_eq!(t, "{\"level\": 7, \"hitp_max\": 5, \"rem_min\": 41, \"rem_tick\": 123, \"hitp_beg_lev\": 5}
+");
+    assert_eq!(Progress::from_save(&t), Some(p));
+    assert_eq!(Progress::from_save(&t.replace("41", "0")), None, "no time left");
+    assert_eq!(Progress::from_save("{\"level\": 7}"), None);
 }

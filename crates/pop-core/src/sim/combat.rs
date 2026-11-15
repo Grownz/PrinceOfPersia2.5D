@@ -438,6 +438,10 @@ impl World {
 
     /// do_mouse (0000:5332): loadkid, then the mouse: charid 24, x 200, row 0, facing left, 1 hit point, seq 105.
     pub(super) fn do_mouse(&mut self) {
+        // the original saveshads unconditionally; room 16 has no guard (INFERRED), so only a guard that followed the kid in is spared
+        if self.guard.as_ref().is_some_and(|g| g.alive) {
+            return;
+        }
         let mut g = self.new_fighter(24, self.kid.room, 200, 0, true, 0, 1, self.kid.sword, 105);
         (g.fall_x, g.fall_y) = (self.kid.fall_x, self.kid.fall_y);
         self.guard = Some(g);

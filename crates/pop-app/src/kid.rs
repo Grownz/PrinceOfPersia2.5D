@@ -7,7 +7,7 @@ use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use pop_core::kid::{Env, Keys, Kid};
-use pop_core::sim::{mk_env, Data, Exit, Progress, World};
+use pop_core::sim::{mk_env, Data, Progress, World};
 use std::sync::Arc;
 use pop_core::{dat::Dat, exe::{Exe, SEQUENCES}, image, level::TILE_H_PX};
 use std::collections::HashMap;
@@ -156,8 +156,7 @@ fn world_pos(k: &Kid, env: &Env) -> Vec2 {
     Vec2::new(sx as f32 / 32.0 - 0.5, (181.0 - bottom) * crate::room::TILE_H / TILE_H_PX as f32)
 }
 
-/// Build the world for `p` (restart, next level, new game, title = the demo level 0). Cutscenes are skipped.
-// TODO cutscenes (tbl_cutscenes ds:0FB4, docs/edge_cases.md 4.1): before levels 2, 4, 6, 8, 9 and 12, never on a restart; time-out and ending too.
+/// Build the world for `p` (restart, next level, new game, the demo level 0). Cutscenes: see `flow` (text cards only).
 pub fn start(g: &mut Game, a: &KidAssets, p: Progress) {
     let p = if p.level < g.levels.len() { p } else { Progress::new_game(0) }; // after the last level: back to the title
     g.level = p.level;
@@ -168,25 +167,19 @@ pub fn start(g: &mut Game, a: &KidAssets, p: Progress) {
     g.guard_prev = g.world.guard.as_ref().map_or((Vec2::ZERO, 0), |k| (world_pos(k, &env), k.room));
 }
 
-/// Sequence viewer and respawn keys.
+/// Restart keys; with the debug text on (F3) also the sequence viewer and respawn keys. Exits are handled in `flow::playing`.
 pub fn keys(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAssets>) {
-    if g.kid_respawn || k.just_pressed(KeyCode::KeyC) {
-        g.kid_respawn = false;
-        let l = g.level;
-        start(&mut g, &a, Progress::new_game(l));
-        return;
-    }
     // restart keys (0000:054D): Shift held or Enter after death, Ctrl+A any time
     let enter = k.just_pressed(KeyCode::Enter) || k.just_pressed(KeyCode::NumpadEnter);
     let shift = k.pressed(KeyCode::ShiftLeft) || k.pressed(KeyCode::ShiftRight);
     g.world.restart_input(shift || enter, ctrl_held(&k) && k.just_pressed(KeyCode::KeyA));
-    if let Some(e) = g.world.exit {
-        let p = g.world.progress_after(e);
-        start(&mut g, &a, p);
-        // "Level N" for 24 ticks (0000:C270): levels 1..13, not after the seamless 12 -> 13; level 13 is shown as 12
-        if matches!(e, Exit::NextLevel { seamless: false } | Exit::NewGame) && (1..=13).contains(&g.level) {
-            g.banner = (24, g.level.min(12));
-        }
+    if !g.debug || g.world.exit.is_some() {
+        return;
+    }
+    if g.kid_respawn || k.just_pressed(KeyCode::KeyC) {
+        g.kid_respawn = false;
+        let l = g.level;
+        start(&mut g, &a, Progress::new_game(l));
         return;
     }
     let step = k.just_pressed(KeyCode::Period) as i32 - k.just_pressed(KeyCode::Comma) as i32;
