@@ -70,6 +70,9 @@ Status: R1 done (settings render_mode / POP_RENDER, adapter + ray-query probe lo
 ### M10 - Voxel characters (optional)
 Status: V2 done (character_style voxel / POP_CHARS / F6: all in-game characters, swords and the cutscene actors as voxel meshes; union-of-balls profile with colour-region bumps and a flatter back, rear layers darker, baked AO; front projection test over all kid, guard, sword and PV images), V3+ open. Plan in docs/render_roadmap.md (V1 voxeliser prototype on kid frames, V2 all characters/palettes/swords, V3 depth heuristics + lighting, V4 optional hybrid depth rules, V5 rigged characters as a separate decision). Built at runtime from the user's own data, never shipped. Effort: M for extruded sprites, XL for rigged 3D.
 
+### Tile textures
+Status: done for floors, spikes, buttons, debris, pillars, big pillars, door posts, exit frames and dungeon walls (setting tile_textures original|procedural, POP_TILES; original images decoded at runtime from VDUNGEON/VPALACE.DAT, docs/texture_inventory.md 5). Open: palace walls (1-bit overlays), gate bars and frames 260..267, lattice pieces, loose floors, exact 2D draw positions of the +3 / +9 pieces.
+
 ## Cross-cutting
 
 - Fidelity first: any mechanics change must be justified against the original; keep a `docs/mechanics.md` of verified behaviours.

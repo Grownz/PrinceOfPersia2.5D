@@ -48,7 +48,7 @@ pub struct GuardSprite;
 pub struct SwordSprite(bool);
 
 /// Levels with the palace tile set (they use the GUARD1 palette, ds:01CE)
-fn palace(level: usize) -> bool {
+pub(crate) fn palace(level: usize) -> bool {
     matches!(level, 4 | 5 | 6 | 10 | 11 | 14)
 }
 
@@ -285,7 +285,8 @@ pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: Keys) {
         latch.0 = held;
         g.banner.0 = g.banner.0.saturating_sub(1);
         if g.world.kid.controlled {
-            if (1..=pop_core::level::ROOMS as u8).contains(&g.world.kid.room) {
+            // follow the kid when he changes rooms (a room picked with POP_ROOM or Ctrl+arrows stays until then)
+            if g.world.kid.room != g.kid_prev.1 && (1..=pop_core::level::ROOMS as u8).contains(&g.world.kid.room) {
                 g.room = g.world.kid.room as usize; // room 0 = outside the level: keep showing the last room
             }
         } else if g.world.kid.x < 20 || g.world.kid.x > 200 {
@@ -430,8 +431,14 @@ pub fn render(
     let mut kid_body = None;
     let mut guard_body = None;
     let vx = &mut Voxels { on: *style == CharacterStyle::Voxel, meshes: &mut meshes };
+    // the shown room can differ from the kid's (POP_ROOM, Ctrl+arrows); room 0 = outside the level: keep drawing him
+    let kid_here = w.kid.room as usize == g.room || !(1..=pop_core::level::ROOMS as u8).contains(&w.kid.room);
     if let Ok((mut t, mut vis, mut mat, mut mesh)) = q.single_mut() {
-        kid_body = draw_char(&w.kid, g.kid_prev, w.alpha(), &mut a, &w.level, w.guard_type, w.level_no, &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh);
+        if !kid_here {
+            *vis = Visibility::Hidden;
+        } else {
+            kid_body = draw_char(&w.kid, g.kid_prev, w.alpha(), &mut a, &w.level, w.guard_type, w.level_no, &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh);
+        }
     }
     if let Ok((mut t, mut vis, mut mat, mut mesh)) = qg.single_mut() {
         match &w.guard {
