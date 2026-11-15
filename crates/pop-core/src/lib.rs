@@ -1,5 +1,6 @@
 //! Engine-independent core: original data formats and (later) the game simulation.
 //! No graphics/audio deps, so mechanics can be tested headless against the original.
+pub mod cutscene;
 pub mod dat;
 pub mod exe;
 pub mod image;

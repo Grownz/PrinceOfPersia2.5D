@@ -179,14 +179,14 @@ fn world_pos(k: &Kid, env: &Env) -> Vec2 {
 }
 
 /// 7.3: screen x (320 px wide) of the image's left edge (facing left) or exclusive right edge (facing right).
-fn screen_x(x: u8, dx: i8, flags: u8, facing_left: bool) -> i32 {
+pub(crate) fn screen_x(x: u8, dx: i8, flags: u8, facing_left: bool) -> i32 {
     let dir_byte: u8 = if facing_left { 0xFF } else { 0 };
     let dxs = if facing_left { -(dx as i32) } else { dx as i32 };
     let parity = (((flags ^ dir_byte) & 0x80) == 0) as i32;
     (2 * (x as i32 + dxs) - 116 + parity) * 320 / 280
 }
 
-/// Build the world for `p` (restart, next level, new game, the demo level 0). Cutscenes: see `flow` (text cards only).
+/// Build the world for `p` (restart, next level, new game, the demo level 0). Cutscenes: see `flow` and `cutscene`.
 pub fn start(g: &mut Game, a: &KidAssets, p: Progress) {
     let p = if p.level < g.levels.len() { p } else { Progress::new_game(0) }; // after the last level: back to the title
     g.level = p.level;

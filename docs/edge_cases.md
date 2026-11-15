@@ -416,14 +416,15 @@ Other graphics modes use other routines (`95BE`, `95F3`, `03FF`); not needed.
 | level 6 fall | leave_room returns -2: level 6, Char.room 1 (`3D22`) | play_frame `0981`: Kid.y = -1 (`[4398]`), stop sounds, next_level++ |
 | level 12 room 23 | Kid.room == 23 (`09AA`) | next_level++, stop sounds, seamless `[59C8]` = 1 (no HP reset, no "Level" text) |
 | level 0 room 24 | Kid.room == 24 (`095B`) | demo over: start_game -> title |
-| level 14 room 5 | check_the_end (`100A`) | ending `2F2F`: cutscene `2960` (sound 26), then `0C89` (UNVERIFIED: end screen) |
+| level 14 room 5 | check_the_end (`100A`) | ending `2F2F`: cutscene `2960` (sound 26), then load_opt_sounds `0C89(56, 56)`, page 44, music 56 (cutscenes.md 4.7) |
 | time out | 3.5 | cutscene `2A1B`, title |
 | level change | play_level `48C0`, level != current | cutscene from **tbl_cutscenes `ds:0FB4`** (far pointer per level), then load graphics |
 
 tbl_cutscenes (VERIFIED, offsets in segment 0000): level **2: `2B04`**, **4: `2AD0`**, **6: `2B04`**, **8: `2891`**, **9: `28FB`**,
 **12: `2A71`**, all others none. So a cutscene plays before levels 2, 4, 6, 8, 9 and 12 (never on a restart). Launcher
-`322D(1, ptr, level > 2)` (third argument meaning UNVERIFIED). Contents (INFERRED from the calls: sound id, then
-`2540(n)` = play n cutscene ticks, `2724`/`273D` = start a princess/vizier sequence):
+load_intro `322D(which_imgs, func, free_sounds)`: play_level `4919..4933` pushes `level > 2` first, so the call is
+`322D(level > 2, ptr, 1)` (which_imgs = PV.DAT 850 or 900 set; free_sounds = 1). `2540(n)` = play n cutscene frames,
+`2724` starts a sequence for the princess (shad slot), `273D` for the kid slot (vizier, mouse or kid). Summary:
 
 | cutscene | sound | ticks (sum of 2540 args) | notes |
 |---|---|---|---|
@@ -434,7 +435,7 @@ tbl_cutscenes (VERIFIED, offsets in segment 0000): level **2: `2B04`**, **4: `2A
 | `2A71` (before 12) | 40 | 2 + 24, then `2B04` | |
 | `2A1B` (time out) | 36 | 2 + 100 | |
 | `2960` (ending) | 26 | 8 + 5 + 2 + 39 + 9 + 41 | |
-The cutscene scripts themselves are presentation (PV.DAT, cutscene frame table); not analysed further (UNVERIFIED beyond the table).
+The scripts, actors, images and timing are analysed in docs/cutscenes.md (VERIFIED) and played by `pop_core::cutscene`.
 
 ### 4.2 Level 8 mouse (VERIFIED)
 

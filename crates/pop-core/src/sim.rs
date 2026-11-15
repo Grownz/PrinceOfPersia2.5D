@@ -135,7 +135,7 @@ pub enum Exit {
     NextLevel { seamless: bool },
     /// restart the same level (Shift/Enter after death, Ctrl+A)
     Restart,
-    /// back to the title: demo over, "Press Button" timed out, time out (cutscenes are not played)
+    /// back to the title: demo over, "Press Button" timed out, time out (the app plays the time-out cutscene first)
     Title,
     /// a key during the demo starts the game
     NewGame,
@@ -573,7 +573,7 @@ impl World {
             }
             7 => {
                 if self.progress.rem_min == 0 {
-                    self.set_exit(Exit::Title); // expired (0000:31F4); the cutscene is not played
+                    self.set_exit(Exit::Title); // expired (0000:31F4); the app plays the time-out cutscene
                 }
                 self.text_timer = if matches!(self.level_no, 0 | 15) { 36 } else { 288 };
             }

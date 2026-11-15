@@ -131,7 +131,7 @@ impl AudioState {
     }
 }
 
-fn play(cmds: &mut Commands, s: &Sounds, a: &mut AudioState, id: u8, playing: &Query<(Entity, &Sfx)>) {
+pub fn play(cmds: &mut Commands, s: &Sounds, a: &mut AudioState, id: u8, playing: &Query<(Entity, &Sfx)>) {
     let Some(Some((h, steps))) = s.0.get(id as usize) else { return };
     // the same sound again restarts it (the original has one channel; this keeps repeated door/gate ticks from piling up)
     for (e, _) in playing.iter().filter(|(_, x)| x.0 == id) {
@@ -176,24 +176,28 @@ pub fn fixed(mut cmds: Commands, mut g: ResMut<Game>, s: Res<Sounds>, mut a: Res
     }
 }
 
-fn stop_all(cmds: &mut Commands, a: &mut AudioState, playing: &Query<(Entity, &Sfx)>) {
+pub fn stop_all(cmds: &mut Commands, a: &mut AudioState, playing: &Query<(Entity, &Sfx)>) {
     for (e, _) in playing {
         cmds.entity(e).despawn();
     }
     a.busy = 0;
 }
 
-/// Title and cards silence the game; a card plays its cue (the cutscene music stands in for the cutscene).
-pub fn enter_title(mut cmds: Commands, mut a: ResMut<AudioState>, playing: Query<(Entity, &Sfx)>) {
+/// The title silences the game, except when it comes back from the intro scene (its music 52 plays on over page 43).
+pub fn enter_title(mut cmds: Commands, mut a: ResMut<AudioState>, f: Res<crate::flow::Flow>, playing: Query<(Entity, &Sfx)>) {
+    if f.fresh() {
+        stop_all(&mut cmds, &mut a, &playing);
+    }
+}
+
+/// A cutscene starts silent (the original waits for the level music before load_intro; the title waits for its story music).
+pub fn enter_cutscene(mut cmds: Commands, mut a: ResMut<AudioState>, playing: Query<(Entity, &Sfx)>) {
     stop_all(&mut cmds, &mut a, &playing);
 }
 
-pub fn enter_card(mut cmds: Commands, s: Res<Sounds>, mut a: ResMut<AudioState>, f: Res<crate::flow::Flow>, playing: Query<(Entity, &Sfx)>) {
-    stop_all(&mut cmds, &mut a, &playing);
-    if let Some(id) = f.card_sound {
-        play(&mut cmds, &s, &mut a, id, &playing);
-    }
-    a.busy = 0; // cards play in real time; only Playing steps count busy
+/// FixedUpdate outside Playing (title, cutscenes): one step of the "sound playing" counter elapses.
+pub fn drain(mut a: ResMut<AudioState>) {
+    a.busy = a.busy.saturating_sub(1);
 }
 
 pub fn pause(sinks: Query<&AudioSink, With<Sfx>>) {

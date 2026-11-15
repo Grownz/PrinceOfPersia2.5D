@@ -83,8 +83,8 @@ impl Exe {
         self.frames(GUARD_FRAMES_AT, GUARD_FRAMES)
     }
 
-    /// Cutscene frames: the `sword` byte is 64 or 128 here and appears to select the image set, not a sword;
-    /// image numbers do not all exist in PV.DAT, so the mapping to DAT files is unresolved.
+    /// Cutscene frames (charid 5 princess, 6 vizier): `sword` 64 = PV.DAT 800 set, 128 = 850 / 900 set (docs/cutscenes.md 1.6);
+    /// image i = set base + 1 + i.
     pub fn cutscene_frames(&self) -> Vec<Frame> {
         self.frames(CUT_FRAMES_AT, CUT_FRAMES)
     }
@@ -93,6 +93,12 @@ impl Exe {
     /// a frame selects its entry with `sword & 0x3F` (entry 0 = no sword).
     pub fn sword_table(&self) -> Vec<(u8, i8, i8)> {
         self.0[DS_BASE + 0x1726..][..51 * 3].chunks(3).map(|b| (b[0], b[1] as i8, b[2] as i8)).collect()
+    }
+
+    /// Sound priorities (ds:2528, one byte per sound id 0..56): play_sound (0000:12F0) keeps the queued sound when the new
+    /// one has a higher value.
+    pub fn sound_priorities(&self) -> Vec<u8> {
+        self.0[DS_BASE + 0x2528..][..57].to_vec()
     }
 
     /// Data-segment offsets of sequences 1..=114.
