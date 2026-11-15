@@ -57,6 +57,7 @@ fn tick(w: &mut World, keys: Keys, n: usize) {
 
 #[test]
 fn button_opens_gate_for_285_ticks() {
+    if crate::no_game_data() { return; }
     // raise button (15) at col 3 row 1 (link 0) -> gate (4) at col 6 row 1 (tile 16 of room 1); the kid stands on the button
     let mut b_links = vec![];
     b_links.push((0u8, 0x80 | 0x20 | 16)); // last entry, room low bits = 1, tile 16
@@ -79,6 +80,7 @@ fn button_opens_gate_for_285_ticks() {
 
 #[test]
 fn loose_floor_falls_ten_ticks_after_being_pressed() {
+    if crate::no_game_data() { return; }
     // loose floor (11) at col 3 row 1: the kid stands on it
     let mut w = world(3, &[(3, 1, 11)], &[]);
     let mut fall_tick = None;
@@ -97,6 +99,7 @@ fn loose_floor_falls_ten_ticks_after_being_pressed() {
 
 #[test]
 fn spikes_cycle_and_kill_a_runner() {
+    if crate::no_game_data() { return; }
     // spikes (2) at col 6 row 1; the kid runs at them
     let mut w = world(2, &[(6, 1, 2)], &[]);
     let mut died = false;
@@ -110,6 +113,7 @@ fn spikes_cycle_and_kill_a_runner() {
 
 #[test]
 fn spike_cycle_lasts_23_ticks() {
+    if crate::no_game_data() { return; }
     let mut w = world(0, &[(8, 1, 2)], &[]);
     w.kid.alive = false; // keep the kid out of the way: only the tile cycle is of interest
     w.kid.controlled = false;
@@ -129,6 +133,7 @@ fn spike_cycle_lasts_23_ticks() {
 
 #[test]
 fn chompers_start_staggered() {
+    if crate::no_game_data() { return; }
     let w = world(0, &[(1, 1, 18), (2, 1, 18), (3, 1, 18)], &[]);
     let m: Vec<u8> = (11..14).map(|i| w.level.tile_at(1, i).modifier).collect();
     assert_eq!(m, [15, 12, 9]);
@@ -165,6 +170,7 @@ fn drink(kind: u8, hp: i32) -> (World, Vec<(u8, u8)>) {
 
 #[test]
 fn potions_5_1() {
+    if crate::no_game_data() { return; }
     let (w, f) = drink(2, 3); // life: one more heart, full health
     assert_eq!((w.kid.hp_max, w.kid.hp), (4, 4));
     assert!(w.sounds.contains(&30) && f.contains(&(4, 4)));
@@ -186,6 +192,7 @@ fn potions_5_1() {
 
 #[test]
 fn have_sword_except_on_level_1() {
+    if crate::no_game_data() { return; }
     let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
     for n in [0usize, 1, 2] {
         let w = World::new(data(), Level::parse(lv.get(2000 + n as u16).unwrap()).unwrap(), n);
@@ -195,6 +202,7 @@ fn have_sword_except_on_level_1() {
 
 #[test]
 fn all_shipped_levels_run_without_panicking() {
+    if crate::no_game_data() { return; }
     let d = data();
     let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
     for n in 0..=14usize {
@@ -214,6 +222,7 @@ use crate::sim::{Exit, Progress};
 
 #[test]
 fn death_counter_timeline_and_restart_3_2() {
+    if crate::no_game_data() { return; }
     let mut w = world(3, &[], &[]);
     tick(&mut w, NONE, 3);
     w.sounds.clear();
@@ -255,6 +264,7 @@ fn death_counter_timeline_and_restart_3_2() {
 
 #[test]
 fn restart_and_next_level_progress_3_4() {
+    if crate::no_game_data() { return; }
     let mut w = world(3, &[], &[]);
     tick(&mut w, NONE, 719);
     assert_eq!((w.progress.rem_min, w.progress.rem_tick), (59, 719), "720 ticks per minute, starting at 719");
@@ -288,6 +298,7 @@ fn restart_and_next_level_progress_3_4() {
 
 #[test]
 fn level_exits_4_1() {
+    if crate::no_game_data() { return; }
     // the open exit door: up -> seq 70 (go up the stairs), its op F1 ends the level
     let mut w = world(5, &[(5, 1, 16)], &[]);
     w.level.start_room = 2;
@@ -342,6 +353,7 @@ fn level_exits_4_1() {
 
 #[test]
 fn mouse_level_8_4_2() {
+    if crate::no_game_data() { return; }
     let mut w = World::new(data(), synth(16, 0..3, 2, 1, &[], &[]), 8);
     w.leveldoor_open = 1; // the exit door just finished opening
     tick(&mut w, NONE, 148);
@@ -371,6 +383,7 @@ fn mouse_level_8_4_2() {
 
 #[test]
 fn level4_mirror_shadow_4_3() {
+    if crate::no_game_data() { return; }
     // room 4, row 0: a mirror at column 4; the kid runs left from column 9 and jumps (try every take-off tick)
     let mut found = false;
     'outer: for jump in 2..24 {
@@ -403,6 +416,7 @@ fn level4_mirror_shadow_4_3() {
 
 #[test]
 fn demo_level_0_4_4() {
+    if crate::no_game_data() { return; }
     let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
     let mut w = World::new(data(), Level::parse(lv.get(2000).unwrap()).unwrap(), 0);
     assert!(w.demo && w.kid.hp == 4 && w.kid.have_sword);
@@ -427,6 +441,7 @@ fn demo_level_0_4_4() {
 
 #[test]
 fn level_chain_end_and_audit_fixes() {
+    if crate::no_game_data() { return; }
     let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
     let lvl = |n: u16| Level::parse(lv.get(2000 + n).unwrap()).unwrap();
     let d = data();
@@ -494,6 +509,7 @@ fn save_file_parsing_is_strict() {
 
 #[test]
 fn ending_wins_over_a_title_exit_in_the_same_tick() {
+    if crate::no_game_data() { return; }
     let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
     let mut w = World::from_progress(data(), Level::parse(lv.get(2014).unwrap()).unwrap(), Progress::new_game(14));
     w.text_timer = 2; // reaches 1 at the start of the next tick: Exit::Title
@@ -510,6 +526,7 @@ fn ending_wins_over_a_title_exit_in_the_same_tick() {
 
 #[test]
 fn clock_runs_in_the_demo_and_stops_on_level_13_after_jaffar() {
+    if crate::no_game_data() { return; }
     // show_time (0000:C170) has no level-0 test: the demo's clock runs
     let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
     let mut w = World::new(data(), Level::parse(lv.get(2000).unwrap()).unwrap(), 0);
@@ -526,6 +543,7 @@ fn clock_runs_in_the_demo_and_stops_on_level_13_after_jaffar() {
 
 #[test]
 fn level8_counter_capped_at_255_behaves_like_the_word() {
+    if crate::no_game_data() { return; }
     // the original counter is a word (0..65535); within the 60 minutes (< 43200 frames) it never wraps, and the only value
     // anything tests on level 8 is 150 (do_mouse) and != 0 (door open), so the port's saturating u8 gives the same result
     let mut w = World::new(data(), synth(16, 0..3, 2, 1, &[], &[]), 8);
@@ -588,6 +606,7 @@ fn reach_exit(n: usize) -> Result<Exit, String> {
 
 #[test]
 fn play_through_every_level_reaches_its_exit() {
+    if crate::no_game_data() { return; }
     let mut bad = vec![];
     for n in 1..=14 {
         let want = match n {

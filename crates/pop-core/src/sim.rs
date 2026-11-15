@@ -1181,6 +1181,7 @@ mod tests {
 
     #[test]
     fn logic_runs_every_fifth_step() {
+        if crate::no_game_data() { return; }
         // a World needs game data; the timing logic is tested through the counters only
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Original_data/");
         let exe = Exe::open(format!("{dir}PRINCE.EXE")).unwrap();

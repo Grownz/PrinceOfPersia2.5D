@@ -1,0 +1,9 @@
+Copyright (c) the Prince of Persia x64 authors. All rights reserved.
+
+No open-source licence has been chosen for this code yet; until one is added here, no permission to copy, modify or
+redistribute it is granted beyond what applicable law allows.
+
+This licence covers only the code, documentation, synthesized sounds and procedural geometry in this repository.
+It does NOT cover Prince of Persia itself: the original game program, graphics, sounds and level data are copyrighted
+by their owners, are not part of this repository or of any release package, and must be supplied by the user from
+their own copy. See docs/PROVENANCE.md.

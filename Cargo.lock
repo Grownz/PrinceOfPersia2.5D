@@ -4467,6 +4467,8 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "pop-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

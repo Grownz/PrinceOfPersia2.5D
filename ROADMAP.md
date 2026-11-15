@@ -61,6 +61,8 @@ Replace PC-speaker/MIDI/digi sounds with modern effects and music; event hooks d
 ### M8 - Packaging and polish
 Windows x64 release build, installer/zip, settings (resolution, controls, volume), controller support, performance pass, CI build, licence/asset-provenance notes.
 
+Status: done except an installer (zip only). Release profile (thin LTO, stripped, no console, errors in pop.log); tools/package.ps1 builds dist/PrinceOfPersia-x64.zip (exe + README.txt, never game data). Data search: POP_DATA, Original_data next to the exe, cwd, settings data_path; missing data shows a message. settings.json (window mode / size, volume, mute, sound mode, kid key bindings, data path; F11 borderless fullscreen). Controller via Bevy gamepad (docs/controls.md; UNVERIFIED on real hardware). POP_PERF=1: about 1.4 ms/frame uncapped in release, no fixes needed. CI: .github/workflows/ci.yml (data tests skip without Original_data). docs/PROVENANCE.md, LICENSE, README.md.
+
 ## Cross-cutting
 
 - Fidelity first: any mechanics change must be justified against the original; keep a `docs/mechanics.md` of verified behaviours.

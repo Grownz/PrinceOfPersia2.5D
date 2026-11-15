@@ -653,6 +653,7 @@ mod tests {
 
     #[test]
     fn guard_is_placed_like_enter_guard() {
+        if crate::no_game_data() { return; }
         let w = world(2, 7, 1);
         let g = w.guard.as_ref().expect("guard in the start room");
         assert_eq!((g.charid, g.room, g.row, g.x, g.facing_left, g.sword, g.alive), (2, 1, 1, 170, true, 0, true));
@@ -663,6 +664,7 @@ mod tests {
 
     #[test]
     fn debug_draw_trace() {
+        if crate::no_game_data() { return; }
         let mut w = world(2, 7, 1);
         for t in 0..40 {
             tick(&mut w, NONE, 1);
@@ -673,6 +675,7 @@ mod tests {
 
     #[test]
     fn guard_and_kid_draw_their_swords() {
+        if crate::no_game_data() { return; }
         let mut w = world(2, 7, 1);
         tick(&mut w, NONE, 40);
         assert_eq!(w.kid.sword, 2, "the kid draws when a reachable guard is within 90");
@@ -682,6 +685,7 @@ mod tests {
 
     #[test]
     fn kid_strike_and_hit_reduces_hit_points() {
+        if crate::no_game_data() { return; }
         // attacker (kid) on frame 154 at distance 20 from a guard in en garde: the guard is marked hurt, then loses 1 HP
         let mut w = world(2, 5, 3);
         tick(&mut w, NONE, 30);
@@ -706,6 +710,7 @@ mod tests {
 
     #[test]
     fn parry_blocks_the_hit() {
+        if crate::no_game_data() { return; }
         let mut w = world(2, 5, 3);
         tick(&mut w, NONE, 30);
         let g = w.guard.as_mut().unwrap();
@@ -725,6 +730,7 @@ mod tests {
 
     #[test]
     fn a_kid_without_sword_dies_from_one_hit() {
+        if crate::no_game_data() { return; }
         let mut w = world(2, 5, 3);
         tick(&mut w, NONE, 2);
         w.kid.sword = 0;
@@ -739,6 +745,7 @@ mod tests {
 
     #[test]
     fn a_fight_runs_without_panics_and_someone_gets_hurt() {
+        if crate::no_game_data() { return; }
         let mut w = world(2, 5, 3);
         let mut hurt = false;
         for t in 0..900 {
@@ -762,6 +769,7 @@ mod tests {
 
     #[test]
     fn guard_left_behind_comes_back_fresh() {
+        if crate::no_game_data() { return; }
         let mut w = world(2, 7, 1);
         // the guard is hurt, then the kid leaves the room to the right
         w.guard.as_mut().unwrap().hp = 1;
@@ -777,6 +785,7 @@ mod tests {
 
     #[test]
     fn sheathing_makes_the_kid_offguard_and_makes_the_guard_wait() {
+        if crate::no_game_data() { return; }
         let mut w = world(2, 7, 1);
         tick(&mut w, NONE, 40);
         assert_eq!(w.kid.sword, 2);
@@ -790,6 +799,7 @@ mod tests {
 
     #[test]
     fn shadow_united_counts_down_to_minus_one() {
+        if crate::no_game_data() { return; }
         let mut w = world(12, 7, 1);
         w.shadow.united = 3;
         tick(&mut w, NONE, 5);
@@ -800,6 +810,7 @@ mod tests {
 
     #[test]
     fn frame_length_is_six_steps_while_the_sword_is_drawn() {
+        if crate::no_game_data() { return; }
         let mut w = world(2, 7, 1);
         tick(&mut w, NONE, 40);
         assert_eq!(w.kid.sword, 2);
@@ -863,6 +874,7 @@ mod tests {
 
     #[test]
     fn guard_bumped_vectors_1_1() {
+        if crate::no_game_data() { return; }
         // A: facing left, own column 3 is a wall: dist = 0 + 107 - right_coll, shoved forward by |dist|, seq 65
         let mut w = world(2, 7, 1);
         w.set_tile(1, 13, Tile::Wall);
@@ -905,6 +917,7 @@ mod tests {
 
     #[test]
     fn guard_chomped_vector_1_2() {
+        if crate::no_game_data() { return; }
         let mut w = world(2, 7, 1);
         w.set_tile(1, 14, Tile::Chomper);
         w.set_mod(1, 14, 2);
@@ -926,6 +939,7 @@ mod tests {
 
     #[test]
     fn guard_falls_off_a_ledge_1_3() {
+        if crate::no_game_data() { return; }
         // backing off (fall_x -1): seq 82; one row down, landing en garde (seq 63) with fall_y 21
         let mut w = world(2, 7, 1);
         let mut g = en_garde(&w, 130, true);
@@ -956,6 +970,7 @@ mod tests {
 
     #[test]
     fn guard_landing_from_two_rows_is_fatal() {
+        if crate::no_game_data() { return; }
         let w = world(2, 7, 1);
         for (charid, seq, dhp) in [(2, 22, -3), (4, 20, -1)] {
             let env = w.guard_env();
@@ -969,6 +984,7 @@ mod tests {
 
     #[test]
     fn death_placement_vectors_1_4() {
+        if crate::no_game_data() { return; }
         // guard facing left, killed en garde in column 5; behind = column 6
         for (own, behind, dist9, want_dx, want_seq) in
             [(Tile::Floor, Tile::Gate, false, None, 85), (Tile::Gate, Tile::Floor, false, Some(125), 85), (Tile::Floor, Tile::Floor, false, Some(-1), 85), (Tile::Floor, Tile::Empty, true, Some(-2), 81)]
@@ -999,6 +1015,7 @@ mod tests {
 
     #[test]
     fn dead_guards_come_back_on_their_resting_frame() {
+        if crate::no_game_data() { return; }
         // (seq, plays, frame): resting pointers 0x20CF, 0x20DA, 0x20E2, 0x20BA; one play_seq after re-entry shows the frame
         for (seq, plays, frame) in [(71, 10, 185), (51, 6, 177), (54, 5, 178), (22, 8, 185)] {
             let mut w = world(2, 7, 1);
@@ -1082,6 +1099,7 @@ mod tests {
 
     #[test]
     fn take_hp_sets_the_delta() {
+        if crate::no_game_data() { return; }
         let mut w = world(2, 7, 1);
         assert!(!w.kid.take_hp(1));
         assert_eq!(w.kid.hp_delta, -1);
@@ -1091,6 +1109,7 @@ mod tests {
 
     #[test]
     fn level12_no_stale_shadow_record_after_uniting() {
+        if crate::no_game_data() { return; }
         // united: the shadow's record is saved with charid 0 (0000:4805..4831), so check_killed_shadow stays off afterwards
         let mut w = world(12, 7, 1);
         let mut s = w.kid.clone();
@@ -1121,6 +1140,7 @@ mod tests {
 
     #[test]
     fn dead_guard_pointer_at_a_sequence_end_loops_in_its_own_sequence() {
+        if crate::no_game_data() { return; }
         // the resting pointer of every death sequence is the final Jmp of its decoded run; one play_seq follows that loop back
         // into the same sequence's bytes instead of running on into the next sequence (whose bytes follow in memory)
         for (seq, plays, frame) in [(71, 10, 185), (51, 6, 177), (54, 5, 178), (22, 8, 185)] {
@@ -1147,6 +1167,7 @@ mod tests {
 
     #[test]
     fn mirror_image_reflects_about_the_kids_curr_col() {
+        if crate::no_game_data() { return; }
         // x_bump (ds:24BA, VERIFIED bytes) = X0 + COL_W * (i - 5); check_mirror_image uses ds:24BF[Char.curr_col] = x_bump[col + 5]
         let x_bump: [i32; 20] = [-12, 2, 16, 30, 44, 58, 72, 86, 100, 114, 128, 142, 156, 170, 184, 198, 212, 226, 240, 254];
         for (i, &x) in x_bump.iter().enumerate() {

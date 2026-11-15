@@ -156,21 +156,31 @@ fn card(f: &mut Flow, next: &mut NextState<Screen>, text: String, then_title: bo
     next.set(Screen::Card);
 }
 
-fn save_path() -> std::path::PathBuf {
-    std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("PRINCE.SAV"))).unwrap_or_else(|| "PRINCE.SAV".into())
+/// The folder of the running exe (PRINCE.SAV, settings.json, pop.log live there); the cwd if it is unknown.
+pub fn exe_dir() -> std::path::PathBuf {
+    std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())).unwrap_or_else(|| ".".into())
 }
 
-/// Write PRINCE.SAV atomically: a temporary file next to it, flushed, then renamed over the old save (a crash or a full
-/// disk mid-write keeps the previous save).
+fn save_path() -> std::path::PathBuf {
+    exe_dir().join("PRINCE.SAV")
+}
+
 fn write_save(text: &str) -> std::io::Result<()> {
+    write_atomic(&save_path(), text)
+}
+
+/// Write a file atomically: a temporary file next to it, flushed, then renamed over the old one (a crash or a full disk
+/// mid-write keeps the previous file).
+pub fn write_atomic(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
-    let path = save_path();
-    let tmp = path.with_extension("SAV.tmp");
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
     let r = std::fs::File::create(&tmp).and_then(|mut f| {
         f.write_all(text.as_bytes())?;
         f.sync_all()
     });
-    let r = r.and_then(|()| std::fs::rename(&tmp, &path));
+    let r = r.and_then(|()| std::fs::rename(&tmp, path));
     if r.is_err() {
         let _ = std::fs::remove_file(&tmp); // best effort: no stale temp file
     }
@@ -193,12 +203,17 @@ fn any_key(k: &ButtonInput<KeyCode>) -> bool {
         || (k.just_pressed(KeyL) && !ctrl(k))
 }
 
-pub fn title(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAssets>, mut f: ResMut<Flow>, time: Res<Time>, mut next: ResMut<NextState<Screen>>) {
+/// Any controller button pressed this frame (starts the game / skips a card like any key).
+pub fn pad_any(pads: &Query<&Gamepad>) -> bool {
+    pads.iter().any(|p| p.get_just_pressed().next().is_some())
+}
+
+pub fn title(k: Res<ButtonInput<KeyCode>>, pads: Query<&Gamepad>, mut g: ResMut<Game>, a: Res<KidAssets>, mut f: ResMut<Flow>, time: Res<Time>, mut next: ResMut<NextState<Screen>>) {
     f.idle += time.delta_secs();
     let loaded = (ctrl(&k) && k.just_pressed(KeyCode::KeyL)).then(load_game).flatten();
     if let Some(p) = loaded {
         begin(&mut g, &a, &mut f, &mut next, p, true, true);
-    } else if any_key(&k) {
+    } else if any_key(&k) || pad_any(&pads) {
         begin(&mut g, &a, &mut f, &mut next, Progress::new_game(1), true, true); // new game (0000:4893)
     } else if f.idle > ATTRACT_SECS {
         begin(&mut g, &a, &mut f, &mut next, Progress::new_game(0), false, true); // the demo
@@ -210,8 +225,8 @@ pub fn reset_idle(mut f: ResMut<Flow>) {
 }
 
 /// Esc / P toggle the pause (stepping stops because FixedUpdate only runs in Playing).
-pub fn pause(k: Res<ButtonInput<KeyCode>>, state: Res<State<Screen>>, mut next: ResMut<NextState<Screen>>) {
-    if k.just_pressed(KeyCode::Escape) || k.just_pressed(KeyCode::KeyP) {
+pub fn pause(k: Res<ButtonInput<KeyCode>>, pads: Query<&Gamepad>, state: Res<State<Screen>>, mut next: ResMut<NextState<Screen>>) {
+    if k.just_pressed(KeyCode::Escape) || k.just_pressed(KeyCode::KeyP) || pads.iter().any(|p| p.just_pressed(GamepadButton::Start)) {
         match state.get() {
             Screen::Playing => next.set(Screen::Paused),
             Screen::Paused => next.set(Screen::Playing),
@@ -221,7 +236,7 @@ pub fn pause(k: Res<ButtonInput<KeyCode>>, state: Res<State<Screen>>, mut next: 
 }
 
 /// Playing: save (Ctrl+G), the demo's keys, and the world's exit (restart, next level, title, the end).
-pub fn playing(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAssets>, mut f: ResMut<Flow>, mut next: ResMut<NextState<Screen>>, audio: Res<crate::audio::AudioState>) {
+pub fn playing(k: Res<ButtonInput<KeyCode>>, pads: Query<&Gamepad>, mut g: ResMut<Game>, a: Res<KidAssets>, mut f: ResMut<Flow>, mut next: ResMut<NextState<Screen>>, audio: Res<crate::audio::AudioState>) {
     if ctrl(&k) && k.just_pressed(KeyCode::KeyG) && g.world.exit.is_none() {
         // Ctrl+G (key 7, 0000:05EA): only on levels 3..13; messages from ds:0AA4 / ds:0AB0 (display time UNVERIFIED)
         if pop_core::sim::SAVE_LEVELS.contains(&g.level) {
@@ -234,7 +249,7 @@ pub fn playing(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAsse
         if let Some(p) = (ctrl(&k) && k.just_pressed(KeyCode::KeyL)).then(load_game).flatten() {
             return begin(&mut g, &a, &mut f, &mut next, p, true, true);
         }
-        if any_key(&k) && !k.just_pressed(KeyCode::Escape) && !k.just_pressed(KeyCode::KeyP) {
+        if (any_key(&k) && !k.just_pressed(KeyCode::Escape) && !k.just_pressed(KeyCode::KeyP)) || (pad_any(&pads) && !pads.iter().any(|p| p.just_pressed(GamepadButton::Start))) {
             g.world.exit.get_or_insert(Exit::NewGame);
         }
     }
@@ -266,9 +281,9 @@ pub fn playing(k: Res<ButtonInput<KeyCode>>, mut g: ResMut<Game>, a: Res<KidAsse
     }
 }
 
-pub fn card_step(k: Res<ButtonInput<KeyCode>>, mut f: ResMut<Flow>, time: Res<Time>, mut next: ResMut<NextState<Screen>>) {
+pub fn card_step(k: Res<ButtonInput<KeyCode>>, pads: Query<&Gamepad>, mut f: ResMut<Flow>, time: Res<Time>, mut next: ResMut<NextState<Screen>>) {
     f.card_left -= time.delta_secs();
-    if f.card_left <= 0.0 || (f.card_left < 2.5 && any_key(&k)) {
+    if f.card_left <= 0.0 || (f.card_left < 2.5 && (any_key(&k) || pad_any(&pads))) {
         next.set(if f.card_then_title { Screen::Title } else { Screen::Playing });
     }
 }
