@@ -330,9 +330,15 @@ fn draw_char(
     let (sw, sh) = (w / 32.0, h * crate::room::TILE_H / TILE_H_PX as f32);
     // facing left: p.x is the left edge, image as stored; facing right: p.x is the right edge and the image is mirrored
     let (cx, flip) = if k.facing_left { (p.x + sw / 2.0, 1.0) } else { (p.x - sw / 2.0, -1.0) };
-    show(a, vx, key, !k.facing_left, m, Vec3::new(cx, p.y + sh / 2.0, 0.6), Vec2::new(flip * sw, sh), 0.6, t, mat, mesh);
+    show(a, vx, key, !k.facing_left, m, Vec3::new(cx, p.y + sh / 2.0, 0.6), Vec2::new(flip * sw, sh), VOXEL_Z, t, mat, mesh);
     Some(p)
 }
+
+/// Depth (world z) of the voxel figures' centre. Tile blocks span z -0.5..0.5 (room.rs), so the figure stands inside the
+/// room's depth instead of in front of the blocks. Not exactly the middle (0.0): pillars and bars are centred there and
+/// would cut through the body; 0.25 keeps the figure (about +-0.11 thick) clear of them and behind the block front faces.
+/// The flat sprite quads stay at z 0.6 (in front).
+const VOXEL_Z: f32 = 0.25;
 
 /// The voxel side of `render`: the style in use and the mesh store.
 pub struct Voxels<'a> {
@@ -404,7 +410,7 @@ fn draw_sword(
     let y = p.y - dy as f32 * crate::room::TILE_H / TILE_H_PX as f32;
     let (cx, flip) = if k.facing_left { (x + sw / 2.0, 1.0) } else { (x - sw / 2.0, -1.0) };
     // voxel sword just in front of the body's thickest layers (the original draws it over the body)
-    show(a, vx, (254, img, false, false, 0), !k.facing_left, m, Vec3::new(cx, y + sh / 2.0, 0.65), Vec2::new(flip * sw, sh), 0.6 + 5.0 / 32.0, t, mat, mesh);
+    show(a, vx, (254, img, false, false, 0), !k.facing_left, m, Vec3::new(cx, y + sh / 2.0, 0.65), Vec2::new(flip * sw, sh), VOXEL_Z + 5.0 / 32.0, t, mat, mesh);
 }
 
 pub fn render(
