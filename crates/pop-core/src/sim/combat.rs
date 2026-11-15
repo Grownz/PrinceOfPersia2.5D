@@ -72,10 +72,20 @@ fn do_auto_moves(table: &[(i16, i16)], st: &mut ShadowState, c: &mut Ctrl) -> i1
     m
 }
 
-/// autocontrol_shadow (0000:3F11) for the levels 5, 6 and 12 (level 4's mirror shadow is not simulated).
+/// autocontrol_shadow (0000:3F11) for the levels 4, 5, 6 and 12.
 fn shadow_moves(g: &mut Kid, env: &Env, level_no: usize, st: &mut ShadowState, rng: &mut Rng) -> Ctrl {
     let mut c = Ctrl::default();
     match level_no {
+        4 => {
+            // 0000:46F4: the mirror shadow runs away and vanishes
+            if g.room == 4 {
+                if g.x < 80 {
+                    st.clear = true;
+                } else {
+                    c.move_forward();
+                }
+            }
+        }
         5 => {
             // 0000:470E
             if g.room == 24 {
@@ -374,6 +384,15 @@ impl World {
             let env = mk_env(&self.data, &self.level, self.guard_type);
             let moves = if !g.alive {
                 Ctrl::default()
+            } else if g.charid == 24 {
+                // autocontrol_mouse (0000:3EDF)
+                if g.action == 0 {
+                    clear |= g.x >= 200;
+                } else if g.x < 166 {
+                    g.start_seq(&env, 107);
+                    g.play_seq(&env);
+                }
+                Ctrl::default()
             } else if g.charid == 1 {
                 g.tick_timers();
                 shadow_moves(&mut g, &env, level_no, &mut self.shadow, &mut self.rng)
@@ -383,7 +402,9 @@ impl World {
             if self.shadow.unite {
                 self.kid.copy_char_from(&g); // savekid in the autocontrol: the kid takes over the shadow's record
             }
-            g.tick_input(&env, Input::Moves(moves));
+            if !clear {
+                g.tick_input(&env, Input::Moves(moves));
+            }
             clear |= std::mem::take(&mut g.clear);
         }
         self.shared = g.sh;
@@ -415,12 +436,56 @@ impl World {
         self.guard = Some(g);
     }
 
+    /// do_mouse (0000:5332): loadkid, then the mouse: charid 24, x 200, row 0, facing left, 1 hit point, seq 105.
+    pub(super) fn do_mouse(&mut self) {
+        let mut g = self.new_fighter(24, self.kid.room, 200, 0, true, 0, 1, self.kid.sword, 105);
+        (g.fall_x, g.fall_y) = (self.kid.fall_x, self.kid.fall_y);
+        self.guard = Some(g);
+    }
+
+    /// jump_through_mirror (0000:5082): the kid's mirror image becomes the shadow (charid 1), the kid keeps 1 hit point.
+    /// INFERRED: tile_col is the mirror's column (the original uses whatever the last get_tile left).
+    pub(super) fn jump_through_mirror(&mut self, col: i32) {
+        let mut g = self.kid.clone();
+        g.x = (2 * (crate::kid::X0 + crate::kid::COL_W * col + 10) - g.x as i32) as u8; // check_mirror_image: x_bump[col + 5] + 10
+        g.facing_left = !g.facing_left;
+        g.charid = 1;
+        (g.hp, g.hp_max, g.hp_delta) = (self.kid.hp_max, self.kid.hp_max, 0);
+        g.leave_dir = None;
+        self.sounds.push(45);
+        self.kid.hp = 1;
+        self.guard = Some(g);
+    }
+
+    /// control_kid on level 0 (0000:7A91): the demo kid ignores the keyboard; flags persist between ticks.
+    pub(super) fn demo_control(&mut self) -> Ctrl {
+        let mut c = self.demo_ctrl;
+        if self.progress.checkpoint {
+            c.move_forward(); // the guard is dead: run right into room 24
+        } else if self.kid.sword != 0 {
+            // guard_skill = 10, the guard AI drives the kid, guard_skill = 11 (global: the demo guard keeps 11)
+            self.kid.skill = 10;
+            let env = mk_env(&self.data, &self.level, self.guard_type);
+            c = self.kid.autocontrol_kid(&env, &mut self.rng);
+            if let Some(g) = self.guard.as_mut() {
+                g.skill = 11;
+            }
+        } else {
+            do_auto_moves(&DEMO_MOVES, &mut self.shadow, &mut c);
+        }
+        c
+    }
+
     /// on_guard_killed (0000:833C)
     fn on_guard_killed(&mut self, charid: u8) {
         if charid == 1 {
             return;
         }
-        if self.level_no == 13 {
+        if self.level_no == 0 {
+            // the demo guard is dead: the demo kid runs off to the right
+            self.progress.checkpoint = true;
+            (self.shadow.demo_time, self.shadow.demo_index) = (0, 0);
+        } else if self.level_no == 13 {
             self.leveldoor_open = 2;
             self.flash = (15, 18); // 0000:835A
             self.sounds.push(43);
@@ -977,6 +1042,22 @@ mod tests {
             do_auto_moves(&SHADOW5_MOVES, &mut st, &mut Ctrl::default());
         }
         assert_eq!(st.demo_time, 254);
+    }
+
+    #[test]
+    fn demo_moves_table_4_4() {
+        let mut st = ShadowState::default();
+        let moves: Vec<i16> = (0..260).map(|_| do_auto_moves(&DEMO_MOVES, &mut st, &mut Ctrl::default())).collect();
+        // call n uses the last entry whose time <= n (one entry per call at most)
+        let at = |n: usize| moves[n - 1];
+        assert_eq!([at(1), at(2), at(12), at(13), at(29), at(30), at(37), at(46), at(47), at(48)], [0, 1, 1, 0, 0, 1, 5, 5, 0, 1]);
+        assert_eq!([at(128), at(136), at(157), at(158), at(171), at(205), at(232), at(233), at(254)], [6, 3, 7, 0, 4, 0, 0, -1, -1]);
+        assert_eq!((moves[255], st.demo_time), (-2, 254), "stops at demo_time 254");
+        // move 6 holds Shift, 7 releases it, 0 clears everything
+        let mut c = Ctrl::default();
+        let mut st = ShadowState { demo_time: 127, demo_index: 13, ..ShadowState::default() };
+        do_auto_moves(&DEMO_MOVES, &mut st, &mut c);
+        assert_eq!((c.shift, c.shift2), (-1, -1));
     }
 
     #[test]

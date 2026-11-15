@@ -44,6 +44,10 @@ pub enum Event {
     Pickup { room: u8, tilepos: u8 },
     /// proc_get_object (0000:81AB) took effect for this pickup_obj_type: the world part (sound, flash, feather, upside, open)
     GetObject(i8),
+    /// next_level++ (op F1 at the end of seq 70, or falling out of level 6 room 1)
+    NextLevel,
+    /// the kid jumped through the level-4 mirror (is_obstacle 0000:577E): modifier = 0x56, jumped_through_mirror = -1
+    Mirror { room: u8, tilepos: u8, col: i32 },
 }
 
 /// Everything the kid needs to look at besides itself.
@@ -208,6 +212,8 @@ pub struct Kid {
     knock: i8,
     /// effects on the level, drained by `sim::World`
     pub events: Vec<Event>,
+    /// control flags as control() left them on the last `Input::Moves` tick (the demo keeps them between ticks)
+    pub last_ctrl: Ctrl,
 }
 
 fn floor_div(a: i32, b: i32) -> i32 {
@@ -468,9 +474,10 @@ impl Kid {
         }
         if self.controlled {
             self.grab_timer = (self.grab_timer - 1).max(0);
-            if let Input::Keys(k) = input {
-                self.shift = k.shift;
-            }
+            self.shift = match input {
+                Input::Keys(k) => k.shift,
+                Input::Moves(c) => c.shift < 0, // demo: control_shift comes from the move list
+            };
             // control_kid (0000:7A19): hit points at 0 end the life (docs/combat.md 6)
             if self.alive && self.hp <= 0 {
                 self.alive = false;
@@ -513,7 +520,9 @@ impl Kid {
     /// in the drawn room and inside the visible x range, physics and floor checks.
     fn guard_tick(&mut self, env: &Env, input: Input) {
         let Input::Moves(mut c) = input else { return };
-        self.control(env, &mut c);
+        if self.charid != 24 {
+            self.control(env, &mut c); // play_guard: the mouse has autocontrol only, no control()
+        }
         if self.room != self.sh.drawn_room {
             return; // a guard in another room thinks but does not move
         }
@@ -589,6 +598,11 @@ impl Kid {
         true
     }
 
+    /// is_dead (0000:82ED): lying on a final death frame
+    pub fn is_dead(&self) -> bool {
+        matches!(self.frame, 177 | 178 | 185)
+    }
+
     /// take_hp (0000:73F9): sets the hit point delta; returns true if this kills.
     pub fn take_hp(&mut self, n: i32) -> bool {
         if n >= self.hp {
@@ -604,6 +618,7 @@ impl Kid {
         let k = match input {
             Input::Moves(mut c) => {
                 self.control(env, &mut c);
+                self.last_ctrl = c;
                 return;
             }
             Input::Keys(k) => k,
@@ -769,7 +784,15 @@ impl Kid {
     }
 
     fn up_pressed(&mut self, env: &Env, c: &mut Ctrl) {
-        // level doors are not implemented
+        // 0000:62EE: an open exit door at, behind or in front of the kid (not in the start room) -> go_up_leveldoor (0000:63E0)
+        let (col, d) = (self.col(env), self.dir());
+        let door = [col, col - d, col + d].into_iter().map(|cc| norm(env.level, self.room as i32, cc, self.row)).find(|&(r, cc, rw)| tile_n(env.level, r, cc, rw) == Tile::ExitLeft);
+        if let Some((_, dcol, _)) = door.filter(|_| env.level.start_room != self.room && self.sh.leveldoor_open) {
+            self.x = (X0 + COL_W * dcol + 10) as u8; // x_bump[tile_col + 5] + 10
+            self.facing_left = true;
+            self.start_seq(env, 70);
+            return;
+        }
         if c.x == -1 {
             self.standing_jump(env, c);
         } else {
@@ -1037,8 +1060,8 @@ impl Kid {
                     }
                 }
                 Op::GetItem(1) if self.charid == 0 => self.proc_get_object(),
-                // level end is not simulated yet
-                Op::GetItem(_) | Op::EndLevel | Op::Nop => {}
+                Op::EndLevel => self.events.push(Event::NextLevel),
+                Op::GetItem(_) | Op::Nop => {}
             }
         }
     }
@@ -1165,8 +1188,13 @@ impl Kid {
             Tile::Potion => false,
             Tile::Gate => gate_bumpable(m, self.snap_box.height),
             Tile::Chomper => m == 2,
-            // jumping through the mirror (frames 39..43 facing left) is not simulated: it only skips the bump
-            Tile::Mirror => !((39..44).contains(&self.frame) && self.facing_left),
+            Tile::Mirror if self.charid == 0 && (39..44).contains(&self.frame) && self.facing_left => {
+                // 0000:577E: jumped through; the world sets the modifier to 0x56 and creates the shadow after the tick
+                if (1..=24).contains(&r) {
+                    self.events.push(Event::Mirror { room: r as u8, tilepos: (rw * 10 + c) as u8, col: c });
+                }
+                false
+            }
             _ => true,
         };
         if obstacle {
@@ -1649,6 +1677,10 @@ impl Kid {
             }
         };
         let Some(dir) = dir else { return };
+        if dir == 3 && self.sh.level == 6 && self.room == 1 {
+            self.events.push(Event::NextLevel); // leave_room returns -2 (0000:3D22): falls into level 7, no move
+            return;
+        }
         let links = &env.level.links[(self.room as usize).wrapping_sub(1).min(23)];
         self.leave_dir = Some(dir as u8);
         self.room = links[dir];

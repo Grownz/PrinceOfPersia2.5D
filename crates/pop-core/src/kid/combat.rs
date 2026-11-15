@@ -45,6 +45,8 @@ pub struct Shared {
     pub drawn_room: u8,
     /// feather fall (ds:409E), global: ticks left (the original ends it with sound 39, see `sim::FEATHER_TICKS`)
     pub feather: u8,
+    /// leveldoor_open (ds:40DC) != 0: the exit door can be entered
+    pub leveldoor_open: bool,
 }
 
 /// prandom (0C83:0412): the original's linear congruential generator.
@@ -137,6 +139,17 @@ impl Kid {
         if self.charid == 4 {
             self.sword = 2;
         }
+        if self.sword < 2 {
+            self.guard_inactive(&mut c);
+        } else {
+            self.guard_active(env, rng, &mut c);
+        }
+        c
+    }
+
+    /// autocontrol_kid (demo, 0000:7A91): the guard AI for the kid, without the timers (charid 0 skips them).
+    pub(crate) fn autocontrol_kid(&mut self, env: &Env, rng: &mut Rng) -> Ctrl {
+        let mut c = Ctrl::default();
         if self.sword < 2 {
             self.guard_inactive(&mut c);
         } else {

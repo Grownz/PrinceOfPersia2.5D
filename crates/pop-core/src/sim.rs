@@ -8,7 +8,7 @@
 //! Not simulated: torch/potion/sword animation (visual only, they also consume random numbers in the original),
 //! guards, the shadow, level doors (entering), skeleton, mirror, potions.
 use crate::exe::{Exe, Frame};
-use crate::kid::{Env, Event, Keys, Kid, Rng, Shared, Y_LAND};
+use crate::kid::{Env, Event, Input, Keys, Kid, Rng, Shared, Y_LAND};
 use crate::level::{Level, Tile, COLS, ROWS, TILES_PER_ROOM};
 use std::sync::Arc;
 
@@ -64,9 +64,65 @@ pub struct Mob {
     pub row: u8,
 }
 
+/// What carries over between levels and restarts (docs/edge_cases.md 3.4). A restart or the next level builds a new
+/// `World` from this (the original reloads the level completely).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Progress {
+    pub level: usize,
+    /// time left (ds:50BA / ds:50C0): 720 ticks per minute
+    pub rem_min: i32,
+    pub rem_tick: i32,
+    pub hitp_beg_lev: i32,
+    /// level-3 checkpoint (ds:4CAC); on level 0 it marks the demo guard as killed
+    pub checkpoint: bool,
+    /// level 12 -> 13 is seamless: the kid keeps his hit points (0000:4A8B)
+    pub carry_hp: Option<i32>,
+}
+
+impl Progress {
+    /// New game (0000:4893): 3 hit points, 60 minutes.
+    pub fn new_game(level: usize) -> Progress {
+        Progress { level, rem_min: 60, rem_tick: 719, hitp_beg_lev: 3, checkpoint: false, carry_hp: None }
+    }
+}
+
+/// Why the world wants to be replaced; the app builds the next `World` with `World::progress_after`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Exit {
+    /// next_level++ (exit stairs, level 6 fall, level 12 room 23 = seamless)
+    NextLevel { seamless: bool },
+    /// restart the same level (Shift/Enter after death, Ctrl+A)
+    Restart,
+    /// back to the title: demo over, "Press Button" timed out, time out (cutscenes are not played)
+    Title,
+    /// a key during the demo starts the game
+    NewGame,
+}
+
+/// Demo move list (ds:0F36): (time, move) for do_auto_moves.
+pub const DEMO_MOVES: [(i16, i16); 25] = [
+    (0, 0), (1, 1), (13, 0), (30, 1), (37, 5), (47, 0), (48, 1), (65, 0), (73, 2), (75, 0), (99, 2), (100, 0), (115, 5),
+    (128, 6), (136, 3), (157, 7), (158, 0), (159, 1), (171, 4), (177, 0), (178, 1), (188, 0), (193, 1), (205, 0), (233, -1),
+];
+
 pub struct World {
     /// original logic ticks (12 Hz)
     pub tick: u64,
+    /// carried over to the next world; time and the checkpoint are updated while playing
+    pub progress: Progress,
+    /// set once when the world is over (see `Exit`); later exits are ignored
+    pub exit: Option<Exit>,
+    /// Kid.alive after death (0..8, play_kid 0000:792A); 0 while alive
+    pub death_count: u8,
+    /// app hook: while true the death counter waits (the original waits for the death sounds; pop-core treats them as finished)
+    pub hold_death_counter: bool,
+    /// "Press Button to Continue" timer (ds:60C8): 288 (36 on level 0) ticks, then back to the title
+    pub text_timer: u16,
+    /// level 0: the kid is driven by DEMO_MOVES / the guard AI; the control flags persist between ticks
+    pub demo: bool,
+    demo_ctrl: crate::kid::Ctrl,
+    /// jumped_through_mirror (ds:42E0): column of the mirror, handled after the tick
+    mirror_jump: Option<i32>,
     sub: u32,
     /// 60 Hz steps of the current logic frame (5, or 6 with the kid's sword drawn)
     frame_len: u32,
@@ -102,18 +158,44 @@ pub struct World {
 }
 
 impl World {
+    /// A new game started on `level_no`.
     pub fn new(data: Arc<Data>, level: Level, level_no: usize) -> World {
+        World::from_progress(data, level, Progress::new_game(level_no))
+    }
+
+    /// play_level (0000:48C0) + do_startpos: the level as loaded, the kid from `progress` (docs/edge_cases.md 3.4).
+    pub fn from_progress(data: Arc<Data>, level: Level, progress: Progress) -> World {
+        let level_no = progress.level;
         let guard_type = GUARD_TYPE[level_no.min(15)];
         let kid = {
-            let env = mk_env(&data, &level, guard_type);
+            let mut start = level.clone();
+            if level_no == 3 && progress.checkpoint {
+                // dir 0xFF goes through the usual NOT + turn (seq 5): the kid ends facing left (edge_cases.md 3.4 says "right")
+                (start.start_room, start.start_tile, start.start_dir) = (2, 6, 0xFF);
+            }
+            let env = mk_env(&data, &start, guard_type);
             let mut k = Kid::spawn(&env, level_no);
             k.have_sword = level_no != 1; // 0000:49A6: the sword is picked up on level 1 (the demo level 0 has it)
+            k.hp_max = if level_no == 0 { 4 } else { progress.hitp_beg_lev }; // 0000:4AA9
+            k.hp = progress.carry_hp.unwrap_or(k.hp_max);
             k
         };
+        let mut level = level;
+        if level_no == 3 && progress.checkpoint {
+            level.set_tile(7, 4, Tile::Empty); // do_startpos clears tile (room 7, col 4, row 0)
+        }
         let slots = World::init_guard_slots(&level, level_no);
         let shared = Shared { level: level_no, drawn_room: kid.room, ..Shared::default() };
         let mut w = World {
             tick: 0,
+            progress: Progress { carry_hp: None, ..progress },
+            exit: None,
+            death_count: 0,
+            hold_death_counter: false,
+            text_timer: 0,
+            demo: level_no == 0,
+            demo_ctrl: Default::default(),
+            mirror_jump: None,
             sub: 0,
             frame_len: SUBSTEPS,
             flash: (0, 0),
@@ -192,6 +274,22 @@ impl World {
     fn logic_tick(&mut self, keys: Keys) {
         let room_before = self.kid.room;
         self.flash.1 = self.flash.1.saturating_sub(1); // remove_flash_if_hurt of the previous frame
+        if self.text_timer > 0 {
+            self.text_timer -= 1;
+            if self.text_timer == 1 {
+                self.set_exit(Exit::Title); // 0000:0AAE: nobody pressed a key
+            }
+        }
+        if self.demo && keys != Keys::default() {
+            self.set_exit(Exit::NewGame);
+        }
+        // timers (0000:4FA9), level 8: the counter in leveldoor_open runs while Char.room is 16 (INFERRED: the kid's room)
+        if self.level_no == 8 && self.kid.room == 16 && self.leveldoor_open != 0 {
+            self.leveldoor_open = self.leveldoor_open.saturating_add(1); // a word in the original: must not wrap to "closed"
+            if self.leveldoor_open == 150 {
+                self.do_mouse();
+            }
+        }
         self.shared.feather = self.shared.feather.saturating_sub(1);
         if !self.kid.alive {
             self.upside = false; // 0000:0EE7
@@ -217,11 +315,17 @@ impl World {
         if check_killed_shadow(self.level_no, &mut self.kid, &opp) {
             self.flash = (15, 5);
         }
+        self.play_kid_counter();
         self.kid.opp = self.guard.as_ref().map_or_else(Default::default, crate::kid::Opp::of);
+        self.shared.leveldoor_open = self.leveldoor_open != 0;
         self.kid.sh = self.shared;
+        let input = if self.demo { Input::Moves(self.demo_control()) } else { Input::Keys(keys) };
         {
             let env = mk_env(&self.data, &self.level, self.guard_type);
-            self.kid.tick(&env, keys);
+            self.kid.tick_input(&env, input);
+        }
+        if self.demo {
+            self.demo_ctrl = self.kid.last_ctrl;
         }
         self.shared = self.kid.sh;
         self.apply_kid_events();
@@ -240,6 +344,17 @@ impl World {
             self.check_shadow();
         }
         self.check_guard_fallout();
+        // play_frame (0000:095B, 0000:09AA): demo over in room 24; level 12 room 23 leads seamlessly into level 13
+        if self.demo && self.kid.room == 24 {
+            self.set_exit(Exit::Title);
+        }
+        if self.level_no == 12 && self.kid.room == 23 {
+            self.set_exit(Exit::NextLevel { seamless: true });
+        }
+        self.show_time();
+        if let Some(col) = self.mirror_jump.take() {
+            self.jump_through_mirror(col); // check_mirror runs in the drawing pass, after play_frame
+        }
         if self.flash.1 == 0 && self.kid.hp_delta < 0 {
             self.flash = (12, 1); // flash_if_hurt (0000:5374): red for the frame the kid lost hit points
         }
@@ -251,6 +366,14 @@ impl World {
 
     /// Level events at a room change (docs/combat.md 7.5): Jaffar is met, the exit door opens after his death.
     fn on_room_left(&mut self, dir: u8, from: u8) {
+        if self.level_no == 3 && dir == 0 && from == 7 {
+            self.progress.checkpoint = true; // 0000:3D59
+            self.progress.hitp_beg_lev = self.kid.hp_max;
+        }
+        if self.level_no == 4 && dir == 0 && from == 11 && self.kid.row == 0 && self.leveldoor_open != 0 && self.leveldoor_open != 0x4D {
+            self.sounds.push(25); // 0000:3DC7: mirror music, once
+            self.leveldoor_open = 0x4D;
+        }
         if self.level_no == 13 && dir == 1 && self.leveldoor_open == 0 && from == 3 {
             self.sounds.push(29);
             self.shared.notice_timer = 28;
@@ -288,6 +411,11 @@ impl World {
                 Event::StartChompers { room, row } => self.start_chompers(room, row),
                 Event::Sound(id) => self.sounds.push(id),
                 Event::GetObject(kind) => self.get_object(kind),
+                Event::NextLevel => self.set_exit(Exit::NextLevel { seamless: false }),
+                Event::Mirror { room, tilepos, col } => {
+                    self.set_mod(room, tilepos, 0x56);
+                    self.mirror_jump = Some(col);
+                }
             }
         }
     }
@@ -319,6 +447,94 @@ impl World {
             5 => self.sound(13),
             6 => self.trigger_button(false, 0, -1, 8, 0), // level 15: get_tile(8, 0, 0); trigger_button(0, 0, -1)
             _ => {}
+        }
+    }
+
+    // ------------------------------------------------------------------ death, restart, time (docs/edge_cases.md 3.2-3.5)
+
+    fn set_exit(&mut self, e: Exit) {
+        self.exit.get_or_insert(e);
+    }
+
+    /// Key handler (0000:054D..05E8): `continue_key` = Shift held or Enter, `ctrl_a` = Ctrl+A (any time).
+    pub fn restart_input(&mut self, continue_key: bool, ctrl_a: bool) {
+        if self.level_no == 15 {
+            return;
+        }
+        if ctrl_a || (continue_key && self.progress.rem_min != 0 && self.death_count > 6) {
+            self.set_exit(Exit::Restart);
+        }
+    }
+
+    /// "Press Button to Continue" is shown (blinking with period 12 in the last 72 ticks).
+    pub fn continue_text(&self) -> bool {
+        self.death_count >= 8 && !matches!(self.level_no, 0 | 15) && self.text_timer > 0 && (self.text_timer > 72 || self.text_timer % 12 <= 3)
+    }
+
+    /// The progress the next world starts from after `exit` (docs/edge_cases.md 3.4, play_level_2 0000:4DA2).
+    pub fn progress_after(&self, exit: Exit) -> Progress {
+        let mut p = Progress { carry_hp: None, ..self.progress };
+        match exit {
+            Exit::Restart => {}
+            Exit::NextLevel { seamless } => {
+                p.level += 1;
+                p.hitp_beg_lev = self.kid.hp_max;
+                p.checkpoint = false;
+                p.carry_hp = seamless.then_some(self.kid.hp);
+            }
+            Exit::Title => p = Progress::new_game(0),
+            Exit::NewGame => p = Progress::new_game(1),
+        }
+        p
+    }
+
+    /// fell_out (0000:7900), control_kid's death test (0000:7A1F) and the death counter of play_kid (0000:792A).
+    /// Sounds count as finished at once (deterministic); the app may set `hold_death_counter` while they play.
+    fn play_kid_counter(&mut self) {
+        let k = &mut self.kid;
+        if k.alive && k.room == 0 {
+            k.take_hp(100);
+            k.alive = false;
+            k.frame = 185;
+        }
+        if k.alive && k.hp <= 0 && k.controlled {
+            k.alive = false;
+        }
+        if k.alive || !k.is_dead() || self.hold_death_counter {
+            return;
+        }
+        match self.death_count {
+            0..=5 => {}
+            6 => {
+                if !matches!(self.level_no, 0 | 15) {
+                    let id = if self.guard_rec.charid == 1 { 32 } else if self.shared.holding_sword { 28 } else { 24 };
+                    self.sounds.push(id); // death music (0000:8309)
+                }
+            }
+            7 => {
+                if self.progress.rem_min == 0 {
+                    self.set_exit(Exit::Title); // expired (0000:31F4); the cutscene is not played
+                }
+                self.text_timer = if matches!(self.level_no, 0 | 15) { 36 } else { 288 };
+            }
+            _ => return,
+        }
+        self.death_count += 1;
+    }
+
+    /// show_time (0000:C170) and the time-out test of play_frame (0000:09C9).
+    fn show_time(&mut self) {
+        let p = &mut self.progress;
+        let runs = (self.level_no < 13 || (self.level_no == 13 && self.leveldoor_open != 2)) && self.level_no != 15;
+        if self.kid.alive && p.rem_min != 0 && runs {
+            p.rem_tick -= 1;
+            if p.rem_tick == 0 {
+                p.rem_tick = 719;
+                p.rem_min -= 1;
+            }
+        }
+        if self.level_no < 13 && self.progress.rem_min == 0 {
+            self.set_exit(Exit::Title);
         }
     }
 
@@ -641,6 +857,9 @@ impl World {
                 t.ty = -1;
                 if self.leveldoor_open == 0 || self.leveldoor_open == 2 {
                     self.leveldoor_open = 1;
+                    if self.level_no == 4 {
+                        self.set_tile(4, 4, Tile::Mirror); // tiles.md 8.1: (room 4, col 4, row 0)
+                    }
                 }
             } else {
                 self.sound(15);
