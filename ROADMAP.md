@@ -55,6 +55,7 @@ Done (docs/edge_cases.md 3.2-3.5, 4.1): `sim::Progress` (level, rem_min/rem_tick
 Title screen, 15 levels (+ final), 60-minute timer, health potions and max HP, level progression, save/restore state (original has level-password style progress), menus, pause.
 
 ### M7 - Audio
+Done (docs/audio.md): sound ids catalogued (meaning, PRINCE.EXE origin, DIGISND/IBM_SND/MIDISND resources 10000+id, digi and PC-speaker formats decoded); seq op F2 4 now emits the level music (41, 32 on level 4). pop-app plays `World::sounds` from the fixed step with a procedural sound set synthesized at startup (no audio assets); `POP_SOUND=original` uses the game's digitized effects and PC-speaker tunes. Volume (-/=), mute (M), pause/title/card handling, cutscene cues on the cards. "Sound playing" is modelled deterministically in fixed steps: it holds the death counter (`hold_death_counter`; death music 2.97/6.45/4.92 s = speaker lengths) and the stairs level exit. Feather keeps `FEATHER_TICKS`. Open: MIDI not decoded, original priority/interruption rules, title/story music (50..56), MIDI/AdLib lengths UNVERIFIED.
 Replace PC-speaker/MIDI/digi sounds with modern effects and music; event hooks driven by simulation events (not by rendering) so timing stays faithful.
 
 ### M8 - Packaging and polish

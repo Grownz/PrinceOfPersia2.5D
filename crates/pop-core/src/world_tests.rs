@@ -298,6 +298,19 @@ fn level_exits_4_1() {
         tick(&mut w, NONE, 1);
     }
     assert_eq!(w.exit, Some(Exit::NextLevel { seamless: false }));
+    // seq 70's op F2 4: end-level music 41 (level 2); on level 4 the shadow music 32 instead, on 13/15 none
+    assert!(w.sounds.contains(&41) && !w.sounds.contains(&32));
+    for (lvl, want) in [(4, Some(32)), (13, None), (15, None)] {
+        let mut w = World::new(data(), synth(1, 1..3, 5, 1, &[(5, 1, 16)], &[]), lvl);
+        w.level.start_room = 2;
+        w.leveldoor_open = 1;
+        tick(&mut w, NONE, 6);
+        tick(&mut w, Keys { up: true, ..NONE }, 1);
+        tick(&mut w, NONE, 20);
+        assert_eq!(w.kid.seq, 70, "level {lvl}");
+        let music: Vec<u8> = w.sounds.iter().copied().filter(|s| [32, 41].contains(s)).collect();
+        assert_eq!(music, want.into_iter().collect::<Vec<_>>(), "level {lvl}");
+    }
     // closed door: no stairs
     let mut w = world(5, &[(5, 1, 16)], &[]);
     w.level.start_room = 2;
