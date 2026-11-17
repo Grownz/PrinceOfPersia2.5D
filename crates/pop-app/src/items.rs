@@ -28,6 +28,196 @@ pub struct Items {
     pub glow: [Handle<StandardMaterial>; 3],
     /// voxel columns per set [dungeon, palace] by image id (COLUMN_IDS); empty with `column_style` = flat
     pub columns: [HashMap<u16, Column>; 2],
+    /// voxel objects per set (spikes, chompers, exit doors, torch holder, debris); empty with `object_style` = flat
+    pub objects: [Objects; 2],
+    /// torch flame frames (PRINCE.DAT 151..159) and their unlit, overbright material (blooms in enhanced mode)
+    pub flames: Vec<Model>,
+    pub flame_mat: Handle<StandardMaterial>,
+}
+
+/// The voxel objects of one tile set (docs/texture_inventory.md 15). Spike frames (back-only part, right and fore pieces),
+/// chomper blades and upper teeth and the torch holder by image id; exit frames [left, right] with their lintels, door
+/// panels by slice count (`panel_slices`), the stairs and the debris heap. Anything missing: that piece stays flat.
+#[derive(Default)]
+pub struct Objects {
+    pub ids: HashMap<u16, Model>,
+    pub exit: [Option<Model>; 2],
+    pub panels: Vec<Model>,
+    pub stairs: Option<Model>,
+    pub debris: Option<Model>,
+    /// image x (px) of the torch holder's rod axis (the flame stands on it)
+    pub holder_axis: f32,
+}
+
+/// Chomper blade shear: image column x stands round((JAW_XREF - x) * JAW_SHEAR) voxels (1/32 unit) in front of column
+/// JAW_XREF, so the blade's left edge is near the floor's front edge and column 13.5 (where the 2D fore slice ends) at
+/// the figures' depth.
+pub const JAW_SHEAR: f32 = 0.6;
+pub const JAW_XREF: f32 = 31.0;
+
+/// Exit door: slices of 233 stacked on the bottom piece 234 at modifier `m` (0 closed .. 43 open), as room.rs drew them
+/// flat: the bottom edge m px above the floor, slices up to the frame top (EXIT_FRAME_H, 6-px slices).
+pub fn panel_slices(m: u8) -> usize {
+    let (mut by, mut n) = (m.min(43) as usize + 6, 0);
+    while by < crate::tiles::EXIT_FRAME_H {
+        by += 6;
+        n += 1;
+    }
+    n
+}
+
+/// Every 8-connected component of the image moved down until it touches the bottom row and stood upright (the 2D spikes
+/// stand higher the further back they are and lean; in 3D they all stand on the floor, their depth is placed by room.rs).
+pub fn settle(w: usize, h: usize, px: &[u8]) -> Vec<u8> {
+    let mut comp = vec![usize::MAX; w * h];
+    let mut out = vec![0u8; w * h];
+    for s in (0..w * h).filter(|&i| px[i] != 0) {
+        if comp[s] != usize::MAX {
+            continue;
+        }
+        let (mut stack, mut cells) = (vec![s], vec![]);
+        comp[s] = s;
+        while let Some(i) = stack.pop() {
+            cells.push(i);
+            let (x, y) = ((i % w) as isize, (i / w) as isize);
+            for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx >= 0 && ny >= 0 && nx < w as isize && ny < h as isize {
+                    let n = ny as usize * w + nx as usize;
+                    if px[n] != 0 && comp[n] == usize::MAX {
+                        comp[n] = s;
+                        stack.push(n);
+                    }
+                }
+            }
+        }
+        let bottom = cells.iter().map(|&i| i / w).max().unwrap_or(h - 1);
+        // the 2D spikes lean (perspective); stood upright: every row of a one-run-per-row component is shifted so its centre
+        // is over the bottom row's centre
+        let centre = |y: usize| {
+            let xs: Vec<usize> = cells.iter().filter(|&&i| i / w == y).map(|&i| i % w).collect();
+            let (a, b) = (*xs.iter().min().unwrap(), *xs.iter().max().unwrap());
+            ((a + b) as f32 / 2.0, b + 1 - a == xs.len())
+        };
+        let rows: Vec<usize> = (0..h).filter(|&y| cells.iter().any(|&i| i / w == y)).collect();
+        let upright = rows.iter().all(|&y| centre(y).1);
+        let cb = centre(bottom).0;
+        for &i in &cells {
+            let (x, y) = (i % w, i / w);
+            let dx = if upright { (cb - centre(y).0).round() as isize } else { 0 };
+            let nx = (x as isize + dx).clamp(0, w as isize - 1) as usize;
+            out[(y + h - 1 - bottom) * w + nx] = px[i];
+        }
+    }
+    out
+}
+
+/// The back spike frame without the spikes the fore frame repeats (bottom-aligned, same x): what stands behind the figures.
+pub fn spike_back_only(back: &image::Image, fore: &image::Image) -> Vec<u8> {
+    let dy = back.height as isize - fore.height as isize;
+    (0..back.width * back.height)
+        .map(|i| {
+            let (x, y) = (i % back.width, (i / back.width) as isize - dy);
+            let f = if x < fore.width && y >= 0 && (y as usize) < fore.height { fore.pixels[y as usize * fore.width + x] } else { 0 };
+            if f != 0 { 0 } else { back.pixels[i] }
+        })
+        .collect()
+}
+
+/// Images stacked top to bottom (each keeps its first `rows`), left-aligned, as wide as the widest: (w, h, pixels).
+pub fn stack(parts: &[(&image::Image, usize)]) -> (usize, usize, Vec<u8>) {
+    let w = parts.iter().map(|p| p.0.width).max().unwrap_or(0);
+    let mut px = vec![];
+    for &(im, rows) in parts {
+        for y in 0..rows.min(im.height) {
+            px.extend_from_slice(&im.pixels[y * im.width..][..im.width]);
+            px.resize(px.len() + w - im.width, 0);
+        }
+    }
+    (w, px.len() / w.max(1), px)
+}
+
+/// The rubble of a debris floor seen from above: the unsheared floor texture (`tiles::floor_pixels`) of the debris record
+/// where it differs from the plain floor's, row 0 = back of the tile, the bottom rows the front lip (w, h, pixels).
+pub fn debris_sprite(deb: [&image::Image; 3], floor: [&image::Image; 3]) -> (usize, usize, Vec<u8>) {
+    let (w, h, a) = crate::tiles::floor_pixels(deb[0], deb[1], deb[2]);
+    let (fw, fh, b) = crate::tiles::floor_pixels(floor[0], floor[1], floor[2]);
+    let px = (0..w * h).map(|i| if (fw, fh) == (w, h) && a[i] == b[i] { 0 } else { a[i] }).collect();
+    (w, h, px)
+}
+
+/// Torch flame frame shown at logic tick `tick` for torch phase `phase`: the original steps every torch one frame per tick
+/// (with rare random jumps, docs/tiles.md 8.4), each from its own random start; here the start is a fixed per-tile phase.
+pub fn flame_frame(tick: u64, phase: u8) -> usize {
+    ((tick + phase as u64) % 9) as usize
+}
+
+/// Build the voxel objects of one set from its DAT (`pal` = palette 200 colours). Returns them and the face count.
+fn load_objects(dat: &Dat, pal: &[[u8; 3]], meshes: &mut Assets<Mesh>) -> (Objects, usize) {
+    use crate::tiles::{floor_rows, Role, EXIT_FRAME_H};
+    let img = |id: u16| dat.get(id).and_then(image::decode).filter(|i| i.bpp == 4);
+    let rgb = |p: u8| pal.get(p as usize).copied().unwrap_or([255, 0, 255]);
+    let mut faces = 0;
+    let mut add = |v: VoxelModel| {
+        let mesh = v.mesh(|p| {
+            let [r, g, b] = rgb(p);
+            Color::srgb_u8(r, g, b).to_linear().to_f32_array()
+        });
+        faces += mesh.count_vertices() / 4;
+        Model { mesh: meshes.add(mesh), w: v.w, h: v.h }
+    };
+    let mut o = Objects::default();
+    // spikes: back frames without the fore spikes, right and fore frames; each spike stands on the bottom row
+    for k in 0..5u16 {
+        let (back, right, fore) = (img(1328 + k), img(1334 + k), img(1339 + k));
+        if let (Some(b), Some(f)) = (&back, &fore) {
+            o.ids.insert(1328 + k, add(VoxelModel::revolve_runs(b.width, b.height, &settle(b.width, b.height, &spike_back_only(b, f)))));
+        }
+        for (id, im) in [(1334 + k, right), (1339 + k, fore)] {
+            if let Some(im) = im {
+                o.ids.insert(id, add(VoxelModel::revolve_runs(im.width, im.height, &settle(im.width, im.height, &im.pixels))));
+            }
+        }
+    }
+    // chomper blades (floor rows cut) and upper teeth: thin bevelled plates standing diagonally through the depth
+    for id in (1301..=1305).chain(1311..=1313) {
+        let Some(im) = img(id) else { continue };
+        let h = im.height - if id <= 1305 { floor_rows(Role::JawBack, im.height) } else { 0 };
+        o.ids.insert(id, add(VoxelModel::plate(im.width, h, &im.pixels[..im.width * h], 1.0, |_| 0).sheared(JAW_SHEAR, JAW_XREF)));
+    }
+    // torch holder: the rod through its cup, revolved
+    if let Some(im) = img(346) {
+        let (h, px, axis, _) = column_sprite(&im);
+        o.ids.insert(346, add(VoxelModel::revolve(im.width, h, &px, axis)));
+        o.holder_axis = axis;
+    }
+    // exit frames with their lintels on top: thick reliefs, the brighter ornament standing out
+    let relief = |n: f32| move |p: u8| (crate::voxel::luma(rgb(p)) * n) as usize;
+    for (i, (frame, lintel)) in [(237, 238), (239, 240)].into_iter().enumerate() {
+        if let (Some(f), Some(l)) = (img(frame), img(lintel)) {
+            let (w, h, px) = stack(&[(&l, l.height), (&f, EXIT_FRAME_H)]);
+            o.exit[i] = Some(add(VoxelModel::plate(w, h, &px, 3.0, relief(2.5))));
+        }
+    }
+    if let (Some(s), Some(b)) = (img(233), img(234)) {
+        o.panels = (0..=panel_slices(0))
+            .map(|n| {
+                let mut parts = vec![(&s, s.height); n];
+                parts.push((&b, b.height));
+                let (w, h, px) = stack(&parts);
+                add(VoxelModel::plate(w, h, &px, 1.0, relief(1.5)))
+            })
+            .collect();
+    }
+    o.stairs = img(344).map(|s| add(VoxelModel::plate(s.width, s.height, &s.pixels, 2.0, |_| 0)));
+    // debris: the rubble as a heap on the floor (seen from above; room.rs lays the model down)
+    if let (Some(a), Some(b), Some(c), Some(f0), Some(f1)) = (img(297), img(298), img(243), img(241), img(242)) {
+        let (w, h, px) = debris_sprite([&a, &b, &c], [&f0, &f1, &c]);
+        if px.iter().any(|&p| p != 0) {
+            o.debris = Some(add(VoxelModel::extrude(w, h, &px, 0.12, |_, dt| ((dt - 1.0).clamp(0.0, 3.0).round() as usize, 0))));
+        }
+    }
+    (o, faces)
 }
 
 /// A voxel column: mesh (origin = image bottom-left of the kept rows, one unit = one pixel), its rows and the mesh z of
@@ -109,6 +299,9 @@ pub fn potion_look(kind: u8) -> (bool, Option<usize>) {
     ((2..5).contains(&kind), match kind { 0 => None, 3 | 4 => Some(1), 5 | 6 => Some(2), _ => Some(0) })
 }
 
+/// Linear brightness factor of the flame voxels (unlit): above 1, so the flames read as light and bloom.
+pub const FLAME_GAIN: f32 = 1.5;
+
 /// Bubble colours: EGA 12 / 10 / 9 (light red, green, blue), the colours of the mono blit.
 pub const GLOW: [[u8; 3]; 3] = [[255, 85, 85], [85, 255, 85], [85, 85, 255]];
 
@@ -158,7 +351,8 @@ fn model(meshes: &mut Assets<Mesh>, w: usize, h: usize, px: &[u8], pal: &[[u8; 3
 impl Items {
     /// Decode and voxelise the item images from the game data folder; logs what is missing.
     /// `columns`: also build the voxel columns (`column_style` = voxel).
-    pub fn load(dir: &str, columns: bool, meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>) -> Items {
+    /// `objects`: also build the voxel objects (`object_style` = voxel).
+    pub fn load(dir: &str, columns: bool, objects: bool, meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>) -> Items {
         let skeleton = ["VDUNGEON.DAT", "VPALACE.DAT"].map(|f| {
             let dat = Dat::open(format!("{dir}/{f}")).ok()?;
             let img = |id| dat.get(id).and_then(image::decode).filter(|i| i.bpp == 4);
@@ -202,11 +396,43 @@ impl Items {
         if columns.iter().any(|m| !m.is_empty()) {
             info!("items: {} voxel columns built in {:.1} ms, {faces} faces", columns[0].len() + columns[1].len(), t0.elapsed().as_secs_f32() * 1000.0);
         }
+        let t0 = std::time::Instant::now();
+        let mut faces = 0;
+        let objects = ["VDUNGEON.DAT", "VPALACE.DAT"].map(|f| {
+            let Some(dat) = Dat::open(format!("{dir}/{f}")).ok().filter(|_| objects) else { return Objects::default() };
+            let (o, n) = load_objects(&dat, &dat.get(200).and_then(image::palette).unwrap_or_default(), meshes);
+            faces += n;
+            o
+        });
+        // flames: palette colours overbright on an unlit material, so they glow (and bloom in enhanced mode)
+        let flames: Vec<Model> = if objects.iter().any(|o| !o.ids.is_empty()) {
+            (151..=159)
+                .filter_map(pimg)
+                .map(|i| {
+                    let m = VoxelModel::revolve_runs(i.width, i.height, &i.pixels);
+                    let mesh = m.mesh(|p| {
+                        let [r, g, b] = pal.get(p as usize).copied().unwrap_or([255, 160, 0]);
+                        (Color::srgb_u8(r, g, b).to_linear() * FLAME_GAIN).with_alpha(1.0).to_f32_array()
+                    });
+                    faces += mesh.count_vertices() / 4;
+                    Model { mesh: meshes.add(mesh), w: i.width, h: i.height }
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+        if objects.iter().any(|o| !o.ids.is_empty()) {
+            let n: usize = objects.iter().map(|o| o.ids.len() + o.exit.iter().flatten().count() + o.panels.len() + o.stairs.is_some() as usize + o.debris.is_some() as usize).sum();
+            info!("items: {} voxel objects and {} flame frames built in {:.1} ms, {faces} faces", n, flames.len(), t0.elapsed().as_secs_f32() * 1000.0);
+            if flames.len() != 9 {
+                info!("items: torch flames (PRINCE.DAT 151..159) not found, flame box used");
+            }
+        }
         let glow = GLOW.map(|[r, g, b]| {
             let c = Color::srgb_u8(r, g, b);
             mats.add(StandardMaterial { base_color: c, emissive: c.to_linear() * 3.0, perceptual_roughness: 0.4, ..default() })
         });
-        Items { mat: mats.add(StandardMaterial { perceptual_roughness: 0.6, ..default() }), skeleton, bottles, bubbles: if bubbles.len() == 7 { bubbles } else { vec![] }, glow, columns }
+        Items { mat: mats.add(StandardMaterial { perceptual_roughness: 0.6, ..default() }), skeleton, bottles, bubbles: if bubbles.len() == 7 { bubbles } else { vec![] }, glow, columns, objects, flames: if flames.len() == 9 { flames } else { vec![] }, flame_mat: mats.add(StandardMaterial { unlit: true, ..default() }) }
     }
 }
 
@@ -258,6 +484,109 @@ mod tests {
         for id in [162, 163, 166, 167, 168, 169, 170, 171, 172] {
             let im = i(&p, id);
             assert_eq!(VoxelModel::from_image(im.width, im.height, &im.pixels, false, |c| [c.wrapping_mul(16); 3]).front(), im.pixels, "PRINCE {id}");
+        }
+    }
+
+    #[test]
+    fn object_tables() {
+        // exit panel: 7 slices on the bottom piece when closed, none when open (the bottom piece stays, behind the lintel)
+        assert_eq!([0, 5, 6, 35, 40, 41, 43, 255].map(panel_slices), [7, 6, 6, 1, 1, 0, 0, 0]);
+        // torch flames: one frame per tick, all 9 frames, phases shift the cycle
+        assert_eq!((0..9).map(|t| flame_frame(t, 0)).collect::<Vec<_>>(), (0..9).collect::<Vec<_>>());
+        assert_eq!((flame_frame(9, 0), flame_frame(0, 4), flame_frame(7, 4)), (0, 4, 2));
+    }
+
+    #[test]
+    fn spikes_settle_and_lose_the_fore_spikes() {
+        // two spikes: one ending a row above the bottom, one on it; the lifted one drops, the other stays
+        let px = [0, 7, 0, 0, 0, 7, 0, 7, 0, 0, 0, 8];
+        assert_eq!(settle(4, 3, &px), vec![0, 0, 0, 0, 0, 7, 0, 7, 0, 7, 0, 8]);
+        // a leaning spike is stood upright over its base
+        assert_eq!(settle(3, 3, &[0, 0, 7, 0, 7, 0, 8, 0, 0]), vec![7, 0, 0, 7, 0, 0, 8, 0, 0]);
+        let back = img(4, 3, &[7, 0, 0, 7, 7, 0, 0, 7, 8, 0, 0, 8]);
+        let fore = img(1, 2, &[7, 8]); // the left spike's lower two rows, bottom-aligned
+        assert_eq!(spike_back_only(&back, &fore), vec![7, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 8]);
+        let (w, h, s) = stack(&[(&img(2, 2, &[1, 1, 2, 2]), 1), (&img(3, 1, &[3, 3, 3]), 1)]);
+        assert_eq!((w, h, s), (3, 2, vec![1, 1, 0, 3, 3, 3]));
+    }
+
+    #[test]
+    fn rods_plates_and_shear_keep_the_front() {
+        // a 3-px run is as deep as wide (round), a 1-px run one... two layers (plane pair)
+        let px = [0, 5, 5, 5, 0, 0, 0, 6, 0, 0];
+        let m = VoxelModel::revolve_runs(5, 2, &px);
+        assert_eq!(m.front(), px);
+        let depth = |m: &VoxelModel, x, y| (0..m.d as isize).filter(|&z| m.get(x, y, z) != 0).count();
+        assert!(depth(&m, 2, 0) >= 3 && depth(&m, 1, 0) <= depth(&m, 2, 0) && depth(&m, 2, 1) <= 2);
+        // plate: rim one voxel, inside 1 + 2 * cap; relief adds in front
+        let p: Vec<u8> = vec![4; 25];
+        let pl = VoxelModel::plate(5, 5, &p, 1.0, |_| 1);
+        assert_eq!(pl.front(), p);
+        assert_eq!((depth(&pl, 0, 0), depth(&pl, 2, 2)), (2, 4));
+        // shear: the left column moves forward, the front view is unchanged
+        let sh = pl.sheared(1.0, 4.0);
+        assert_eq!(sh.front(), p);
+        let zmax = |m: &VoxelModel, x| (0..m.d as isize).filter(|&z| m.get(x, 2, z) != 0).max().unwrap();
+        assert_eq!(zmax(&sh, 0) - zmax(&sh, 4), 4);
+    }
+
+    /// The object models' front projection is the (prepared) original image, both sets: spikes (settled), chomper blades
+    /// (floor rows cut) and teeth, torch holder, exit frames with lintels, door panels, stairs, debris heap (top view) and
+    /// the flames; prints counts and faces (skips without Original_data).
+    #[test]
+    fn object_front_projection_equals_sprite() {
+        let dir = format!("{}/../../Original_data", env!("CARGO_MANIFEST_DIR"));
+        let Ok(prince) = Dat::open(format!("{dir}/PRINCE.DAT")) else { return };
+        for id in 151..=159 {
+            let im = image::decode(prince.get(id).unwrap()).unwrap();
+            assert_eq!(VoxelModel::revolve_runs(im.width, im.height, &im.pixels).front(), im.pixels, "flame {id}");
+        }
+        for f in ["VDUNGEON.DAT", "VPALACE.DAT"] {
+            let Ok(dat) = Dat::open(format!("{dir}/{f}")) else { return };
+            let i = |id| image::decode(dat.get(id).unwrap()).unwrap();
+            let (mut n, mut faces) = (0, 0);
+            let mut check = |m: VoxelModel, want: &[u8], what: String| {
+                assert_eq!(m.front(), want, "{f} {what}");
+                faces += m.mesh(|_| [1.0; 4]).count_vertices() / 4;
+                n += 1;
+            };
+            for k in 0..5 {
+                let (b, r, fo) = (i(1328 + k), i(1334 + k), i(1339 + k));
+                let s = settle(b.width, b.height, &spike_back_only(&b, &fo));
+                assert!(s.iter().any(|&p| p != 0), "{f} {}: back frame has spikes of its own", 1328 + k);
+                check(VoxelModel::revolve_runs(b.width, b.height, &s), &s, format!("spike {}", 1328 + k));
+                for im in [r, fo] {
+                    let s = settle(im.width, im.height, &im.pixels);
+                    // settling keeps every pixel and puts something on the bottom row
+                    assert_eq!(s.iter().filter(|&&p| p != 0).count(), im.pixels.iter().filter(|&&p| p != 0).count());
+                    assert!(s[(im.height - 1) * im.width..].iter().any(|&p| p != 0));
+                    check(VoxelModel::revolve_runs(im.width, im.height, &s), &s, "spike".into());
+                }
+            }
+            for id in (1301..=1305).chain(1311..=1313) {
+                let im = i(id);
+                let h = im.height - if id <= 1305 { crate::tiles::floor_rows(crate::tiles::Role::JawBack, im.height) } else { 0 };
+                let px = &im.pixels[..im.width * h];
+                check(VoxelModel::plate(im.width, h, px, 1.0, |_| 0).sheared(JAW_SHEAR, JAW_XREF), px, format!("chomper {id}"));
+            }
+            let (h, px, axis, dropped) = column_sprite(&i(346));
+            // the palace holder drops its lattice strip beside the rod (74 px; docs 13 called it doubtful)
+            assert!(dropped < 100 && (14.0..=17.0).contains(&axis), "{f} holder axis {axis} dropped {dropped}");
+            check(VoxelModel::revolve(32, h, &px, axis), &px, "holder".into());
+            for (fr, li) in [(237, 238), (239, 240)] {
+                let (w, h, px) = stack(&[(&i(li), i(li).height), (&i(fr), crate::tiles::EXIT_FRAME_H)]);
+                assert!(h >= 60 && w >= 26);
+                check(VoxelModel::plate(w, h, &px, 3.0, |p| p as usize % 3), &px, format!("exit {fr}"));
+            }
+            let (s, b) = (i(233), i(234));
+            let (w, h, px) = stack(&[(&s, 6), (&s, 6), (&b, 6)]);
+            check(VoxelModel::plate(w, h, &px, 1.0, |_| 1), &px, "panel".into());
+            let st = i(344);
+            check(VoxelModel::plate(st.width, st.height, &st.pixels, 2.0, |_| 0), &st.pixels, "stairs".into());
+            let (w, h, px) = debris_sprite([&i(297), &i(298), &i(243)], [&i(241), &i(242), &i(243)]);
+            assert!(px.iter().filter(|&&p| p != 0).count() > 40, "{f}: rubble pixels");
+            check(VoxelModel::extrude(w, h, &px, 0.1, |_, dt| ((dt - 1.0).clamp(0.0, 3.0) as usize, 0)), &px, "debris".into());
+            println!("{f}: {n} object models checked, {faces} faces");
         }
     }
 

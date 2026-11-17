@@ -34,10 +34,11 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// `tiles_dir`: game data folder to load the tile images from (None = procedural tiles); `columns`: voxel columns.
-    pub fn new(meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>, imgs: &mut Assets<Image>, tiles_dir: Option<&str>, columns: bool) -> Self {
+    /// `tiles_dir`: game data folder to load the tile images from (None = procedural tiles); `columns` / `objects`: voxel
+    /// columns / voxel objects.
+    pub fn new(meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>, imgs: &mut Assets<Image>, tiles_dir: Option<&str>, columns: bool, objects: bool) -> Self {
         let tiles = tiles_dir.map_or([None, None], |d| crate::tiles::load_sets(d, imgs, mats));
-        let items = tiles_dir.map(|d| crate::items::Items::load(d, columns, meshes, mats));
+        let items = tiles_dir.map(|d| crate::items::Items::load(d, columns, objects, meshes, mats));
         let mut m = |r, g, b| mats.add(StandardMaterial { base_color: Color::srgb(r, g, b), perceptual_roughness: 0.9, ..default() });
         Palette {
             cube: meshes.add(textured_cube()),
@@ -91,7 +92,7 @@ struct B<'a, 'w, 's> {
     items: Option<(&'a crate::items::Items, usize)>,
 }
 
-impl B<'_, '_, '_> {
+impl<'a> B<'a, '_, '_> {
     /// A voxel item model: bottom-left corner of its image at `lo` (room coordinates), sprite plane at `lo.z`.
     fn item(&mut self, m: &crate::items::Model, mat: &Handle<StandardMaterial>, lo: Vec3) -> Entity {
         let px = Vec3::new(1.0 / 32.0, TILE_H / TILE_H_PX as f32, 1.0 / 32.0);
@@ -107,6 +108,31 @@ impl B<'_, '_, '_> {
         let Some(c) = items.columns[set].get(&id) else { return false };
         let s = Vec3::new(1.0 / 32.0, (y1 - y0) / c.h as f32, 1.0 / 32.0);
         let e = self.cmds.spawn((Mesh3d(c.mesh.clone()), MeshMaterial3d(items.mat.clone()), Transform::from_translation(self.origin + Vec3::new(left, y0, z - c.az * s.z)).with_scale(s))).id();
+        self.tag(e);
+        true
+    }
+
+    /// The voxel objects of this room's set (None: flat objects, procedural tiles or the chamber).
+    fn objects(&self) -> Option<(&'a crate::items::Items, &'a crate::items::Objects)> {
+        let (items, set) = self.items?;
+        Some((items, &items.objects[set])).filter(|(_, o)| !o.ids.is_empty())
+    }
+
+    /// A voxel object: the bottom-left corner of its image at `lo` (room coordinates), `sy` times the pixel height, plane at
+    /// `lo.z`; one voxel = one pixel (x, z 1/32 unit). Shadow casting as the room pieces.
+    fn object(&mut self, m: &crate::items::Model, mat: &Handle<StandardMaterial>, lo: Vec3, sy: f32) -> Entity {
+        let px = Vec3::new(1.0 / 32.0, px_h(sy), 1.0 / 32.0);
+        let e = self.cmds.spawn((Mesh3d(m.mesh.clone()), MeshMaterial3d(mat.clone()), Transform::from_translation(self.origin + lo).with_scale(px))).id();
+        self.tag(e);
+        e
+    }
+
+    /// The debris heap (if built) lying on the floor of the tile at (x, y): the model's image is the floor seen from above,
+    /// its rows spread over the tile depth (row 0 at the back), its layers standing up from the floor surface.
+    fn debris(&mut self, x: f32, y: f32) -> bool {
+        let Some((items, Some(m))) = self.objects().map(|(i, o)| (i, o.debris.clone())) else { return false };
+        let t = Transform::from_translation(self.origin + Vec3::new(x, y, 0.5)).with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new(1.0 / 32.0, 1.0 / m.h as f32, DEBRIS_LAYER));
+        let e = self.cmds.spawn((Mesh3d(m.mesh.clone()), MeshMaterial3d(items.mat.clone()), t)).id();
         self.tag(e);
         true
     }
@@ -236,6 +262,10 @@ pub struct Falling {
 #[derive(Component)]
 pub struct Bubbles(u8);
 
+/// A voxel torch flame: the frame shown is `items::flame_frame(tick, phase)`.
+#[derive(Component)]
+pub struct TorchFlame(u8);
+
 /// Loose floor wobble amplitudes: vertical bounce (world units, about 1.6 screen px) and roll (radians).
 const WOBBLE_DY: f32 = 0.05;
 const WOBBLE_ROLL: f32 = 0.08;
@@ -267,7 +297,15 @@ pub fn plate_lift(timer: u8) -> f32 {
 }
 
 /// Every frame: loose floor wobble, falling slab interpolation, potion bubble frames.
-pub fn animate(g: Res<Game>, p: Res<Palette>, mut loose: Query<(&Loose, &mut Transform), Without<Falling>>, mut falling: Query<(&Falling, &mut Transform), Without<Loose>>, mut bubbles: Query<(&Bubbles, &mut Mesh3d)>) {
+#[allow(clippy::type_complexity)]
+pub fn animate(
+    g: Res<Game>,
+    p: Res<Palette>,
+    mut loose: Query<(&Loose, &mut Transform), Without<Falling>>,
+    mut falling: Query<(&Falling, &mut Transform), Without<Loose>>,
+    mut bubbles: Query<(&Bubbles, &mut Mesh3d), Without<TorchFlame>>,
+    mut flames: Query<(&TorchFlame, &mut Mesh3d), Without<Bubbles>>,
+) {
     let a = g.world.alpha();
     for (l, mut t) in &mut loose {
         let (dy, roll) = wobble(g.world.level.tile_at(l.room as usize, l.idx as usize).modifier, a);
@@ -279,6 +317,14 @@ pub fn animate(g: Res<Game>, p: Res<Palette>, mut loose: Query<(&Loose, &mut Tra
     if let Some(frames) = p.items.as_ref().map(|i| &i.bubbles).filter(|f| !f.is_empty()) {
         for (b, mut m) in &mut bubbles {
             let want = &frames[(g.world.tick as usize + b.0 as usize) % frames.len()].mesh;
+            if m.0 != *want {
+                m.0 = want.clone();
+            }
+        }
+    }
+    if let Some(frames) = p.items.as_ref().map(|i| &i.flames).filter(|f| !f.is_empty()) {
+        for (f, mut m) in &mut flames {
+            let want = &frames[crate::items::flame_frame(g.world.tick, f.0)].mesh;
             if m.0 != *want {
                 m.0 = want.clone();
             }
@@ -330,6 +376,11 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                 b.put(&p.glass, Vec3::new(x + 0.3, y, -0.2), Vec3::new(x + 0.7, y + 0.15, 0.2));
             }
         },
+        // voxel objects: the rubble as a heap on the plain floor
+        Debris if b.objects().is_some_and(|(_, o)| o.debris.is_some()) => {
+            floor(b, &plain_floor(b));
+            b.debris(x, y);
+        }
         Floor | Sword | Debris | BalconyLeft | BalconyRight => {
             floor(b, &fl);
             match t.kind {
@@ -340,6 +391,20 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             }
         }
         LooseFloor => {} // its own entity, spawn_tiles
+        // voxel objects: each frame piece as round pointed rods standing on the floor, in three rows through the depth
+        // (the 2D layering): the fore piece in front of the figures, the back piece without the spikes the fore piece
+        // repeats just behind them, the right piece (drawn in the next column in 2D, the back of the sheared floor) at the
+        // back of the tile, moved left by the floor's shear
+        Spikes if b.objects().is_some_and(|(_, o)| o.ids.contains_key(&1332)) => {
+            floor(b, &fl);
+            let (items, o) = b.objects().unwrap();
+            for (r, id) in b.tiles.map_or(vec![], |s| s.piece_ids(Spikes, t.modifier)) {
+                let (dx, z) = match r { Role::SpikeFore => (0.0, SPIKE_ROWS[0]), Role::SpikeBack => (0.0, SPIKE_ROWS[1]), _ => (px_w(32.0 - FLOOR_SHEAR), SPIKE_ROWS[2]) };
+                if let Some(m) = o.ids.get(&id) {
+                    b.object(m, &items.mat, Vec3::new(x + dx, y - px_h(1.0), z), 1.0);
+                }
+            }
+        }
         Spikes => {
             floor(b, &fl);
             // modifier: 0 retracted, 1..=4 rising, >= 0x80 or 255 out, 5..=9 retracting
@@ -438,6 +503,10 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             floor(b, &fl);
             b.put(&p.glass, Vec3::new(x + 0.1, y, -0.4), Vec3::new(x + 0.9, y + TILE_H * 0.9, -0.35));
         }
+        ExitLeft | ExitRight if ex.is_some() && b.objects().is_some_and(|(_, o)| o.exit[(t.kind == ExitRight) as usize].is_some()) => {
+            floor(b, &fl);
+            exit_voxel(b, x, y, t, ex.as_ref().unwrap());
+        }
         ExitLeft | ExitRight => {
             floor(b, &fl);
             match &ex {
@@ -471,6 +540,20 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                 None => b.put(&dark, Vec3::new(x + 0.1, y, -0.5), Vec3::new(x + 0.9, y + TILE_H * 0.85, -0.3)),
             }
         }
+        // voxel objects: the blade and the upper teeth as thin plates standing diagonally through the depth (the 2D blade
+        // is drawn sheared: its left part in front of the figures, the rest behind), stretched to the slab above as before
+        Chomper if b.objects().is_some_and(|(_, o)| o.ids.contains_key(&1304)) => {
+            floor(b, &fl);
+            let (items, o) = b.objects().unwrap();
+            let sy = (TILE_H - SLAB) / px_h(crate::tiles::EXIT_FRAME_H as f32);
+            let z = JAW_DIAG_Z - (crate::items::JAW_XREF - 13.5) * crate::items::JAW_SHEAR / 32.0;
+            for (r, id) in b.tiles.map_or(vec![], |s| s.piece_ids(Chomper, t.modifier)) {
+                let lift = match r { Role::JawBack => 0.0, Role::JawTop(off) => px_h(off as f32) * sy, _ => continue };
+                if let Some(m) = o.ids.get(&id) {
+                    b.object(m, &items.mat, Vec3::new(x, y + lift, z), sy);
+                }
+            }
+        }
         Chomper => {
             floor(b, &fl);
             match piece(Role::JawBack) {
@@ -491,8 +574,26 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             }
         }
         Torch | TorchDebris => {
-            floor(b, &fl);
+            // voxel objects: the torch-with-debris floor is the plain floor with the rubble heap on it
+            if t.kind == TorchDebris && b.objects().is_some_and(|(_, o)| o.debris.is_some()) {
+                floor(b, &plain_floor(b));
+                b.debris(x, y);
+            } else {
+                floor(b, &fl);
+            }
             let top = Vec3::new(x + 0.5, y + TILE_H * 0.65, -0.8);
+            // voxel objects: the holder as a revolved rod near the back wall, the flame (9 frames) standing on its cup
+            if let Some((items, h, axis)) = b.objects().filter(|(i, _)| !i.flames.is_empty()).and_then(|(i, o)| Some((i, o.ids.get(&346)?.clone(), o.holder_axis))) {
+                // the holder stands between its light and the wall: no shadow (enhanced), like the flame
+                let e = b.object(&h, &items.mat, Vec3::new(x, top.y - px_h(h.h as f32 - 2.0), TORCH_Z), 1.0);
+                b.cmds.entity(e).insert(bevy::light::NotShadowCaster);
+                let e = b.object(&items.flames[0], &items.flame_mat, Vec3::new(x + px_w(axis - FLAME_AXIS), top.y - px_h(FLAME_SINK), TORCH_Z), 1.0);
+                let phase = (b.room as u8).wrapping_mul(7).wrapping_add(idx.wrapping_mul(5)) % 9;
+                b.cmds.entity(e).insert((TorchFlame(phase), bevy::light::NotShadowCaster));
+                let e = b.cmds.spawn((torch_light(), Transform::from_translation(b.origin + top + Vec3::new(0.0, 0.3, 0.6)))).id();
+                b.tag(e);
+                return;
+            }
             // the holder (346, 32 px wide, the cup at its top centre) on the back wall below the flame
             if let Some(s) = piece(Role::TorchStub) {
                 b.sprite(&s, Vec3::new(x, top.y - px_h(s.h - 2.0), -0.86));
@@ -516,6 +617,20 @@ const COLUMN_Z: f32 = -0.2;
 /// Depth (behind, in front of the figures) of the chomper blade and its front slice, and of the spike pieces.
 const JAW_Z: (f32, f32) = (-0.1, 0.42);
 const SPIKE_Z: (f32, f32) = (-0.05, 0.42);
+/// Voxel objects: depth of the spike rows [fore, back, right piece] (figures at 0.25), the 2D floor's shear (px the back
+/// edge of the floor top is drawn right of its front edge, the right piece's offset), depth where the chomper blade
+/// crosses the figures' plane, the torch holder's axis (back wall face at -0.9) and the flame image's anchor (x of its
+/// stem, rows it sinks into the cup), the debris layer height and the exit layers (frame plane, door panel, stairs, dark
+/// doorway).
+const SPIKE_ROWS: [f32; 3] = [0.4, 0.05, -0.3];
+const FLOOR_SHEAR: f32 = 26.0;
+const JAW_DIAG_Z: f32 = 0.25;
+const TORCH_Z: f32 = -0.77;
+const FLAME_AXIS: f32 = 7.5;
+const FLAME_SINK: f32 = 1.0;
+const DEBRIS_LAYER: f32 = 1.0 / 32.0;
+const EXIT_Z: [f32; 4] = [-0.33, -0.4, -0.5, -0.58];
+
 /// Height of the dungeon wall's top strip cap (on top of the face block, no coplanar faces).
 const CAP: f32 = 0.01;
 /// Back-wall depth of the balcony windows and lattice arches (the back wall's front face is at -0.9).
@@ -553,6 +668,26 @@ pub fn gate_bars(modifier: u8) -> Vec<(Vec3, Vec3)> {
         v.push((Vec3::new(x0 + 0.005, y, -0.15), Vec3::new(x1 - 0.005, y + 0.05, 0.45)));
     }
     v
+}
+
+/// A voxel exit door: dark doorway, stairs (not in the start room), the door panel slid up by the modifier (ExitLeft) and
+/// the frame with its lintel as a thick relief in front; `f` = the flat frame (size of the doorway).
+fn exit_voxel(b: &mut B, x: f32, y: f32, t: TileRef, f: &Tex) {
+    let (items, o) = b.objects().unwrap();
+    let (w, h) = (px_w(f.w), px_h(f.h));
+    b.put(&b.p.dark, Vec3::new(x, y, EXIT_Z[3] - 0.04), Vec3::new(x + w, y + h, EXIT_Z[3]));
+    if let (Some(gap), Tile::ExitLeft) = (b.tiles.and_then(|s| s.exit_gap), t.kind) {
+        let mid = x + px_w((gap.0 + gap.1) / 2.0);
+        if let Some(s) = o.stairs.as_ref().filter(|_| !b.start_room) {
+            b.object(s, &items.mat, Vec3::new(mid - px_w(s.w as f32) / 2.0, y, EXIT_Z[2]), 1.0);
+        }
+        if let Some(p) = o.panels.get(crate::items::panel_slices(t.modifier)) {
+            b.object(p, &items.mat, Vec3::new(mid - px_w(p.w as f32) / 2.0, y + px_h(t.modifier.min(43) as f32), EXIT_Z[1]), 1.0);
+        }
+    }
+    if let Some(m) = &o.exit[(t.kind == Tile::ExitRight) as usize] {
+        b.object(m, &items.mat, Vec3::new(x, y, EXIT_Z[0]), 1.0);
+    }
 }
 
 /// The door post image (record +9, 8 px wide) at the right edge of the cell, standing on the back half of the floor

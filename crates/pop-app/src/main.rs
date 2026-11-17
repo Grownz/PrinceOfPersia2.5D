@@ -7,7 +7,7 @@
 //! POP_LEVEL / POP_ROOM skip the title; POP_CUTSCENE=<level>|end|timeout|intro plays that cutscene at once (then quits
 //! back into the normal flow); POP_SOUND=original uses the game's own sounds; POP_DATA = game data folder;
 //! POP_PERF=1 logs the average frame time (vsync off) and room rebuilds every 300 frames.
-//! POP_RENDER / POP_CHARS / POP_TILES / POP_COLUMNS override settings.json "render_mode" / "character_style" / "tile_textures" / "column_style"; F5 toggles classic / enhanced rendering,
+//! POP_RENDER / POP_CHARS / POP_TILES / POP_COLUMNS / POP_OBJECTS override settings.json "render_mode" / "character_style" / "tile_textures" / "column_style" / "object_style"; F5 toggles classic / enhanced rendering,
 //! F6 sprite / voxel characters,
 //! F7 (debug text on, or POP_DEBUG_CAM=1) a closer, turned camera on the kid (POP_CAM_ANGLE="degrees[,distance]").
 mod audio;
@@ -279,7 +279,7 @@ fn perf_log(time: Res<Time<Real>>, mut acc: Local<(u32, f32, u32)>) {
 
 fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>, mut imgs: ResMut<Assets<Image>>, set: Res<Settings>) {
     let dir = set.tile_textures().then(data_dir);
-    cmds.insert_resource(room::Palette::new(&mut meshes, &mut mats, &mut imgs, dir.as_deref(), set.voxel_columns()));
+    cmds.insert_resource(room::Palette::new(&mut meshes, &mut mats, &mut imgs, dir.as_deref(), set.voxel_columns(), set.voxel_objects()));
     let centre = Vec3::new(5.0, 3.0, 0.0);
     cmds.spawn((
         Camera3d::default(),

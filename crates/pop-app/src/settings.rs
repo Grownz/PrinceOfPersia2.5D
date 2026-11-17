@@ -33,6 +33,9 @@ pub struct Settings {
     /// "voxel" (pillars and door posts built as voxel columns from their images) or "flat" (the image on a box); only with
     /// tile_textures = original; POP_COLUMNS overrides
     pub column_style: String,
+    /// "voxel" (doors, spikes, chompers, torch flames and debris built as voxel objects from their images) or "flat" (the
+    /// images on quads and the procedural boxes); only with tile_textures = original; POP_OBJECTS overrides
+    pub object_style: String,
 }
 
 pub const RENDER_MODES: [&str; 3] = ["classic", "enhanced", "rt_experimental"];
@@ -40,6 +43,7 @@ pub const CHARACTER_STYLES: [&str; 2] = ["sprite", "voxel"];
 pub const SHADOW_QUALITIES: [&str; 3] = ["off", "low", "high"];
 pub const TILE_TEXTURES: [&str; 2] = ["original", "procedural"];
 pub const COLUMN_STYLES: [&str; 2] = ["voxel", "flat"];
+pub const OBJECT_STYLES: [&str; 2] = ["voxel", "flat"];
 
 /// The renderer actually used; `rt_experimental` falls back to `Classic`.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,7 +104,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, tile_textures: "original".into(), column_style: "voxel".into() }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into() }
     }
 }
 
@@ -139,6 +143,7 @@ impl Settings {
             ssao: field(&o, "ssao", d.ssao, |_| true),
             tile_textures: field(&o, "tile_textures", d.tile_textures, |s| TILE_TEXTURES.contains(&s.as_str())),
             column_style: field(&o, "column_style", d.column_style, |s| COLUMN_STYLES.contains(&s.as_str())),
+            object_style: field(&o, "object_style", d.object_style, |s| OBJECT_STYLES.contains(&s.as_str())),
         }
     }
 
@@ -156,6 +161,11 @@ impl Settings {
     /// Voxel columns (settings plus POP_COLUMNS; anything but "flat" means voxel).
     pub fn voxel_columns(&self) -> bool {
         voxel_columns(&self.column_style, std::env::var("POP_COLUMNS").ok().as_deref())
+    }
+
+    /// Voxel objects (settings plus POP_OBJECTS; anything but "flat" means voxel).
+    pub fn voxel_objects(&self) -> bool {
+        voxel_columns(&self.object_style, std::env::var("POP_OBJECTS").ok().as_deref())
     }
 
     pub fn to_json(&self) -> String {
@@ -340,6 +350,17 @@ mod tests {
         assert_eq!((s.column_style.as_str(), s.volume), ("voxel", 0.5));
         assert!(voxel_columns("voxel", None) && !voxel_columns("flat", None));
         assert!(voxel_columns("flat", Some("voxel")) && !voxel_columns("voxel", Some("flat")));
+    }
+
+    #[test]
+    fn object_style_parse_env_and_fall_back() {
+        assert_eq!(Settings::default().object_style, "voxel");
+        assert_eq!(Settings::parse(r#"{"object_style": "flat"}"#).object_style, "flat");
+        let s = Settings::parse(r#"{"object_style": "boxes", "column_style": "flat"}"#);
+        assert_eq!((s.object_style.as_str(), s.column_style.as_str()), ("voxel", "flat"));
+        assert!(Settings::parse(&Settings::default().to_json()).object_style == "voxel");
+        // POP_OBJECTS=flat wins over the setting (same rule as the columns)
+        assert!(!voxel_columns("voxel", Some("flat")) && voxel_columns("flat", Some("voxel")));
     }
 
     #[test]

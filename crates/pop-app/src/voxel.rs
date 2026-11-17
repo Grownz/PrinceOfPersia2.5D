@@ -104,7 +104,7 @@ fn class(c: [u8; 3]) -> u8 {
     3 + (hue / 60.0) as u8
 }
 
-fn luma(c: [u8; 3]) -> f32 {
+pub(crate) fn luma(c: [u8; 3]) -> f32 {
     (0.3 * c[0] as f32 + 0.59 * c[1] as f32 + 0.11 * c[2] as f32) / 255.0
 }
 
@@ -206,6 +206,87 @@ impl VoxelModel {
             }
         }
         VoxelModel { w: split, h, d, plane: d / 2, voxels, jitter: COLUMN_JITTER }
+    }
+
+    /// Thin round rods (spikes, flames, torch holder): every opaque run of every row is revolved about its own centre, a
+    /// disc as deep as the run is wide; the two layers at the plane are always kept, so the front projection is `pixels`.
+    pub fn revolve_runs(w: usize, h: usize, pixels: &[u8]) -> Self {
+        let runs: Vec<(usize, usize, usize)> = (0..h)
+            .flat_map(|y| {
+                let row = &pixels[y * w..][..w];
+                let mut v = vec![];
+                let mut x = 0;
+                while x < w {
+                    if row[x] == 0 {
+                        x += 1;
+                        continue;
+                    }
+                    let a = x;
+                    while x < w && row[x] != 0 {
+                        x += 1;
+                    }
+                    v.push((y, a, x - 1));
+                }
+                v
+            })
+            .collect();
+        let d = (2 * runs.iter().map(|&(_, a, b)| (b + 2 - a) / 2).max().unwrap_or(1)).max(2);
+        let mut voxels = vec![0; w * h * d];
+        for &(y, a, b) in &runs {
+            let (c, r) = ((a + b + 1) as f32 / 2.0, (b + 1 - a) as f32 / 2.0);
+            for x in a..=b {
+                let dx = x as f32 + 0.5 - c;
+                for z in 0..d {
+                    let dz = z as f32 + 0.5 - d as f32 / 2.0;
+                    if dz.abs() <= 0.5 || dx * dx + dz * dz <= r * r {
+                        voxels[x + w * (y + h * z)] = pixels[y * w + x];
+                    }
+                }
+            }
+        }
+        VoxelModel { w, h, d, plane: d / 2, voxels, jitter: COLUMN_JITTER }
+    }
+
+    /// Extrusion by per-pixel layer counts: `layers(palette index, distance to the silhouette edge)` = (layers in front of
+    /// the plane, layers behind it). Every voxel of a column has the pixel's index, so the front projection is `pixels`.
+    pub fn extrude(w: usize, h: usize, pixels: &[u8], jitter: f32, layers: impl Fn(u8, f32) -> (usize, usize)) -> Self {
+        let dt = chamfer(pixels.iter().map(|&p| if p == 0 { 0.0 } else { f32::MAX }).collect(), w, h);
+        let cols: Vec<(usize, usize)> = (0..w * h).map(|i| if pixels[i] == 0 { (0, 0) } else { layers(pixels[i], dt[i]) }).collect();
+        let plane = cols.iter().map(|c| c.1).max().unwrap_or(0);
+        let d = plane + 1 + cols.iter().map(|c| c.0).max().unwrap_or(0);
+        let mut voxels = vec![0; w * h * d];
+        for (i, &(nf, nb)) in cols.iter().enumerate().filter(|(i, _)| pixels[*i] != 0) {
+            for z in plane - nb..=plane + nf {
+                voxels[i + w * h * z] = pixels[i];
+            }
+        }
+        VoxelModel { w, h, d, plane, voxels, jitter }
+    }
+
+    /// A bevelled plate (blades, door frames and panels): half thickness min(edge distance - 1, `cap`) voxels each side, so
+    /// the rim is one voxel thick; `relief(palette index)` adds layers in front (brighter ornament stands out).
+    pub fn plate(w: usize, h: usize, pixels: &[u8], cap: f32, relief: impl Fn(u8) -> usize) -> Self {
+        Self::extrude(w, h, pixels, COLUMN_JITTER, |p, dt| {
+            let n = (dt - 1.0).clamp(0.0, cap).round() as usize;
+            (n + relief(p), n)
+        })
+    }
+
+    /// The model with every image column x pushed forward by round((x_ref - x) * k) voxels: a plate standing diagonally
+    /// through the depth (the 2D chomper blade is drawn sheared, its left edge in front of the figures). Front unchanged.
+    pub fn sheared(&self, k: f32, x_ref: f32) -> Self {
+        let shift = |x: usize| ((x_ref - x as f32) * k).round().max(0.0) as usize;
+        let extra = (0..self.w).map(shift).max().unwrap_or(0);
+        let d = self.d + extra;
+        let mut voxels = vec![0; self.w * self.h * d];
+        for z in 0..self.d {
+            for y in 0..self.h {
+                for x in 0..self.w {
+                    voxels[x + self.w * (y + self.h * (z + shift(x)))] = self.voxels[x + self.w * (y + self.h * z)];
+                }
+            }
+        }
+        VoxelModel { w: self.w, h: self.h, d, plane: self.plane, voxels, jitter: self.jitter }
     }
 
     /// Mesh z of the column axis (the depth centre of the grid), in voxels.
