@@ -330,6 +330,11 @@ impl TileSet {
         pieces(kind, modifier, self.palace, |id| self.present.contains(&id)).into_iter().filter_map(|(r, id)| Some((r, self.imgs.get(&id)?.clone()))).collect()
     }
 
+    /// The tile's extra pieces as image ids (the voxel objects are looked up by them).
+    pub fn piece_ids(&self, kind: Tile, modifier: u8) -> Vec<(Role, u16)> {
+        pieces(kind, modifier, self.palace, |id| self.present.contains(&id))
+    }
+
     /// Floor material of a tile (None: keep the procedural one).
     pub fn floor(&self, kind: Tile) -> Option<Handle<StandardMaterial>> {
         tile_images(kind, 0, |id| self.present.contains(&id)).0.and_then(|f| self.floors.get(&f).cloned())
