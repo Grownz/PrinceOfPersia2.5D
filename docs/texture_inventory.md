@@ -454,3 +454,265 @@ What the images are (checked by eye, sheets from `dump_png` at 6x): 241 / 242 ar
     cargo run -q -p pop-core --example dump_png -- <Original_data dir> <outdir>   # PNGs, contact sheets, wall modifier histogram
 
 The example writes PPM files into the output directory and panics if it does not exist.
+
+## 8. Second pass (deep dive; supersedes sections 2/3/5 where they differ)
+
+Method: three independent disassembly passes (record consumption, chtab 7 and wall, all other draw call sites). Reports are by subagents; statements marked [V] cite addresses in PRINCE.EXE, but the main session did not re-verify them. Where two passes disagree it is noted.
+
+### 8.0 Corrections to earlier sections
+
+- **Value to resource rule [V]:** resource = base + v (base 200 for chtab 6). Record value 41 is resource 241 (floor face 32x13). The floor top 242 (26x15) is a literal 42 at `0000:A3E4`. Slots of base 1200 use the same index space and overwrite the base-200 entry (range check from `ds:031C/0324`).
+- **Slots [V by read address]:** +0 `A7BC` (kind-indexed back piece), +2 `A7DB` (x offset of +0), +3 `A379` (main back piece, 0 = skip), +4 `A1D6` (floor lip), +5 x offset (`A3FB/A48B/A4EC`; **not** y), +6 palace-only second piece at x-27 px (`A517`), +7 `A278` (wall face, kinds 7/12 palace), +8 `A68D` (fore piece via AD70), +9 `AA35` (extra piece from A9DD, 0 = skip), +10 dy, +11 dx (`AA6C/AA78`). +1 is never read.
+- **Draw tables [V]:** back = `ACDF` (`467A`, stride 7, cap 200), fore = `AD70` (`6132`, stride 7), mid = `AE02` (`3D78`, stride 16, cap 50). Frame order (`B8C0..B8F8`): objects, back, mid, objects, fore. Per cell (`9EBA`): `A1C2, A299, A332, A639, A700, A9DD`.
+- **Balcony [V negative]:** the guess 370..373 was wrong. Balcony pieces use chtab 6 ids 10..13 which resolve to **1210..1213**, palace only.
+- **Wall on palace VGA [V]:** `A9DD` skips the `AB4C` draw when palace and adapter 5 (VGA), so 368/370 are not drawn there by `A9DD`. The palace wall goes through `C357` (`C3E5` list path with RAM tables 4E38..4E59, writers not traced).
+- **Lattice [V negative]:** lattice types 26..29 draw only slot +9 = 9, which is **1209** (palace only). The +0 values 1/3/4/5 (361, 363..365) are read by no traced code.
+- **Torch:** an extra stub **346** is drawn at x-28 (`A537..A560`, literal 0x92). One pass ties it to types 19 and 30, the other to type 30 only.
+
+### 8.1 Roles of the previously unreferenced ids
+
+Sets: D = VDUNGEON, P = VPALACE. ids may be ranges.
+
+| ids | sets | role | evidence | conf |
+|---|---|---|---|---|
+| 232 | D+P | ramp wedge, no user found | none | G |
+| 233 | D+P | fringe strip | routine `B9EF` loop at `BAA6`, literal id; trigger `[5902]!=[40DE]` | V id, G trigger |
+| 234 | D+P | fringe strip (teal bar) | `B9EF` loop at `BACD`, literal id | V id, G trigger |
+| 244-245 | D+P | wall crack silhouettes (types 0/5 side path) | table `ds:27B2` at `A444` | I |
+| 250 | D+P | rubble / torch base (types 1,3,5,19 when `[66D0]==0`) | word `276C` at `BB2E` | I |
+| 251 | D+P | ledge fragment | literal 0x33 at `B507`, type unknown | G |
+| 252-259 | D+P | 24xN crumble or door slice sequence (N = 8..1) | table `ds:2799` at `B56B`, index 0..8; 252 also literal at `B54B` | I |
+| 260-267 | D+P | gate opening frames, idx = (min(mod,188)>>2)&7 | table `ds:2792` at `A311/A32B` | V |
+| 268 | D+P | dark wedge beside a gate (types 0/9/12 when cell is gate) | literal 0x44 at `A2C3`, call `A2DA` | V |
+| 284 | P | unknown piece at x-27, y+3 | literal 0x54 at `A4AB` | V id, G type |
+| 299 | D+P | fringe piece | `B9EF` at `BA33`, literal 0x63 | V id, G trigger |
+| 324-326 | D+P | wall decor (326 = lattice arch window), types 0/5 side path | table `ds:27AA` at `A3C3` | I |
+| 344 | D+P | staircase-like fringe piece | `B9EF` at `BA63`, literal 0x90 | V id, G trigger |
+| 346 | D+P | torch stub | literal 0x92 at `A549`, call `A560` | V code, I visual |
+| 348 | D+P | ramp wedge, no user found | none | G |
+| 350-351 | D+P | ramp wedge, no user found | none | G |
+| 362 | D+P | wall face drawn next to empty cells (chtab 7 id 2) | `A222`, `A25E..A27E` | V |
+| 363-367 | D+P | chtab 7 table `ds:27B6` (367,369,365,363,368,370,366,364,360,376) read by the type 20 path, exact role open | `A673` | I |
+| 368, 370 | D+P | wall body for modifier 0 / 1 via `T27BA`; dungeon = brick blocks, palace = 1-bit strips (VGA palace path via `C357`, body open) | `A9DD -> AB3A`, `ds:27BA` | V dungeon, open palace |
+| 369 | D+P | same table `ds:27B6` as above | `A673` | I |
+| 373 | D+P | chtab 7 id 13 via `C5BF` (dungeon/non-VGA wall edge) | `C5BF` | V |
+| 374-375 | D+P | chtab 7 ids 14/15, wall edge pieces | `ABDA` (`C817`) | V |
+| 376-377 | D+P | chtab 7 ids 16/17, wall edge pieces (376 also via `C5BF`) | `AC56` (`C757`, `C7EE`) | V |
+| 1201-1208 | P | decor in base-1200 slot 0, no per-type user | loader only | G |
+| 1209 | P | lattice support piece (slot +9 = 9) | records 26..29 | I |
+| 1210-1213 | P | balcony left/right pieces | records 23/24 values 10..13 | I |
+| 1278-1283 | P | palace caps (table `ds:27A2` branch `cmp [4E0B],5`); the chtab 7 pass found no user, passes disagree | `A475` | I |
+| 1301-1305 | D+P | chomper jaw body, 5 frames, k = `ds:2754[min(mod&7F,6)]` | `A7F3 -> A945`, ACDF at `A97D` | V code, I visual |
+| 1306-1310 | D+P | probable potion branch (14x60), role not visual | `AACB`, AD70 at `AAE5` | I code, G role |
+| 1311-1313 | D+P | chomper lower teeth, x-37/-47/-50 | ACDF at `A9D6` | I |
+| 1314-1318 | D+P | chomper dark strip (1-bit), when `[4366]` bit 0x80 | test `A980`, ACDF at `A9AA` | V code, G visual |
+| 1319-1323 | D+P | no user found (same series as 1314..) | none | G |
+| 1328-1332 | D+P | spike extend frames, table `ds:2774` = 80,81,82,83,84,83,81,80 | mov at `A835` | V code, I visual |
+| 1334 | D+P | spike tip | `A5B9`, `A5D6` | I |
+| 1335-1343 | D+P | thin stick sprites, table `ds:2780` read at `AB23`; unclear | `AB23` | G |
+
+Not covered by any pass (still unknown): 269-274, 345, 371-372, 361 (record value 1 unread), 1202..1208 beyond the decor guess, palace 1209 beyond lattice slot use.
+
+### 8.2 Corrected tile-type rows (replace the rows of section 3)
+
+| type | slot | v | VDUNGEON | VPALACE | conf |
+|---|---|---|---|---|---|
+| 1 Floor | +0 / literal 42 / +8 | 41 / 42 / 43 | 241 / 242 / 243 | 241 / 242 / 243 | V (rule 200+v, literal at A3E4) |
+| 2 Spikes | +0 / +3 / +8, frames | 127 / 133 / 43 | 1327 / 1333 / 243, frames 1328..1332, tip 1334 | same | V frames (A835), I rest |
+| 4 Gate | +0 / +3 / +7 / +8 / +9, frames | 46 / 47 / 48 / 43 / 49 | 246 / 247 / 248 / 243 / 249, frames 260..267, wedge 268 | same | V frames and wedge |
+| 10 Potion | +0 / +3 / +8 / +9 | 41 / 42 / 43 / 12 | 241 / 242 / 243 (1306..1310 probable) | 241 / 242 / 243 / 1212 | I |
+| 18 Chomper | floor + frames | 42 / 43 | 242 / 243, jaw 1301..1305, teeth 1311..1313, dark strip 1314..1318 | same | V code, I visual |
+| 19 Torch | +0 / +3 / +8 | 41 / 42 / 43 | 241 / 242 / 243, stub 346 | same | I (passes disagree on 19 vs 30 only) |
+| 30 TorchDebris | +0 / +3 / +8 / +9 | 97 / 98 / 43 / 100 | 297 / 298 / 243 / 300, stub 346 | same | I |
+| 20 Wall | chtab 7 | mod 0 / 1 | 368 / 370 (brick blocks), face 362 next to empty cells, edges 373..377 | 368/370 are 1-bit strips; VGA path via C357, body open | V dungeon, open palace |
+| 23 BalconyLeft | +0 / +3 / +7 / +8 | 41 / 10 / 11 / 43 | 241 / - / - / 243 (no balcony images in the dungeon set) | 241 / 1210 / 1211 / 243 | I |
+| 24 BalconyRight | +3 / +7 / +8 | 12 / 13 / 43 | - / - / 243 | 1212 / 1213 / 243 | I |
+| 26 LatticeSupport | +9 | 9 | none (1209 is palace only) | 1209; 361, 362 not read by traced code | I |
+| 27 SmallLattice | +9 | 9 | none | 1209; 363 not read by traced code | I |
+| 28 LatticeLeft | +9 | 9 | none | 1209; 364 not read by traced code | I |
+| 29 LatticeRight | +9 | 9 | none | 1209; 365 not read by traced code | I |
+
+### 8.3 Still open after the second pass
+
+- Flip/mode bits (`AE02 +80h` via `[259Ch]`), the globals stored in mid entries, and the tables `ds:27AA/27AE/27B2/27A2/2792/27BA` beyond what is listed above.
+- Trigger of the fringe routine `B9EF` (no near callers found) and the caller of `C357` (`A6F7`).
+- Palace wall body (RAM tables 4E38..4E59 on the `C3E5` path, writers not traced).
+- Ids listed in 8.1 as unknown, and the visual verification with palette 360 (no palette-360 render was made).
+
+## 9. Runtime probe (DOSBox 0.74-3, marker substitution)
+
+Method: tools in `tools/rt_probe/` (`pdat.py` DAT writer, `showcase.py` level builder, `harness.py` DOSBox driver; run from a scratch dir holding a copy of `Original_data`). In a scratch copy of `VDUNGEON.DAT`/`VPALACE.DAT` a batch of up to 14 target ids is replaced by raw same-size images with one marker colour per id (1-bit images: all ones). The start room of each level in a scratch `LEVELS.DAT` is overwritten with a random tile/modifier showcase. `PRINCE.EXE megahit N` runs in DOSBox, Ctrl+F5 screenshots (640x400, 2x) are diffed against baseline shots and changed pixels are attributed by marker colour. Output: 210 runs, 16 batches; full table in the (scratch) `RESULTS.md`. Conf marks here: **R** = observed at runtime.
+Reliability: **dungeon** rows with "high" are reliable. **Palace** results are noisy: DOSBox output was RGB565, so the near-identical tan colours of palette 360 collide; only rows rated high with exact sizes (1-bit pieces) are used below. Attribution by neighbouring cell offset (dx/dy) is statistical because the showcase is random. "Not seen" means not seen in these scenarios, not unused. Valid levels: dungeon 1, 2, 3, 7, 8, 9, 12, 13; palace 4, 6, 10, 11, 14 (palace L5 starts in an unmodified room).
+
+### 9.1 Confirmed or corrected roles (supersede 8.1)
+
+| ids | sets | role | evidence | conf |
+|---|---|---|---|---|
+| 233-234 | D | exit door body slices (stacked 42x6) at ExitLeft cells, **not** fringe strips | 233 in 16/27 clusters at ExitLeft (F 0.86), 234 at ExitLeft (F 0.67); seen in 8 levels | R high |
+| 346 | D+P | torch stub at the Torch / TorchDebris cell x0 | seen at both cell types; palace TorchDebris F 0.89 | R high |
+| 361 | D | wall body for modifier 2 | 14/31 clusters at Wall cells (F 0.61) | R high |
+| 365-366 | D | wall body variants (modifier 1 / neighbour variants) | Wall cells, F 0.47 / 0.40 | R medium |
+| 367-368 | D | wall bodies | 368: 34/46 clusters at Wall (F 1.11); 367 F 0.64 | R high |
+| 366-370 | P | 1-bit wall pieces drawn at Wall cells (sizes match exactly; twin sizes resolved with binary-coded runs: 366, 367, 368, 369 in L5/L11/L14) | exact size match at Wall cells | R high |
+| 372-374 | P | wall edge pieces at Wall cells | F 0.43 | R medium |
+| 1303-1305, 1308-1309 | D | chomper pieces (jaw and teeth frames) at Chomper cells; 1308 fits Chomper modifier 1 exactly | 1308 F 0.78 (18/18 clusters), 1304 F 0.82, 1303/1309 F 0.53-0.56 | R high (1304, 1308), medium (others) |
+| 1306-1310 | D+P | chomper pieces, **not** a potion branch (supersedes 8.1) | 1308 high at Chomper; 1306 only seen once beside DropButton | R medium |
+| 1311-1312 | D | chomper lower teeth | Chomper cells, F 0.40 / 0.53 | R medium |
+| 1312 | P | chomper lower teeth | 12/12 clusters at Chomper (F 0.8) | R high |
+| 1329, 1331, 1333, 1335, 1340, 1342 | D | spike pieces: 1333 base (35/35 clusters, F 1.11); frame sets 1329, 1331, 1340, 1342 drawn one column left of the Spikes cell; 1335 spike piece | Spikes cells, F 0.40-0.53 for the frame sets | R high (1333), medium (others) |
+| 1327, 1333 | P | spikes base pieces | 1327 F 0.74 (13/17), 1333 F 0.55 | R high / medium |
+| 1209 | P | lattice support piece | LatticeSupport/SmallLattice cells | R medium |
+| 1313 | P | drawn at BalconyLeft cells (23x10) | 3/7 clusters, F 0.67 | R high |
+| 272 | P | seen at StuckButton cells (a button with a modifier is unexpected) | 16/16 clusters, F 1.68 | R high, role open |
+
+### 9.2 Seen but role unresolved (hints only)
+
+Attributed to neighbouring cells by offset, statistical in a random showcase: dungeon 244 (near BigPillarTop), 250 (near Pillar), 251 and 253 (near Gate), 252, 265, 266, 344 (near LatticeRight/LatticeSupport), 270 (Unknown31), 299, 326 (near Skeleton/Torch). Palace: 232, 233, 250, 251, 1204-1206 (near Potion), 253, 263, 273, 326, 1343 (Mirror), 258, 1281, 1282 (Doortop), 269, 271, 345, 1318 (RaiseButton). Treat these as unconfirmed.
+
+### 9.3 Not seen in these scenarios
+
+- **Dungeon:** 232, 245, 254-261, 263, 264, 267, 269, 271, 273, 274, 325, 348, 350, 351, 364, 373, 376, 377, and the 1-bit strips 1314-1316, 1319-1321. Gate frames 260-267 and wedge 268 were not seen because closed and open gates use 246-249; the frames probably appear only while a gate is moving, which needs a button press (not tried).
+- **Palace:** 234, 244, 254, 256, 259, 261, 262, 265, 268, 284, 299, 361, 363-365, 375, 376, 1202, 1203, 1211, 1213, 1283, 1301, 1314-1316, 1319-1323, 1331, 1332.
+- **Not in the DATs:** palace 348, 1207, 1208, 1279, 1324-1326; dungeon 284, 345, 1201-1213, 1278-1283, 1324-1326.
+
+### 9.4 Follow-ups
+
+1. Rerun the palace probe with a 32-bit DOSBox output mode (see caveat above).
+2. Trigger a gate with a button press to see 260-268 and the loose-floor crumble frames (252-259).
+3. Balcony 1210-1213 and lattice 1209 checks are only partial (1210 medium; 1211 and 1213 not seen).
+
+## 10. Runtime probe, round 2 (clean palettes, isolated showcase)
+
+Changes against section 9: (A) in the scratch DATs palettes 200 and 360 were replaced by 15 well-separated colours (baseline and marker runs use the same palette), so the RGB565 collisions are gone and **palace results are now clean**. (B) controlled showcase: 7 sheets x 10 variants = 62 tile/modifier variants, each at a known cell (cols 1,3,5,7,9 x rows 0,2) with plain Floor in every other cell; dungeon = level 3, palace = level 10; 140 runs; each hit is attributed to the nearest placed cell ("background" = hit on a plain Floor cell). Limit: the background is Floor only, so ids needing Empty/Wall neighbours (wall side-edges, ramps, fringes, 269-274) were not triggered. Results are in scratch `RESULTS2.md`; tools in `tools/rt_probe/` (`v2.py`, `run2.py`, `obs2.py`, `agg2.py`, `gen2.py`). Section 10 supersedes sections 8.1 and 9 where they differ.
+
+### 10.1 Roles by runtime observation
+
+| ids | sets | role | evidence | conf |
+|---|---|---|---|---|
+| 250, 267 | D | pieces of a statically open gate (Gate modifier 1); 267 is the last opening frame, the gate drawn open uses 250 + 267; closed gate uses 246, 247, 249 (248 never seen) | 2/2 clusters at the Gate cell | R high |
+| 251-253 | D | left-edge pieces (x0 = 0) seen at Gate modifier 0 cells | single clusters | R medium |
+| 251, 253, 256, 274 | P | pieces drawn on plain Floor cells (floor-side edge pieces, at the left room edge), seen on every Floor | 14/15 clusters (251, 253), 256 and 274 high | R high |
+| 1280 | P | drawn on plain Floor cells | 14/14 clusters | R high |
+| 1202 | P | drawn on a Floor cell | 1/1 cluster | R medium |
+| 363, 367 | D | 32x3 floor strips drawn on plain Floor cells (**supersedes** 9.1 "367 = wall body") | 363: 36/49 clusters; 367: 7/7 clusters | R high (367), medium (363) |
+| 324, 371, 372 | D | drawn on plain Floor cells | 324: 7/14, 371: 8/15, 372: 8/28 clusters | R medium (372 low) |
+| 361 | D | drawn on plain Floor cells (**supersedes** 9.1 "wall body for modifier 2") | 14/27 clusters | R medium |
+| 361 | P | wall body | Wall mods 0,2,3,4,5,7; 11/11 clusters | R high |
+| 284 | P | wall piece (8x7), no longer unknown | Wall mods 0, 2, 4; 3/3 clusters | R high |
+| 366-367, 369-372, 374 | P | 1-bit wall strips at Wall cells (exact sizes; twins separated by batch); 368 and 373 medium | Wall cells, mods 0,2,3,4,5,7 | R high |
+| 368 | D | wall body | Wall mods 2-7 (6/7 clusters) | R high |
+| 370 | D | wall body for modifier 0 | Wall mod 0 | R medium |
+| 232, 234, 362, 375 | D | wall pieces seen at Wall modifier 3 (single hits) | 1 cluster each | R medium |
+| 1301-1313 | D+P | **Chomper** (type 18): the pieces depend on the modifier: mod 1 and 0x81 draw 1303, 1308, 1311; mod 0, 5, 6 draw 1304, 1309, 1312; mod 2 draws 1301, 1307; mod 3 and 4 draw 1302 (palace mod 3), 1305, 1310, 1313. So 1306-1310 are chomper pieces in both sets (not potion) | all high or medium by cell, 1303/1304/1308/1311/1312 high | R high |
+| 1327-1343 | D+P | **Spikes** (type 2): 1333 base at every modifier; mod 0 draws 1328, 1339; mod 1 and 6 draw 1329, 1340; mod 2 draws 1330, 1341; mod 2 and 7 draw 1335; mod 4 and 5 draw 1331, 1342; mod 4 also 1332, 1343, 1337; mod 5 draws 1338; mod 1 draws tip 1334; 1327 is a base piece seen at a Floor/Spikes cell | spikes cells | R high (1329, 1331, 1333, 1335, 1337, 1340, 1342), medium (rest) |
+| 1201, 1203, 1204, 1205 | P | lattice: 1201 LatticePillar, 1203 LatticeSupport, 1204 SmallLattice, 1205 LatticeLeft (**1209 is only a low hit**, supersedes 8.2) | 1203 high, others medium | R high (1203), medium |
+| 1209 | P | lattice, low | 1/4 clusters | R low |
+| 1210 | P | BalconyLeft | 1 cluster | R medium |
+| 1278 | P | at a DoortopWithFloor cell (single hit) | 1/1 cluster | R medium |
+| 346 | D+P | torch stub at Torch cell (TorchDebris also) | confirmed again | R medium |
+| 270 | D+P | at TorchDebris cell | 1/2 clusters | R medium |
+| 233 | D+P | exit door slices at ExitLeft/ExitRight (mods 0, 12, 43) | confirmed | R high (palace), medium (dungeon) |
+
+### 10.2 Corrections to earlier sections
+
+- **Dungeon 361 and 367** are not wall bodies; they are drawn on plain Floor cells. Dungeon wall bodies are 368 (mods 2-7) and 370 (mod 0). Palace 361 is a wall body.
+- **Palace lattice** is 1201 / 1203 / 1204 / 1205, not 1209 (section 8.2). Balcony 1210 holds.
+- **Gate:** an open gate draws 250 + 267 (not only the 260-267 frames in motion). 248 was never seen.
+- **Palace palette collisions** are resolved; the section 9 palace caveat no longer applies to round-2 rows.
+
+### 10.3 Not seen in these scenarios (not "unused")
+
+- Dungeon: 244, 245, 254-266, 268, 269, 271-274, 299, 325, 326, 344, 348, 350, 351, 364, 373, 374, 376, 377, 1314-1317, 1319-1322, 1336.
+- Palace: 232, 245, 254, 255, 257-269, 271-273, 299, 325, 326, 344, 350, 351, 362-365, 375-377, 1206, 1211-1213, 1281-1283, 1314-1317, 1319-1322, 1336.
+
+### 10.4 Moving states (not achieved)
+
+Gate frames 260-267 in motion, the loose-floor crumble (252-259) and the exit-door opening animation were not observed: with the scripted keyboard (SendKeys RIGHT interleaved with Ctrl+F5) the kid only turned or stood still. Open question: use hardware scancodes (SendInput with KEYEVENTF_SCANCODE, extended flag for arrows) or time the screenshots separately. Also open: a wall-neighbour grid (Empty/Wall neighbours) to trigger side edges, ramps and fringes (244/245, 324-326, 299, 344, 348-351, 269-274). The kid walks left on his own after about 4.5 s in dungeon level 3.
+
+## 11. Runtime probe, round 3 (neighbour sheets; input not solved)
+
+Method: 12 dense random sheets per set (Empty / Wall mods 0-7 / Floor / Pillar / Gate / Doortop / Mirror / Torch / lattice neighbours), only still-unseen ids marked; each hit is reported with its tile type and left/right/up/down neighbours (not a full combinatorial grid). Hits shared by 3 or more different ids at one position were dropped (marker colours coincide with the kid's white sprite pixels). Tools: `inp.py`, `v3.py`, `obs3.py`, `gen3.py`, `c3.py` in `tools/rt_probe/`; results in scratch `RESULTS3.md`.
+
+### 11.1 Roles (supersede 10.1 where they differ)
+
+| ids | sets | role | evidence | conf |
+|---|---|---|---|---|
+| 373, 374, 376, 377 | D | wall edge pieces drawn at the left of a Wall cell (373: 7/7 clusters, 374: 8/14; 376 and 377 few clusters, 377 only at Wall mods 7 and 2) | Wall neighbour sheets | R high (373), medium (374), low (376, 377) |
+| 364 | D | drawn at Wall cells with modifier 2 or 7 | Wall cells | R medium |
+| 362 | D+P | wall face piece on Empty cells next to Empty or Wall (matches the static `A222` finding) | both sets | R high |
+| 1210 | P | BalconyLeft | 23/24 clusters | R high |
+| 1212 | P | BalconyRight | 6/7 clusters | R high |
+| 1278 | P | at DoortopWithFloor cells | 4/6 clusters | R high |
+| 1209 | P | next to LatticeLeft / SmallLattice | medium | R medium |
+| 345 | P | generic floor-edge piece (30 clusters at a constant offset 0/+26 under many tile types) | 30 clusters | R medium |
+
+Zufallsfunde: 260 and 1281 appear in the left 32 px (the left neighbour room's column); 244, 245 and 254 hit one Wall/4 cell with a LatticePillar on its left and a Sword on its right in a single dungeon sheet (low).
+
+### 11.2 Moving states and input
+
+Not achieved. Scancode input with the extended flag works only if the DOSBox window is re-focused before every key sequence and every Ctrl+F5; pure scancode events do not trigger the screenshot hotkey. The kid turns and runs, but the movement is erratic, so no clean 3-tile walk, Shift-run or jump was validated. Gate links (DropButton/RaiseButton/StuckButton to a gate, shots every 0.2 s) never changed the gate region, so either the kid never triggered the plate or the link table is wrong. Unobserved at runtime: gate frames 260-267 in motion and wedge 268, loose-floor crumble 252-259, exit-door opening, potion and sword pickups. **The gate frames 260-267 and wedge 268 are verified statically** (`A311/A32B`, `A2C3`, section 8.1); the crumble sequence 252-259 is only inferred from table `ds:2799`.
+
+### 11.3 Still without a runtime role
+
+Dungeon: 244, 255-266, 268, 269, 273, 299, 325, 326, 344, 350, 351, 1314-1317, 1319-1322. Palace: 232, 245, 254, 255, 257-259, 261, 263-266, 268, 269, 271-273, 299, 325, 326, 344, 351, 363-365, 375-377, 1206, 1211, 1213, 1282, 1283, 1314-1317, 1319-1321. All "not seen in these scenarios". Likely reasons: the gate and crumble frames need motion; the 1-bit chomper strips 1314-1323 may blend into the background colour; the rest need a trigger not covered yet (fringes, cracks, torch-head variants, ramp edges, specific palace wall modifier plus neighbour combinations). For several of them section 8.1 holds a static role with [V]/[I] marks (e.g. 260-268 gate, 299/344 `B9EF` fringe literals, 324-326 side-path table `ds:27AA`, 244/245 `ds:27B2`).
+
+## 12. Static pass 3 (two disassembly passes; supersedes 8.1/11 where they differ)
+
+Sources: two independent passes over PRINCE.EXE v1.1 (fringe/wall/palace tables, and crumble/strips/call-site sweep). Raw call-site tables are in the scratch folder `sweep\`. [V] = read in code bytes, [I] = inferred, [G] = guess. Runtime marks are from sections 9-11.
+
+### 12.1 Roles
+
+| ids | sets | role | evidence | conf |
+|---|---|---|---|---|
+| 233 | D+P | exit door body: stacked 42x6 slices drawn in a loop for **ExitLeft only** (type 16) | routine **`B9F1`** (the "B9EF" of 8.1 was mid-instruction), loop `BA8A..BAAF`, dispatched from `A608` in the type switch `A57D` | V code, R |
+| 234 | D+P | exit door piece, one draw at x-64, row+1 | `BAB5` | V code, R |
+| 299 | D+P | exit frame piece (ExitLeft), unconditional, x-13, row+1 | `BA33` | V |
+| 344 | D+P | exit extra piece at x-17, row+1, drawn only if `[5902] != [40DE]` and column != 0; `[5902]` is written 2 at `4A29` | `BA36..BA45` | V code, G role |
+| 244-245 | D+P | wall crack silhouettes (side path): id = 200 + `ds:27B2[c]` with c = column if <= 3, else 0 (c 0,1 -> 244; c 2,3 -> 245); dungeon skips c = 0, palace skips c = 1; x-20, class 0 | `A444` | V id, I type |
+| 324-326 | D+P | side-path decor: 324 and 325 at x-20, 326 (lattice arch window) at x 0; id = 200 + `ds:27AA[si]`, si = 1..3 | `A3C3` | V data, I condition |
+| 1278 | P | palace cap, column 0 | `A475`, `ds:27A2` | V |
+| 1280 | P | palace cap, column 1 | `A475` | V |
+| 1282 | P | palace cap, column 2 | `A475` | V |
+| 1281 | P | palace cap, column 5 | `A475` | V |
+| 1283 | P | palace cap, column 6 (columns 3-4 and 7-8 draw none; column 9 would use 1324, not in VPALACE) | `A475` | V |
+| 284 | P | palace piece at x-27, row+3 (when column bit 80h is clear) | `A4AB` | V id, R |
+| 251 | D+P | cap of the gate bar column (15x10, back at `B507`, fore at `B5AD`), at x = `[43AA]`-2 | shared column code `B4A0..B586`; `B4A0` is the type-4 (Gate) record path; runtime: 251 at Gate cells | I (runtime R medium) |
+| 252-259 | D+P | **gate bar column slices**, not a loose-floor crumble: 252 = full 24x8 slice drawn every 8 px upward from `[43AA]`-12; 253..259 = partial 24xN slice (N = 7..1) in the 8-px band at the threshold `[4FCA]`, via `ds:2799` = 267, 259..252 | `B54B`, `B57F` | I (runtime R medium at Gate cells for 251-253) |
+| 1334-1338 | D+P | spike extend pieces: `ds:2780` = 1335, 1336, 1337, 1338, 1337, 1335, 1334 (1334 = tip); reader not traced | table | I (runtime R) |
+| 1339-1343 | D+P | thin stick cycle: `ds:2788` = 1339..1343 and back, index 0 none (8-frame extend/retract), read at `AB23` | table | I (runtime R) |
+| 1314-1318 | D+P | chomper blood/drip strip, drawn when cell modifier bit 7 (`[4366]` & 80h) is set; the id source table is not traced (the literal `4Ch` at `A9AA` is 276, not an image) | `A980` | I |
+| 1319-1323 | D+P | drip continuation (2xN), no static user | none | G |
+| 363, 365, 367, 369 | D+P | wall **back** pieces (32x3): `ds:27B6[mod&7F]` = 367, 369, 365, 363, 368, 370, 366, 364 for modifiers 0..7 (static); the runtime saw 363, 367 on plain floor cells | `A639` | V code, **conflict with runtime** (see 12.2) |
+| 368, 370, 366, 364 | D+P | wall **fore** pieces: `ds:27BA[mod]` = 368, 370, 366, 364, none, 376, 377 for modifiers 0..6 (palace VGA: back and fore are skipped) | `A9DD -> AB3A` | V code, R |
+| 373 | D+P | wall edge via `C5BF` for modifier 3 | `C60D` | V code, R |
+| 374-375 | D+P | wall edge pieces: id = 374 + (k&1), x = `[4390]` - `ds:2800[k]` (58, 41, 37, 20, 16, 52, 42, 31) | `ABDA` | V code |
+| 376-377 | D+P | wall edge via `AC56` and fore pieces for modifiers 5, 6 | `AC56`, `ds:27BA` | I |
+
+### 12.2 Conflicts and findings
+
+- **Wall back/fore table vs runtime:** static says modifier 0 = back 367 + fore 368, modifier 1 = back 369 + fore 370. The runtime probe saw 368 at modifiers 2-7, 370 at modifier 0, and 367/363 on plain floor cells. Not resolved: the runtime attribution (nearest placed cell) may mix the neighbouring Floor with the wall.
+- **Loose floor:** the type 11 record has no image bytes and no type-11 draw path was found; the original's loose-floor image sequence is **not established** (the port draws Floor plus its own wobble). The earlier crumble attribution of 252-259 is withdrawn: they belong to the gate bar column.
+- **Palace wall (VGA):** the back and fore wall draws are skipped for palace + VGA; the wall body goes through `C357 -> C3E5` with RAM tables `4E38..4E59`; the writers of these tables are still not traced.
+- **Value ambiguity:** small record values (6, 11, 12, 13) collide with chtab numbers in xref sweeps, so users of 1206, 1211, 1213 cannot be separated from them by xref alone (1212 is BalconyRight +3 / Potion +9 by record).
+
+### 12.3 Ids with no user found (static or runtime)
+
+232 (value 32 is the common flag literal), 269-274 (only unverified literal candidates: 45h at `44E3`, 46h at several `C4E5..C5B1` sites, 47h at `60A6`, 49h at `68A1`, 4Ah at `434A`), 345 (palace: runtime generic floor edge, R medium), 348 (chomper-side candidate at `A7AD`, G), 350 and 351 (compares only), 1206, 1211, 1213. Open next: the loose-floor draw (if any), the palace wall RAM table writers, the neighbour-pattern table in `C357/C5BF/C3E5`, the 6th ACDF argument (0x10 vs 0), and the id source of the chomper strips.
+
+## 13. Implementation status in room.rs
+
+(Numbered 13 because sections 11 and 12 already exist.) Pure mapping: `crates/pop-app/src/tiles.rs` (`tile_images` = floor + main piece, `pieces` = the pieces below, `palace_wall`), unit tests with the ids of this table; placement in `room.rs`. Resource rule: `1200 + v` if present, else `200 + v` (8.0). Missing images keep the procedural look per piece; `tile_textures=procedural` / `POP_TILES=procedural` is unchanged. Load: both sets in about 1.2 ms, 353 KB RGBA; release frame time 1.2-1.3 ms (POP_PERF, unchanged).
+
+| tile | textured with | verdict |
+|---|---|---|
+| Wall, dungeon | face 368 (mod 0) / 370 (mod 1) on the one-row block, top strip 367 / 369 (`ds:27B6`, static V) as a 0.01 cap on the block top | looks right; the 367/369 role follows 12.1 (static) against the runtime "floor strip" reading (12.2); edge pieces 373..377 and the face 362 are left out (random-mark rule and 2D perspective pieces, the 3D block has its own sides) |
+| Wall, palace | built faces: 4 courses of 15 rows in palette 360 colours 1..4 / 6..9 (random per brick, as SDLPoP's generate_wall_pattern, from memory), mortar and joints in 14, light edge 11, one 1-bit strip 366..371 per course as grain in 14; 8 variants, chosen per room and tile | reconstruction, convincing at game distance, not the exact original pattern (course heights and strip positions are guesses); 361, 372..374, 284 not used |
+| Chomper | blade 1301 + k, front slice 1306 + k (in front of the figures), upper teeth 1311..1313 (k >= 2, bottom 24 / 34 / 37 px above the floor), k = ds:2754 [3,2,0,1,4,3,3][min(mod & 7F, 6)]; floor rows cut, the 47 px stretched to the slab above | looks right (closed, open, both sets); blood strips 1314..1323 left out (id source not traced) |
+| Spikes | floor 1327 / 1333 / 243 as before; back 1328..1332, right piece 1334..1338 in the next column, front 1339..1343, frame = modifier (>= 0x80: 5), tables after ds:2774 | looks right in both sets; the right and front series order is inferred from the back table |
+| Gate | unchanged: post 249 at the right edge, 3D grille across the corridor | 246 / 247 / 248, 250..259 (bar slices) and 260..268 (perspective frames, wedge) not used: the 3D grille replaces them |
+| ExitLeft / ExitRight | frames and lintels as before; door panel = 234 at the bottom edge (modifier px above the floor) plus 233 slices up to the lintel, centred on the doorway between the 237 / 239 posts, ExitLeft only (sheet); stairs 344 behind the door when the room is not the level's start room (SDLPoP rule from memory) | looks right (closed, half open with stairs); 299 left out |
+| Torch / TorchDebris | stub 346 on the back wall under the flame | dungeon right; palace 346 shows a blue lattice strip beside the holder: doubtful |
+| BalconyLeft / Right (palace) | window 1210 / 1212 (floor rows cut) on the back wall, arch 1211 / 1213 above | looks right (level 6 room 18); 1313 at BalconyLeft left out (chomper id, role unclear) |
+| LatticeSupport / SmallLattice / LatticeLeft (palace) | arches 1203 / 1204 / 1205 on the back wall, standing on the floor (1204 / 1205 are R medium, taken so the arcade is uniform) | plausible; LatticeRight (no image) keeps the procedural plate and stands out; LatticePillar keeps column 295 (1201 unused) |
+| Floor extras | none added: 251 / 253 / 256 / 274 (gate column pieces per 12.1), 363 / 367 floor reading, 1202, 345, palace caps 1278..1283 (trigger not traced) | left out |
+| LooseFloor | normal floor + wobble as before; 252..259 belong to the gate (12.1), so no crumble frames | unchanged |

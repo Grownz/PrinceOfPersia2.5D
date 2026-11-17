@@ -1,6 +1,6 @@
 //! Geometry for one room: a box per tile piece. With `tile_textures` = original the pieces carry the original tile images
 //! (`tiles`, docs/texture_inventory.md 5); otherwise, and for pieces without an image, plain coloured boxes.
-use crate::tiles::{Tex, TileSet};
+use crate::tiles::{Role, Tex, TileSet};
 use crate::Game;
 use bevy::prelude::*;
 use pop_core::level::*;
@@ -83,6 +83,9 @@ struct B<'a, 'w, 's> {
     p: &'a Palette,
     origin: Vec3,
     chamber: bool,
+    /// room number (palace wall variants) and whether it is the level's start room (no stairs behind its exit door)
+    room: usize,
+    start_room: bool,
     tiles: Option<&'a TileSet>,
     /// voxel items and the set index (0 dungeon, 1 palace); None in the chamber and with procedural tiles
     items: Option<(&'a crate::items::Items, usize)>,
@@ -100,6 +103,16 @@ impl B<'_, '_, '_> {
     /// Box from `lo` to `hi` (corner coordinates).
     fn put(&mut self, mat: &Handle<StandardMaterial>, lo: Vec3, hi: Vec3) {
         self.put_id(mat, lo, hi);
+    }
+
+    /// A cut-out image standing upright: bottom-left corner at `lo`, as thin as possible without the faces touching.
+    fn sprite(&mut self, t: &Tex, lo: Vec3) {
+        self.sprite_sy(t, lo, 1.0);
+    }
+
+    /// The same, stretched vertically by `sy`.
+    fn sprite_sy(&mut self, t: &Tex, lo: Vec3, sy: f32) {
+        self.put(&t.mat, lo, lo + Vec3::new(px_w(t.w), px_h(t.h) * sy, 0.004));
     }
 
     fn put_id(&mut self, mat: &Handle<StandardMaterial>, lo: Vec3, hi: Vec3) -> Entity {
@@ -145,18 +158,18 @@ pub fn build_room(mut cmds: Commands, g: Res<Game>, p: Res<Palette>) {
 /// Spawn `room` (1-based) with its left/bottom corner at `origin`; neighbours can be drawn with other origins.
 pub fn spawn_room(cmds: &mut Commands, level: &Level, mobs: &[pop_core::sim::Mob], room: usize, origin: Vec3, p: &Palette, palace: bool) {
     let items = p.items.as_ref().map(|i| (i, palace as usize));
-    spawn_tiles(&mut B { cmds, p, origin, chamber: false, tiles: p.tiles[palace as usize].as_ref(), items }, level, mobs, room);
+    spawn_tiles(&mut B { cmds, p, origin, chamber: false, room, start_room: room == level.start_room as usize, tiles: p.tiles[palace as usize].as_ref(), items }, level, mobs, room);
 }
 
 /// The same builder for the cutscene set: entities carry `Chamber` instead of `RoomEntity`. The set keeps the procedural look.
 pub fn spawn_chamber(cmds: &mut Commands, level: &Level, room: usize, origin: Vec3, p: &Palette) {
-    spawn_tiles(&mut B { cmds, p, origin, chamber: true, tiles: None, items: None }, level, &[], room);
+    spawn_tiles(&mut B { cmds, p, origin, chamber: true, room, start_room: false, tiles: None, items: None }, level, &[], room);
 }
 
 /// A plain box of the room palette in the chamber set (`mat`: "stone", "dark", "wood", "flame"; anything else = metal).
 pub fn chamber_box(cmds: &mut Commands, p: &Palette, mat: &str, lo: Vec3, hi: Vec3) {
     let m = match mat { "stone" => p.stone.clone(), "dark" => p.dark.clone(), "wood" => p.wood.clone(), "flame" => p.flame.clone(), _ => p.metal.clone() };
-    B { cmds, p, origin: Vec3::ZERO, chamber: true, tiles: None, items: None }.put(&m, lo, hi);
+    B { cmds, p, origin: Vec3::ZERO, chamber: true, room: 0, start_room: false, tiles: None, items: None }.put(&m, lo, hi);
 }
 
 fn spawn_tiles(b: &mut B, level: &Level, mobs: &[pop_core::sim::Mob], room: usize) {
@@ -247,7 +260,6 @@ pub fn animate(g: Res<Game>, p: Res<Palette>, mut loose: Query<(&Loose, &mut Tra
     let a = g.world.alpha();
     for (l, mut t) in &mut loose {
         let (dy, roll) = wobble(g.world.level.tile_at(l.room as usize, l.idx as usize).modifier, a);
-        if g.world.level.tile_at(l.room as usize, l.idx as usize).modifier != 0 { info!("DBG loose {} {} m {} a {a} dy {dy}", l.room, l.idx, g.world.level.tile_at(l.room as usize, l.idx as usize).modifier); }
         t.set_if_neq(Transform { translation: l.base + Vec3::Y * dy, rotation: Quat::from_rotation_z(roll), scale: t.scale });
     }
     for (f, mut t) in &mut falling {
@@ -272,6 +284,9 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
     // original images: the floor of this tile type and its extra piece (pillar, door post, exit frame, wall face)
     let fl = b.tiles.and_then(|s| s.floor(t.kind)).unwrap_or_else(|| stone.clone());
     let ex: Option<Tex> = b.tiles.and_then(|s| s.extra(t.kind, t.modifier)).cloned();
+    // the other pieces (chomper and spike frames, door slices, torch stub, balcony, lattice, wall top), tiles::pieces
+    let pc: Vec<(Role, Tex)> = b.tiles.map_or(vec![], |s| s.pieces(t.kind, t.modifier));
+    let piece = |r: Role| pc.iter().find(|(pr, _)| *pr == r).map(|(_, t)| t.clone());
     let floor = |b: &mut B, m: &Handle<StandardMaterial>| b.put(m, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y, 0.5));
     let column = |b: &mut B, m: &Handle<StandardMaterial>, w: f32, h: f32| {
         b.put(m, Vec3::new(x + 0.5 - w / 2.0, y, -w / 2.0), Vec3::new(x + 0.5 + w / 2.0, y + h, w / 2.0))
@@ -279,8 +294,18 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
     match t.kind {
         Empty => {}
         // textured: one row tall, so the faces of stacked walls and of the floor above do not overlap (z-fighting)
-        Wall => match &ex {
-            Some(w) => b.put(&w.mat, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y + TILE_H - SLAB, 0.5)),
+        // dungeon: the face image on the block and the top strip as a thin cap on its top face; palace: built brick faces
+        Wall => match ex.map(|w| w.mat).or_else(|| b.tiles.and_then(|s| s.palace_wall(b.room, idx))) {
+            Some(m) => {
+                let top = y + TILE_H - SLAB;
+                match piece(Role::WallTop) {
+                    Some(cap) => {
+                        b.put(&m, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, top - CAP, 0.5));
+                        b.put(&cap.mat, Vec3::new(x, top - CAP, -0.5), Vec3::new(x + 1.0, top, 0.5));
+                    }
+                    None => b.put(&m, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, top, 0.5)),
+                }
+            }
             None => b.put(&stone, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y + TILE_H, 0.5)),
         },
         Skeleton => match b.items.and_then(|(i, set)| Some((i.skeleton[set].clone()?, i.mat.clone()))) {
@@ -299,17 +324,28 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             match t.kind {
                 Sword => b.put(&metal, Vec3::new(x + 0.2, y, -0.05), Vec3::new(x + 0.8, y + 0.05, 0.05)),
                 Debris => b.put(&dark, Vec3::new(x + 0.2, y, -0.2), Vec3::new(x + 0.8, y + 0.15, 0.2)),
-                _ => {}
+                // palace balcony: the window (floor rows cut) on the back wall, its arch above it
+                _ => back_panel(b, &piece, x, y),
             }
         }
         LooseFloor => {} // its own entity, spawn_tiles
         Spikes => {
             floor(b, &fl);
             // modifier: 0 retracted, 1..=4 rising, >= 0x80 or 255 out, 5..=9 retracting
-            let h = match t.modifier { 0 => 0.04, 255 => 0.45, m if m & 0x80 != 0 => 0.45, m => (m as f32 * 0.11).min(0.45) };
-            for i in 0..4 {
-                let sx = x + 0.15 + i as f32 * 0.23;
-                b.put(&metal, Vec3::new(sx, y, -0.05), Vec3::new(sx + 0.06, y + h, 0.05));
+            if b.tiles.is_some_and(|s| !s.pieces(Spikes, 0x80).is_empty()) {
+                // the frame images: back piece in the column, its right part in the next column, the front piece before
+                // the figures; standing on the floor (frames 0 and 9 draw nothing)
+                for (r, z) in [(Role::SpikeBack, SPIKE_Z.0), (Role::SpikeRight, SPIKE_Z.0), (Role::SpikeFore, SPIKE_Z.1)] {
+                    if let Some(s) = piece(r) {
+                        b.sprite(&s, Vec3::new(if r == Role::SpikeRight { x + 1.0 } else { x }, y, z));
+                    }
+                }
+            } else {
+                let h = match t.modifier { 0 => 0.04, 255 => 0.45, m if m & 0x80 != 0 => 0.45, m => (m as f32 * 0.11).min(0.45) };
+                for i in 0..4 {
+                    let sx = x + 0.15 + i as f32 * 0.23;
+                    b.put(&metal, Vec3::new(sx, y, -0.05), Vec3::new(sx + 0.06, y + h, 0.05));
+                }
             }
         }
         Pillar | BigPillarBottom | BigPillarTop | LatticePillar | LatticeSupport => match &ex {
@@ -322,7 +358,11 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             }
             None => {
                 floor(b, &fl);
-                column(b, &stone, 0.5, TILE_H);
+                // palace lattice support: its arch panel on the back wall instead of the stone column
+                match piece(Role::BackPanel) {
+                    Some(_) => back_panel(b, &piece, x, y),
+                    None => column(b, &stone, 0.5, TILE_H),
+                }
             }
         },
         DoortopWithFloor | Doortop => {
@@ -334,7 +374,10 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
         }
         SmallLattice | LatticeLeft | LatticeRight => {
             floor(b, &fl);
-            b.put(&metal, Vec3::new(x, y, -0.5), Vec3::new(x + 1.0, y + TILE_H * 0.9, -0.45));
+            match piece(Role::BackPanel) {
+                Some(_) => back_panel(b, &piece, x, y),
+                None => b.put(&metal, Vec3::new(x, y, -0.5), Vec3::new(x + 1.0, y + TILE_H * 0.9, -0.45)),
+            }
         }
         Gate => {
             floor(b, &fl);
@@ -385,7 +428,24 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                 // the frame image (without its floor rows) in front of the dark doorway, the lintel image above it
                 Some(f) => {
                     let (w, h) = (px_w(f.w), px_h(f.h));
-                    b.put(&dark, Vec3::new(x, y, -0.5), Vec3::new(x + w, y + h, -0.3));
+                    // layers inside the doorway, back to front: dark box, stairs, door panel, frame
+                    b.put(&dark, Vec3::new(x, y, -0.5), Vec3::new(x + w, y + h, -0.33));
+                    if let (Some(gap), true) = (b.tiles.and_then(|s| s.exit_gap), t.kind == ExitLeft) {
+                        let mid = x + px_w((gap.0 + gap.1) / 2.0);
+                        if let Some(s) = piece(Role::Stairs).filter(|_| !b.start_room) {
+                            b.sprite(&s, Vec3::new(mid - px_w(s.w) / 2.0, y, -0.325));
+                        }
+                        if let (Some(sl), Some(bot)) = (piece(Role::DoorSlice), piece(Role::DoorBottom)) {
+                            // modifier 0 closed .. 43 open: the panel's bottom edge is that many px above the floor
+                            let (x0, mut by) = (mid - px_w(sl.w) / 2.0, t.modifier.min(43) as f32);
+                            b.sprite(&bot, Vec3::new(x0, y + px_h(by), -0.315));
+                            by += bot.h;
+                            while by < crate::tiles::EXIT_FRAME_H as f32 {
+                                b.sprite(&sl, Vec3::new(x0, y + px_h(by), -0.315));
+                                by += sl.h;
+                            }
+                        }
+                    }
                     b.put(&f.mat, Vec3::new(x, y, -0.3), Vec3::new(x + w, y + h, -0.28));
                     let lintel = b.tiles.and_then(|s| s.img(if t.kind == ExitLeft { 238 } else { 240 })).cloned();
                     if let Some(l) = lintel {
@@ -397,11 +457,30 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
         }
         Chomper => {
             floor(b, &fl);
-            b.put(&metal, Vec3::new(x + 0.1, y, -0.05), Vec3::new(x + 0.9, y + 0.5, 0.05));
+            match piece(Role::JawBack) {
+                // the blade frame behind the figures, its front slice before them, upper teeth level with the blade top
+                // the 47 px from the floor surface to the blade top are stretched to the slab above, so the closed blade
+                // and the teeth reach the ceiling (the 3D slab is thinner than the 13 floor rows of the 2D tile)
+                Some(j) => {
+                    let sy = (TILE_H - SLAB) / px_h(crate::tiles::EXIT_FRAME_H as f32);
+                    b.sprite_sy(&j, Vec3::new(x, y, JAW_Z.0), sy);
+                    if let Some(f) = piece(Role::JawFore) {
+                        b.sprite_sy(&f, Vec3::new(x, y, JAW_Z.1), sy);
+                    }
+                    if let Some((Role::JawTop(off), teeth)) = pc.iter().find(|(r, _)| matches!(r, Role::JawTop(_))).cloned() {
+                        b.sprite_sy(&teeth, Vec3::new(x, y + px_h(off as f32) * sy, JAW_Z.0), sy);
+                    }
+                }
+                None => b.put(&metal, Vec3::new(x + 0.1, y, -0.05), Vec3::new(x + 0.9, y + 0.5, 0.05)),
+            }
         }
         Torch | TorchDebris => {
             floor(b, &fl);
             let top = Vec3::new(x + 0.5, y + TILE_H * 0.65, -0.8);
+            // the holder (346, 32 px wide, the cup at its top centre) on the back wall below the flame
+            if let Some(s) = piece(Role::TorchStub) {
+                b.sprite(&s, Vec3::new(x, top.y - px_h(s.h - 2.0), -0.86));
+            }
             let flame = b.put_id(&p.flame, top - Vec3::new(0.06, 0.0, 0.06), top + Vec3::new(0.06, 0.25, 0.06));
             // the flame sits next to its own light: it must not shadow it (only matters for enhanced-mode shadow maps)
             b.cmds.entity(flame).insert(bevy::light::NotShadowCaster);
@@ -415,6 +494,23 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
 /// Depth of the voxel items' sprite plane: the skeleton behind the figures (VOXEL_Z 0.25), the bottle in front of them.
 const SKELETON_Z: f32 = -0.1;
 const POTION_Z: f32 = 0.4;
+/// Depth (behind, in front of the figures) of the chomper blade and its front slice, and of the spike pieces.
+const JAW_Z: (f32, f32) = (-0.1, 0.42);
+const SPIKE_Z: (f32, f32) = (-0.05, 0.42);
+/// Height of the dungeon wall's top strip cap (on top of the face block, no coplanar faces).
+const CAP: f32 = 0.01;
+/// Back-wall depth of the balcony windows and lattice arches (the back wall's front face is at -0.9).
+const BACK_Z: f32 = -0.88;
+
+/// The palace balcony window / lattice arch panel on the back wall, standing on the floor, its top piece above it.
+fn back_panel(b: &mut B, piece: &dyn Fn(Role) -> Option<Tex>, x: f32, y: f32) {
+    if let Some(p) = piece(Role::BackPanel) {
+        b.sprite(&p, Vec3::new(x, y, BACK_Z));
+        if let Some(t) = piece(Role::BackTop) {
+            b.sprite(&t, Vec3::new(x, y + px_h(p.h), BACK_Z));
+        }
+    }
+}
 
 /// Gate plane: logic x tl+10 .. tl+13 of the 14-unit column (gate wall_type 1, docs/collisions.md 3) = 0.71 .. 0.93 of the
 /// tile; the bars stand across the corridor at its middle, 11.5 / 14.
