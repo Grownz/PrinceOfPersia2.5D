@@ -34,10 +34,10 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// `tiles_dir`: game data folder to load the tile images from (None = procedural tiles).
-    pub fn new(meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>, imgs: &mut Assets<Image>, tiles_dir: Option<&str>) -> Self {
+    /// `tiles_dir`: game data folder to load the tile images from (None = procedural tiles); `columns`: voxel columns.
+    pub fn new(meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>, imgs: &mut Assets<Image>, tiles_dir: Option<&str>, columns: bool) -> Self {
         let tiles = tiles_dir.map_or([None, None], |d| crate::tiles::load_sets(d, imgs, mats));
-        let items = tiles_dir.map(|d| crate::items::Items::load(d, meshes, mats));
+        let items = tiles_dir.map(|d| crate::items::Items::load(d, columns, meshes, mats));
         let mut m = |r, g, b| mats.add(StandardMaterial { base_color: Color::srgb(r, g, b), perceptual_roughness: 0.9, ..default() });
         Palette {
             cube: meshes.add(textured_cube()),
@@ -98,6 +98,17 @@ impl B<'_, '_, '_> {
         let e = self.cmds.spawn((Mesh3d(m.mesh.clone()), MeshMaterial3d(mat.clone()), Transform::from_translation(self.origin + lo).with_scale(px))).id();
         self.tag(e);
         e
+    }
+
+    /// The voxel column of image `id`, if built (else false: draw the flat piece): image left edge at x `left`, its kept rows
+    /// stretched from `y0` up to `y1`, axis at depth `z`.
+    fn voxel_column(&mut self, id: Option<u16>, left: f32, y0: f32, y1: f32, z: f32) -> bool {
+        let Some(((items, set), id)) = self.items.zip(id) else { return false };
+        let Some(c) = items.columns[set].get(&id) else { return false };
+        let s = Vec3::new(1.0 / 32.0, (y1 - y0) / c.h as f32, 1.0 / 32.0);
+        let e = self.cmds.spawn((Mesh3d(c.mesh.clone()), MeshMaterial3d(items.mat.clone()), Transform::from_translation(self.origin + Vec3::new(left, y0, z - c.az * s.z)).with_scale(s))).id();
+        self.tag(e);
+        true
     }
 
     /// Box from `lo` to `hi` (corner coordinates).
@@ -349,12 +360,17 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             }
         }
         Pillar | BigPillarBottom | BigPillarTop | LatticePillar | LatticeSupport => match &ex {
-            // the column image (record +9, the piece drawn in front of the kid) on a square column of the image's width
+            // the column image (record +9, the piece drawn in front of the kid): a voxel column built from it, the image 8 px
+            // into the tile as the 2D game draws it, base on the floor, top under the slab above (a big pillar bottom goes
+            // on into its top tile, so the two meet without a seam); flat style: the image on a square column
             Some(c) => {
                 if t.kind != BigPillarTop {
                     floor(b, &fl); // the big pillar top has no floor piece: the column goes on through
                 }
-                column(b, &c.mat, px_w(c.w), TILE_H);
+                let top = if t.kind == BigPillarBottom { TILE_H } else { TILE_H - SLAB };
+                if !b.voxel_column(b.tiles.and_then(|s| s.extra_id(t.kind, t.modifier)), x + px_w(8.0), y, y + top, COLUMN_Z) {
+                    column(b, &c.mat, px_w(c.w), TILE_H);
+                }
             }
             None => {
                 floor(b, &fl);
@@ -368,7 +384,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
         DoortopWithFloor | Doortop => {
             floor(b, &fl);
             match &ex {
-                Some(d) => door_post(b, d, x, y),
+                Some(d) => door_post(b, d, x, y, t.kind, t.modifier),
                 None => b.put(&p.red, Vec3::new(x + 0.1, y, -0.9), Vec3::new(x + 0.9, y + TILE_H * 0.9, -0.85)),
             }
         }
@@ -382,7 +398,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
         Gate => {
             floor(b, &fl);
             if let Some(d) = &ex {
-                door_post(b, d, x, y);
+                door_post(b, d, x, y, t.kind, t.modifier);
             }
             for (lo, hi) in gate_bars(t.modifier) {
                 b.put(&metal, Vec3::new(x, y, 0.0) + lo, Vec3::new(x, y, 0.0) + hi);
@@ -494,6 +510,9 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
 /// Depth of the voxel items' sprite plane: the skeleton behind the figures (VOXEL_Z 0.25), the bottle in front of them.
 const SKELETON_Z: f32 = -0.1;
 const POTION_Z: f32 = 0.4;
+/// Depth of the voxel columns' axis: behind the figures (VOXEL_Z 0.25, about 0.06 deep behind it), so the widest base
+/// (big pillar, radius 11.5 px = 0.36) ends at z 0.16 and the kid never cuts through a column.
+const COLUMN_Z: f32 = -0.2;
 /// Depth (behind, in front of the figures) of the chomper blade and its front slice, and of the spike pieces.
 const JAW_Z: (f32, f32) = (-0.1, 0.42);
 const SPIKE_Z: (f32, f32) = (-0.05, 0.42);
@@ -536,10 +555,13 @@ pub fn gate_bars(modifier: u8) -> Vec<(Vec3, Vec3)> {
     v
 }
 
-/// The door post image (record +9, 8 px wide) at the right edge of the cell, standing on the back half of the floor.
-fn door_post(b: &mut B, d: &Tex, x: f32, y: f32) {
+/// The door post image (record +9, 8 px wide) at the right edge of the cell, standing on the back half of the floor
+/// (z -0.4 .. -0.15, the gate grille starts at its front): a voxel column, or the image on a box (flat style).
+fn door_post(b: &mut B, d: &Tex, x: f32, y: f32, kind: Tile, modifier: u8) {
     let w = px_w(d.w);
-    b.put(&d.mat, Vec3::new(x + 1.0 - w, y, -0.4), Vec3::new(x + 1.0, y + TILE_H, -0.4 + w));
+    if !b.voxel_column(b.tiles.and_then(|s| s.extra_id(kind, modifier)), x + 1.0 - w, y, y + TILE_H, -0.4 + w / 2.0) {
+        b.put(&d.mat, Vec3::new(x + 1.0 - w, y, -0.4), Vec3::new(x + 1.0, y + TILE_H, -0.4 + w));
+    }
 }
 
 /// The light of a torch (levels and the cutscene set).

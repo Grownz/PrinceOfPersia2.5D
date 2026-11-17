@@ -26,6 +26,12 @@ const BACK_CAP: f32 = 2.0;
 /// Ambient occlusion per vertex by occluder count (0..3), and the jitter amplitude.
 const AO: [f32; 4] = [1.0, 0.8, 0.66, 0.54];
 const JITTER: f32 = 0.06;
+const COLUMN_JITTER: f32 = 0.02;
+
+/// First and last opaque pixel of a row that is one opaque run (None: empty row).
+fn run_of(row: &[u8]) -> Option<(usize, usize)> {
+    Some((row.iter().position(|&p| p != 0)?, row.iter().rposition(|&p| p != 0)?))
+}
 
 /// A voxel grid: `voxels[x + w * (y + h * z)]` = palette index (0 = empty). y = 0 is the image's top row, z = d - 1 the
 /// front layer (towards the camera), z = `plane` the sprite plane.
@@ -35,6 +41,8 @@ pub struct VoxelModel {
     pub d: usize,
     pub plane: usize,
     pub voxels: Vec<u8>,
+    /// per-voxel brightness jitter amplitude of the mesh (JITTER; columns use less, they are smooth stone)
+    pub jitter: f32,
 }
 
 /// Chamfer distance (orthogonal 1, diagonal sqrt 2) from the cells with `init` 0; outside the grid counts as 0.
@@ -150,10 +158,62 @@ impl VoxelModel {
                 }
             }
         }
-        VoxelModel { w, h, d, plane, voxels }
+        VoxelModel { w, h, d, plane, voxels, jitter: JITTER }
     }
 
-    fn get(&self, x: isize, y: isize, z: isize) -> u8 {
+    /// A round column revolved about the vertical axis at image x `axis` (px, may be a half pixel): every row is a solid of
+    /// revolution whose half-widths left and right of the axis are the row's extent in the image (an ellipse when the two
+    /// differ), depth radius their mean. A voxel takes the pixel colour of its image column: on a cylinder seen from the
+    /// front the point at angle a projects to x = r sin a, so the front shows the original shading band, the back the same
+    /// band (darkened by the mesh). Rows must be one opaque run each; the front projection is exactly `pixels`.
+    pub fn revolve(w: usize, h: usize, pixels: &[u8], axis: f32) -> Self {
+        let runs: Vec<Option<(usize, usize)>> = (0..h).map(|y| run_of(&pixels[y * w..][..w])).collect();
+        let rz = |r: (usize, usize)| ((r.1 + 1) as f32 - r.0 as f32) / 2.0;
+        let d = 2 * runs.iter().flatten().map(|&r| rz(r).ceil() as usize).max().unwrap_or(0).max(1);
+        let mut voxels = vec![0; w * h * d];
+        for (y, r) in runs.iter().enumerate() {
+            let Some((x0, x1)) = *r else { continue };
+            let (left, right, rz) = (axis - x0 as f32, (x1 + 1) as f32 - axis, rz((x0, x1)));
+            for x in x0..=x1 {
+                let dx = x as f32 + 0.5 - axis;
+                let rx = if dx < 0.0 { left } else { right };
+                for z in 0..d {
+                    let dz = z as f32 + 0.5 - d as f32 / 2.0;
+                    // the two layers next to the axis plane are always kept, so the silhouette is the image's
+                    if dz.abs() <= 0.5 || (dx / rx).powi(2) + (dz / rz).powi(2) <= 1.0 {
+                        voxels[x + w * (y + h * z)] = pixels[y * w + x];
+                    }
+                }
+            }
+        }
+        VoxelModel { w, h, d, plane: d / 2, voxels, jitter: COLUMN_JITTER }
+    }
+
+    /// A square block column (the dungeon pillar: front face and right side face side by side in the image, split at image
+    /// column `split`): a block `split` px wide and as deep, the front face is the image left of the split, the right side
+    /// face the image right of it stretched over the depth; inside and the other faces take the front colours.
+    pub fn block(w: usize, h: usize, pixels: &[u8], split: usize) -> Self {
+        let d = split;
+        let mut voxels = vec![0; split * h * d];
+        for y in 0..h {
+            let row = &pixels[y * w..][..w];
+            for x in (0..split).filter(|&x| row[x] != 0) {
+                for z in 0..d {
+                    // depth k from the front (0) to the back: side pixel s + k * (w - s) / d
+                    let side = row[split + (d - 1 - z) * (w - split) / d];
+                    voxels[x + split * (y + h * z)] = if x == split - 1 && z + 1 < d && side != 0 { side } else { row[x] };
+                }
+            }
+        }
+        VoxelModel { w: split, h, d, plane: d / 2, voxels, jitter: COLUMN_JITTER }
+    }
+
+    /// Mesh z of the column axis (the depth centre of the grid), in voxels.
+    pub fn axis_z(&self) -> f32 {
+        self.d as f32 / 2.0 - self.plane as f32 - 0.5
+    }
+
+    pub(crate) fn get(&self, x: isize, y: isize, z: isize) -> u8 {
         if x < 0 || y < 0 || z < 0 || x >= self.w as isize || y >= self.h as isize || z >= self.d as isize {
             return 0;
         }
@@ -191,7 +251,7 @@ impl VoxelModel {
                     let [r, g, b, a] = colour(v);
                     let l = 0.3 * r + 0.59 * g + 0.11 * b;
                     let (dim, grey) = ((1.0 - 0.08 * k).max(0.55), (0.07 * k).min(0.4));
-                    let jit = 1.0 + JITTER * (((x * 73_856_093) ^ (y * 19_349_663) ^ (z * 83_492_791)) as u32 % 1000) as f32 / 500.0 - JITTER;
+                    let jit = 1.0 + self.jitter * (((x * 73_856_093) ^ (y * 19_349_663) ^ (z * 83_492_791)) as u32 % 1000) as f32 / 500.0 - self.jitter;
                     let base = [r, g, b].map(|c| (c + (l - c) * grey) * dim * jit);
                     let o = [x, y, z];
                     for dir in DIRS {

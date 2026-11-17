@@ -716,3 +716,16 @@ Sources: two independent passes over PRINCE.EXE v1.1 (fringe/wall/palace tables,
 | LatticeSupport / SmallLattice / LatticeLeft (palace) | arches 1203 / 1204 / 1205 on the back wall, standing on the floor (1204 / 1205 are R medium, taken so the arcade is uniform) | plausible; LatticeRight (no image) keeps the procedural plate and stands out; LatticePillar keeps column 295 (1201 unused) |
 | Floor extras | none added: 251 / 253 / 256 / 274 (gate column pieces per 12.1), 363 / 367 floor reading, 1202, 345, palace caps 1278..1283 (trigger not traced) | left out |
 | LooseFloor | normal floor + wobble as before; 252..259 belong to the gate (12.1), so no crumble frames | unchanged |
+
+## 14. Voxel columns
+
+`column_style` = voxel (default, only with `tile_textures` = original; `flat` / `POP_COLUMNS=flat` keeps the image on a box). Code: `voxel.rs` (`VoxelModel::revolve`, `block`), `items.rs` (`column_sprite`, `column_model`, `COLUMN_IDS`), placement in `room.rs` (`voxel_column`). One mesh per (set, image), vertex colours from palette 200, the item material (lit and shadowed like the rooms), jitter 0.02.
+
+| image | sets | model | placement |
+|---|---|---|---|
+| 295 pillar (Pillar, LatticePillar) | P | round: per row the opaque run through the axis (most common row centre) revolved; left / right half-widths from the image (ellipse when they differ), depth radius their mean; voxel colour = the pixel of its image column (orthographic cylinder: x = r sin a), so the front is the sprite and the back the same band, darkened by the mesh; 2 floor rows cut | image 8 px into the tile (295 lines up with the column in 292 there), base on the floor, top under the slab above |
+| 295 pillar | D | square block: the image is a 13 px front face (colour 5) and a 6 px right side face (colour 3) of a stone pillar; a 13 x 13 px block, front = left part, right side = right part stretched over the depth | same |
+| 1288 / 1291 big pillar bottom / top | D+P | round, 4 floor rows of 1288 cut (palace 1291: 3 stray px beside the capital dropped) | 8 px in; the bottom reaches the top of its tile, the top starts there (no floor in BigPillarTop): one continuous column, shafts line up (both at image x 6..16) |
+| 249 door post (Gate, Doortop) | D+P | round (7 px gradient) | right edge of the cell, axis at z -0.275, the gate grille starts in front of it |
+
+Column axis depth z = -0.2 (figures at 0.25, widest base radius 0.36 ends at 0.16). Side pieces 292 / 293 / 294 / 1286 / 1287 / 1289 / 1290 are the 2D perspective parts of the same columns and stay unused. The flat style drew 295 etc. on a square box whose side faces showed the image across the depth (the thin strips beside the columns); gone with voxel. Test `column_front_projection_equals_sprite`: front projection = the prepared image (block: the front face) for all 8 images. Build: 8 models, 23.8k faces, 4.7 ms at startup (release); frame time unchanged (POP_PERF level 5 classic 1.24-1.33 ms voxel vs 1.24-1.31 flat; enhanced room 13: 5.2-5.3 both). Rule for block vs round: an image whose top row reaches its left edge is a block (only the dungeon 295). Not verified: whether the palace 1291 capital (two flat bands) is a square abacus; it is revolved.
