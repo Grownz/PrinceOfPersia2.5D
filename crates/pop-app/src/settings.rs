@@ -1,5 +1,5 @@
 //! settings.json next to the exe: window mode and size, volume, mute, sound mode, kid key bindings, data path, render mode,
-//! character style, tile textures.
+//! character style, tile textures, column style.
 //! Unknown keys are ignored and missing ones take their defaults, so older and newer files both load.
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -30,12 +30,16 @@ pub struct Settings {
     /// "original" (the tile images of VDUNGEON.DAT / VPALACE.DAT on the room pieces) or "procedural" (plain coloured
     /// boxes); POP_TILES overrides
     pub tile_textures: String,
+    /// "voxel" (pillars and door posts built as voxel columns from their images) or "flat" (the image on a box); only with
+    /// tile_textures = original; POP_COLUMNS overrides
+    pub column_style: String,
 }
 
 pub const RENDER_MODES: [&str; 3] = ["classic", "enhanced", "rt_experimental"];
 pub const CHARACTER_STYLES: [&str; 2] = ["sprite", "voxel"];
 pub const SHADOW_QUALITIES: [&str; 3] = ["off", "low", "high"];
 pub const TILE_TEXTURES: [&str; 2] = ["original", "procedural"];
+pub const COLUMN_STYLES: [&str; 2] = ["voxel", "flat"];
 
 /// The renderer actually used; `rt_experimental` falls back to `Classic`.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,7 +100,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, tile_textures: "original".into() }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, tile_textures: "original".into(), column_style: "voxel".into() }
     }
 }
 
@@ -134,6 +138,7 @@ impl Settings {
             shadow_quality: field(&o, "shadow_quality", d.shadow_quality, |s| SHADOW_QUALITIES.contains(&s.as_str())),
             ssao: field(&o, "ssao", d.ssao, |_| true),
             tile_textures: field(&o, "tile_textures", d.tile_textures, |s| TILE_TEXTURES.contains(&s.as_str())),
+            column_style: field(&o, "column_style", d.column_style, |s| COLUMN_STYLES.contains(&s.as_str())),
         }
     }
 
@@ -146,6 +151,11 @@ impl Settings {
     /// Original tile images on the room pieces (settings plus POP_TILES).
     pub fn tile_textures(&self) -> bool {
         crate::tiles::use_textures(&self.tile_textures, std::env::var("POP_TILES").ok().as_deref())
+    }
+
+    /// Voxel columns (settings plus POP_COLUMNS; anything but "flat" means voxel).
+    pub fn voxel_columns(&self) -> bool {
+        voxel_columns(&self.column_style, std::env::var("POP_COLUMNS").ok().as_deref())
     }
 
     pub fn to_json(&self) -> String {
@@ -202,6 +212,10 @@ impl Settings {
         let k = &self.keys;
         KeyMap { left: res(&k.left, &d.left), right: res(&k.right, &d.right), up: res(&k.up, &d.up), down: res(&k.down, &d.down), shift: res(&k.shift, &d.shift) }
     }
+}
+
+pub fn voxel_columns(setting: &str, env: Option<&str>) -> bool {
+    env.unwrap_or(setting) != "flat"
 }
 
 /// One field of a settings object: its value if present, well-typed and `ok`, else the default.
@@ -314,6 +328,18 @@ mod tests {
         let s = Settings::parse(r#"{"tile_textures": "hd", "volume": 0.5}"#);
         assert_eq!((s.tile_textures.as_str(), s.volume), ("original", 0.5));
         assert_eq!(Settings::parse(r#"{"tile_textures": 1}"#).tile_textures, "original");
+    }
+
+    #[test]
+    fn column_style_parse_env_and_fall_back() {
+        assert_eq!(Settings::default().column_style, "voxel");
+        let s = Settings::parse(r#"{"column_style": "flat"}"#);
+        assert_eq!(s.column_style, "flat");
+        assert_eq!(Settings::parse(&s.to_json()), s);
+        let s = Settings::parse(r#"{"column_style": "round", "volume": 0.5}"#);
+        assert_eq!((s.column_style.as_str(), s.volume), ("voxel", 0.5));
+        assert!(voxel_columns("voxel", None) && !voxel_columns("flat", None));
+        assert!(voxel_columns("flat", Some("voxel")) && !voxel_columns("voxel", Some("flat")));
     }
 
     #[test]

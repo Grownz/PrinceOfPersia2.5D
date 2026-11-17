@@ -337,7 +337,12 @@ impl TileSet {
 
     /// The tile's extra piece (pillar, door post, exit frame, wall face).
     pub fn extra(&self, kind: Tile, modifier: u8) -> Option<&Tex> {
-        tile_images(kind, modifier, |id| self.present.contains(&id)).1.and_then(|id| self.imgs.get(&id))
+        self.extra_id(kind, modifier).and_then(|id| self.imgs.get(&id))
+    }
+
+    /// Resource id of the tile's extra piece (the voxel columns are looked up by it).
+    pub fn extra_id(&self, kind: Tile, modifier: u8) -> Option<u16> {
+        tile_images(kind, modifier, |id| self.present.contains(&id)).1
     }
 
     /// Any loaded image by resource id (exit lintels).
