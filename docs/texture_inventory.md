@@ -743,3 +743,44 @@ Column axis depth z = -0.2 (figures at 0.25, widest base radius 0.36 ends at 0.1
 | Debris | 297 / 298 / 243 against 241 / 242 / 243 (both unsheared with `floor_pixels`), Debris and TorchDebris (also where a loose floor landed, the sim turns it into Debris) | the differing pixels seen from above, extruded upwards: layers min(edge distance - 1, 3) + 1 | laid on the plain floor: image rows over the tile depth (row 0 at the back), x over the tile width, 1/32 unit per layer | low rubble heaps in both sets; 300 (TorchDebris +9) not used; the skeleton keeps its relief from section 5 |
 
 Tests: `object_front_projection_equals_sprite` (all object models of both sets plus the flames: front projection = the prepared image), `object_tables` (panel slices by modifier, flame frames), `spikes_settle_and_lose_the_fore_spikes`, `rods_plates_and_shear_keep_the_front`, `object_style_parse_env_and_fall_back`. Startup: 72 object models + 9 flame frames, about 16 ms (release), 111.6k faces in total (one room shows a few of them). Frame time (POP_PERF, level 1 room 13, release): classic 1.26-1.32 ms voxel vs 1.24-1.32 flat; enhanced 5.3-5.4 vs 5.7-5.8. Not verified: the impaled pose (mod 255) seen from the debug camera, chomper motion over consecutive ticks (static modifiers were used), exit opening in a live run (modifier set by hand).
+
+## 16. Potions verified
+
+Traced in PRINCE.EXE v1.1 (static analysis; no DOSBox run). Tile 10 modifier = kind << 5 | bubble frame (load_alter_mod `B6AB`).
+Images are PRINCE.DAT chtab 1, resource = 150 + image number.
+
+| kind (mod >> 5) | potion | bottle dungeon / palace | bubbles (EGA colour) |
+|---|---|---|---|
+| 0 | empty | 162 small / 164 | none |
+| 1 | heal | 162 small / 164 | 12 light red |
+| 2 | life | 163 big / 165 | 12 light red |
+| 3 | feather | 163 big / 165 | 10 light green |
+| 4 | invert | 163 big / 165 | 10 light green |
+| 5 | hurt | 162 small / 164 | 9 light blue |
+| 6 | open (level 15) | 162 small / 164 | 9 light blue |
+| 7 | (never in the data) | 162 small / 164 | 12 light red |
+
+- Bottle **[V]**: draw_tile_fore `A9DD`, potion part `AA45..AAAA`: image = tile_table fore id (ds:25B0 + 12 * 10 + 9 = **12**), **13** when
+  mod & 0xE0 is in 0x40..0x9F (kinds 2..4); **+ 2** when tbl_level_type[current_level] (ds:01CE, levels 4, 5, 6, 10, 11, 14) is set
+  (`AA8E`); add_foretable `AD70`(chtab 1, id, xh + fore_x **2**, xl **6**, y = draw_main_y + fore_y **-3**, blitter 0x10). Sizes 10x11 small,
+  10x15 big; the palace bottles 164 / 165 have the same sizes but other pixel indices (other glass and liquid colours).
+- Bubbles **[V]**: draw_tile_anim `A7F3`, potion part `A857..A8E5`: colour 12, small; kind 2: big; kinds 3, 4: colour 10, big; kinds
+  5, 6: colour 9, small; kind 0: return (no bubbles). Mask image **23** (173, 5x9) with blitter 0x40 (mono, colour 0) via `ACDF`, then
+  frame image ds:27BE[mod & 0x0F] (frames 1..7 -> images **16..22** = 166..172, 5x9) with blitter **0x40 + colour** via `AD70`, both at
+  xh + **3**, xl **1**, y = draw_main_y - 14 - 4 * big. So the bubbles stand 3 px right of the bottle's left edge and their bottom row
+  is right above the bottle's top row. The role of the mask (back table, clears the neck under the bubbles) is **[I]** (SDLPoP naming).
+- Bubble timing **[V]** (tiles.md 8.2): start frame prandom(6) + 1 on room entry (`8E3F`), animate_potion `89DD` -> `8CA5`: frame + 1,
+  8 -> 1, once per tick while the potion's room is drawn. The port: frame (tick + tile index) mod 7 (fixed phase instead of random).
+- Colour RGB **[I]**: the mono blit colour is a raw palette index; palette 150 has grey / black / beige at 9 / 10 / 12, so the bubbles
+  must use the base EGA entries (as the flash code does, edge_cases.md 3): 12 = (63,21,21), 10 = (21,63,21), 9 = (21,21,63).
+- Pickup **[V]** (edge_cases.md 5.1, unchanged): kinds 1..6 = heal, life, feather, invert, hurt, open; the colour table above agrees
+  (heal / life red, feather / invert green, hurt / open blue).
+- Data: kinds in levels 1..14: 1, 2, 3, 4, 5 (level 2 room 13: hurt + heal; level 9 rooms 7 / 10: invert; level 7 room 1: feather).
+  LEVELS.DAT 2014 stores pre-shifted bytes (32, 64, 160) in unused rooms; `<< 5` wraps them to 0 (empty), as in the original.
+
+Port (items.rs `potion_look`, `bottle_image`, `POTION_X` = 22, `BUBBLE_DX` = 3): the kind -> size / colour mapping already matched.
+Fixed: palace levels now use 164 / 165; the bottle stood 8 px into the tile (now 22), the bubbles were centred (2.5 px, now 3) and
+overlapped the bottle top by one row (now on top). Tests `potion_kinds` (the table) and `level_potions_map_to_images` (every potion of
+levels 1..14 maps to a bottle of the expected size). Screenshots (classic + enhanced): level 2 room 13 blue hurt next to red heal,
+level 9 room 7 green invert (big), level 4 room 23 palace life bottle (165) with red bubbles. Not verified: on-screen RGB in DOSBox,
+the open potion (level 15 is not reachable with POP_LEVEL).

@@ -1,5 +1,5 @@
 //! Voxel items on the floor tiles: the skeleton pile (VDUNGEON 1230 / 1231) and the potions (PRINCE.DAT chtab 1: bottles
-//! 162 small / 163 big, bubble frames 166..172 drawn in the potion's colour). Built at runtime with the character voxel
+//! 162 small / 163 big, palace 164 / 165, bubble frames 166..172 drawn in the potion's colour). Built at runtime with the character voxel
 //! pipeline (`voxel.rs`): the front projection of each model is the original image. Only with `tile_textures` = original;
 //! anything missing keeps the procedural box (room.rs).
 use crate::voxel::VoxelModel;
@@ -20,8 +20,8 @@ pub struct Items {
     pub mat: Handle<StandardMaterial>,
     /// skeleton pile per set [dungeon, palace] (the palace set has no skeleton images)
     pub skeleton: [Option<Model>; 2],
-    /// potion bottles [small, big]
-    pub bottles: Option<[Model; 2]>,
+    /// potion bottles per set [dungeon, palace], each [small, big] (`bottle_image`)
+    pub bottles: Option<[[Model; 2]; 2]>,
     /// bubble frames 1..7 (potion_fram_bubb), one mesh each
     pub bubbles: Vec<Model>,
     /// emissive liquid materials [red, green, blue]
@@ -293,16 +293,27 @@ pub fn column_model(im: &image::Image) -> VoxelModel {
 }
 
 /// Potion kind (modifier >> 5) -> (big bottle, bubble colour 0 red / 1 green / 2 blue; None = empty, no bubbles).
-/// draw_tile_anim / draw_tile_fore as in the DOS game (SDLPoP seg008): big bottle for kinds 2..4; 1 heal and 2 life red,
-/// 3 feather and 4 invert green, 5 hurt and 6 open blue. [I] from memory of SDLPoP, not traced in PRINCE.EXE.
+/// Traced in PRINCE.EXE (docs/texture_inventory.md 16): draw_tile_fore `AA45` big bottle for mod & 0xE0 in 0x40..0x9F
+/// (kinds 2..4); draw_tile_anim `A857` no bubbles for kind 0, colour EGA 12 (kinds 1, 2, 7), 10 (3, 4), 9 (5, 6).
 pub fn potion_look(kind: u8) -> (bool, Option<usize>) {
     ((2..5).contains(&kind), match kind { 0 => None, 3 | 4 => Some(1), 5 | 6 => Some(2), _ => Some(0) })
 }
 
+/// PRINCE.DAT bottle image: chtab 1 image 12 small / 13 big, + 2 on palace levels (`AA8E`: tbl_level_type ds:01CE).
+pub fn bottle_image(kind: u8, palace: bool) -> u16 {
+    162 + potion_look(kind).0 as u16 + 2 * palace as u16
+}
+
+/// Bottle image left edge in the tile (fore_x 2 bytes + xl 6, `AA9D`) and the bubbles' offset from it (xh + 3, xl 1,
+/// `A884`), screen px. The bubbles' bottom row is 11 + 4 * big px above the bottle's (y main_y - 14 - 4 * big against
+/// main_y - 3), i.e. right on top of the 11 / 15-px bottle.
+pub const POTION_X: f32 = 22.0;
+pub const BUBBLE_DX: f32 = 3.0;
+
 /// Linear brightness factor of the flame voxels (unlit): above 1, so the flames read as light and bloom.
 pub const FLAME_GAIN: f32 = 1.5;
 
-/// Bubble colours: EGA 12 / 10 / 9 (light red, green, blue), the colours of the mono blit.
+/// Bubble colours: EGA 12 / 10 / 9 (light red, green, blue), the colours of the mono blit (blitter 0x40 + colour, `A8D7`).
 pub const GLOW: [[u8; 3]; 3] = [[255, 85, 85], [85, 255, 85], [85, 85, 255]];
 
 /// The skeleton as drawn on screen without its floor: the skeleton floor (`skel` = [base, right piece]) and the plain floor
@@ -364,13 +375,12 @@ impl Items {
         let prince = Dat::open(format!("{dir}/PRINCE.DAT")).ok();
         let pimg = |id| prince.as_ref().and_then(|d| d.get(id)).and_then(image::decode);
         let pal = prince.as_ref().and_then(|d| d.get(150)).and_then(image::palette).unwrap_or_default();
-        let bottles = match (pimg(162), pimg(163)) {
-            (Some(s), Some(b)) if !pal.is_empty() => Some([s, b].map(|i| model(meshes, i.width, i.height, &i.pixels, &pal))),
-            _ => None,
-        };
+        // kind 1 small, kind 2 big
+        let ims = [false, true].map(|palace| [1, 2].map(|k| pimg(bottle_image(k, palace))));
+        let bottles = (!pal.is_empty() && ims.iter().flatten().all(Option::is_some)).then(|| ims.map(|set| set.map(|i| { let i = i.unwrap(); model(meshes, i.width, i.height, &i.pixels, &pal) })));
         // 1-bit frames: every set pixel is index 1, coloured by the material
         let bubbles: Vec<Model> = (166..=172).filter_map(pimg).map(|i| model(meshes, i.width, i.height, &i.pixels, &[[0; 3], [255; 3]])).collect();
-        for (what, ok) in [("dungeon skeleton (VDUNGEON 1230/1231)", skeleton[0].is_some()), ("potion bottles (PRINCE.DAT 162/163)", bottles.is_some()), ("potion bubbles (PRINCE.DAT 166..172)", bubbles.len() == 7)] {
+        for (what, ok) in [("dungeon skeleton (VDUNGEON 1230/1231)", skeleton[0].is_some()), ("potion bottles (PRINCE.DAT 162..165)", bottles.is_some()), ("potion bubbles (PRINCE.DAT 166..172)", bubbles.len() == 7)] {
             if !ok {
                 info!("items: {what} not found, procedural look used");
             }
@@ -444,15 +454,41 @@ mod tests {
         image::Image { width: w, height: h, bpp: 4, pixels: px.to_vec() }
     }
 
+    /// The table traced in PRINCE.EXE (docs/texture_inventory.md 16): kind -> (dungeon bottle, palace bottle, EGA bubble
+    /// colour; 0 = no bubbles).
     #[test]
     fn potion_kinds() {
-        assert_eq!(potion_look(0), (false, None));
-        assert_eq!(potion_look(1), (false, Some(0)));
-        assert_eq!(potion_look(2), (true, Some(0)));
-        assert_eq!(potion_look(3), (true, Some(1)));
-        assert_eq!(potion_look(4), (true, Some(1)));
-        assert_eq!(potion_look(5), (false, Some(2)));
-        assert_eq!(potion_look(6), (false, Some(2)));
+        const EGA: [u8; 3] = [12, 10, 9];
+        let want = [(162, 164, 0), (162, 164, 12), (163, 165, 12), (163, 165, 10), (163, 165, 10), (162, 164, 9), (162, 164, 9), (162, 164, 12)];
+        for (k, w) in want.into_iter().enumerate() {
+            let k = k as u8;
+            assert_eq!((bottle_image(k, false), bottle_image(k, true), potion_look(k).1.map_or(0, |c| EGA[c])), w, "kind {k}");
+        }
+        // GLOW = the standard EGA colours 12, 10, 9 (6-bit 63/21 -> 255/85)
+        assert_eq!(GLOW, [[255, 85, 85], [85, 255, 85], [85, 85, 255]]);
+    }
+
+    /// Every potion in levels 1..14 has a valid look; the bubbles sit right on top of the bottle (bottle heights 11 / 15 =
+    /// the original's 11 + 4 * big), bubble frames 5 px wide (skips without Original_data).
+    #[test]
+    fn level_potions_map_to_images() {
+        let dir = format!("{}/../../Original_data", env!("CARGO_MANIFEST_DIR"));
+        let (Ok(lv), Ok(p)) = (Dat::open(format!("{dir}/LEVELS.DAT")), Dat::open(format!("{dir}/PRINCE.DAT"))) else { return };
+        let mut seen = [0usize; 8];
+        for n in 1..=14usize {
+            let l = pop_core::level::Level::parse(lv.get(2000 + n as u16).unwrap()).unwrap();
+            for t in (1..=24).flat_map(|r| (0..30).map(move |i| (r, i))).map(|(r, i)| l.tile_at(r, i)).filter(|t| t.kind == pop_core::level::Tile::Potion) {
+                let k = t.modifier >> 5;
+                seen[k as usize] += 1;
+                let im = image::decode(p.get(bottle_image(k, crate::kid::palace(n))).unwrap()).unwrap();
+                assert_eq!((im.width, im.height), (10, 11 + 4 * potion_look(k).0 as usize), "level {n} kind {k}");
+            }
+        }
+        // heal, life, feather, invert and hurt all occur (level 14's leftover pre-shifted bytes load as empty, kind 0)
+        assert!(seen[1..=5].iter().all(|&c| c > 0) && seen[6..].iter().all(|&c| c == 0), "{seen:?}");
+        for id in 166..=172 {
+            assert_eq!(image::decode(p.get(id).unwrap()).unwrap().width, 5);
+        }
     }
 
     #[test]

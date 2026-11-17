@@ -485,13 +485,14 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             let (big, colour) = crate::items::potion_look(t.modifier >> 5);
             match b.items.and_then(|(i, _)| Some((i, i.bottles.clone()?))) {
                 // bottle in front of the figures (the original draws it as a fore piece), bubbles on its neck in the
-                // potion's colour (emissive), x from the original's draw_xh + 3 (24 px into the tile)
+                // potion's colour (emissive), placed as the original draws them (items::POTION_X / BUBBLE_DX)
                 Some((i, bottles)) => {
-                    let bt = &bottles[big as usize];
-                    let lo = Vec3::new(x + 0.25, y, POTION_Z);
+                    let set = b.items.map_or(0, |(_, s)| s);
+                    let bt = &bottles[set][big as usize];
+                    let lo = Vec3::new(x + px_w(crate::items::POTION_X), y, POTION_Z);
                     b.item(bt, &i.mat, lo);
                     if let (Some(c), Some(f)) = (colour, i.bubbles.first()) {
-                        let at = lo + Vec3::new(px_w((bt.w as f32 - f.w as f32) / 2.0), px_h(bt.h as f32 - 1.0), 0.0);
+                        let at = lo + Vec3::new(px_w(crate::items::BUBBLE_DX), px_h(bt.h as f32), 0.0);
                         let e = b.item(f, &i.glow[c], at);
                         b.cmds.entity(e).insert((Bubbles(idx), bevy::light::NotShadowCaster));
                     }
