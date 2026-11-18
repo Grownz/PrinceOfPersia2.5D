@@ -163,7 +163,7 @@ fn main() {
         .insert_resource(render_mode)
         .insert_resource(char_style)
         .insert_resource(set)
-        .add_plugins(audio::plugin)
+        .add_plugins((audio::plugin, enhanced::light_shadow_views_plugin))
         .insert_resource(ClearColor(BACKGROUND))
         .insert_resource(Time::<Fixed>::from_hz(sim::STEP_HZ))
         .insert_resource(Game { world, levels, level, room, kid_prev: (Vec2::ZERO, 0), guard_prev: (Vec2::ZERO, 0), kid_respawn: false, banner: (0, String::new()), debug: false, gen: 0 })

@@ -54,7 +54,8 @@ pub fn parse_res(v: &str) -> Option<(u32, u32)> {
 /// Enhanced-mode cost toggles from `POP_FX` (comma separated): `no_<feature>` or `<feature>=off` for torch_shadows,
 /// sun_shadow, ssao, bloom, smaa, hdr (implies no bloom), ambient (the classic fill light), indirect (GPU indirect draws); `lights=0..4` shadow-casting
 /// torches, `point_map=` / `dir_map=` shadow map sizes, `ssao=low|medium|high|ultra`, `filter=hw|gauss|temporal`, `rooms=1`
-/// (no neighbouring rooms), `casters=boxes|none` (voxel room objects / all room geometry stop casting shadows).
+/// (no neighbouring rooms), `casters=boxes|none` (voxel room objects / all room geometry stop casting shadows),
+/// `core3d_shadows` (light shadow views on the full `Core3d` schedule, as before `enhanced::LightShadowViews`).
 /// For measurements only: defaults change nothing, classic ignores them except `rooms`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Fx {
@@ -74,11 +75,13 @@ pub struct Fx {
     pub filter: Option<String>,
     pub rooms: Option<usize>,
     pub casters: Option<String>,
+    /// light shadow views run Bevy's full `Core3d` schedule again (before `enhanced::LightShadowViews`), for A/B runs
+    pub core3d_shadows: bool,
 }
 
 impl Default for Fx {
     fn default() -> Self {
-        Fx { torch_shadows: true, sun_shadow: true, ssao: true, bloom: true, smaa: true, hdr: true, ambient: true, indirect: true, lights: None, point_map: None, dir_map: None, ssao_quality: None, filter: None, rooms: None, casters: None }
+        Fx { torch_shadows: true, sun_shadow: true, ssao: true, bloom: true, smaa: true, hdr: true, ambient: true, indirect: true, lights: None, point_map: None, dir_map: None, ssao_quality: None, filter: None, rooms: None, casters: None, core3d_shadows: false }
     }
 }
 
@@ -109,6 +112,7 @@ pub fn parse_fx(v: &str) -> (Fx, Vec<String>) {
             "filter" if ["hw", "gauss", "temporal"].contains(&val) => { fx.filter = Some(val.into()); true }
             "rooms" => { fx.rooms = num().filter(|&n| n >= 1); fx.rooms.is_some() }
             "casters" if ["boxes", "none"].contains(&val) => { fx.casters = Some(val.into()); true }
+            "core3d_shadows" => { fx.core3d_shadows = true; true }
             _ => false,
         };
         if !ok {
@@ -149,7 +153,7 @@ fn gpu_passes(store: &DiagnosticsStore, avg: bool) -> Vec<(String, f64)> {
             let p = d.path().as_str();
             let pass = p.strip_prefix("render/")?.strip_suffix("/elapsed_gpu")?;
             let ms = if avg { d.average() } else { d.smoothed() }?;
-            (!pass.contains('/')).then(|| (pass.to_string(), ms))
+            (!pass.contains('/') || std::env::var("POP_GPU_ALL").is_ok()).then(|| (pass.to_string(), ms))
         })
         .collect();
     v.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -306,7 +310,7 @@ mod tests {
         assert_eq!((fx.lights, fx.point_map, fx.dir_map, fx.rooms), (Some(2), Some(512), None, Some(1)));
         assert_eq!((fx.ssao_quality.as_deref(), fx.filter.as_deref(), fx.casters.as_deref()), (Some("low"), Some("hw"), Some("boxes")));
         assert_eq!(bad, vec!["dir_map=1000".to_string(), "warp".to_string()]);
-        let (fx, bad) = parse_fx("torch_shadows=off,no_sun_shadow,no_smaa,no_hdr,ambient=off,lights=0,no_indirect");
-        assert!(bad.is_empty() && !fx.indirect && !fx.torch_shadows && !fx.sun_shadow && !fx.smaa && !fx.hdr && !fx.ambient && fx.lights == Some(0));
+        let (fx, bad) = parse_fx("torch_shadows=off,no_sun_shadow,no_smaa,no_hdr,ambient=off,lights=0,no_indirect,core3d_shadows");
+        assert!(bad.is_empty() && fx.core3d_shadows && !fx.indirect && !fx.torch_shadows && !fx.sun_shadow && !fx.smaa && !fx.hdr && !fx.ambient && fx.lights == Some(0));
     }
 }

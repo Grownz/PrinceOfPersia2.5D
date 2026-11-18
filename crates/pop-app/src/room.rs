@@ -90,7 +90,13 @@ struct B<'a, 'w, 's> {
     tiles: Option<&'a TileSet>,
     /// voxel items and the set index (0 dungeon, 1 palace); None in the chamber and with procedural tiles
     items: Option<(&'a crate::items::Items, usize)>,
+    /// the tile being built (tagged on its entities as `TileOf`, for incremental rebuilds); None: back wall, chamber
+    cur: Option<TileOf>,
 }
+
+/// The room tile (room, index) an entity was built for: `rebuild_on_change` respawns only the tiles that changed.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TileOf(u8, u8);
 
 impl<'a> B<'a, '_, '_> {
     /// A voxel item model: bottom-left corner of its image at `lo` (room coordinates), sprite plane at `lo.z`.
@@ -163,12 +169,15 @@ impl<'a> B<'a, '_, '_> {
             self.cmds.entity(e).insert(Chamber);
         } else {
             self.cmds.entity(e).insert(RoomEntity);
+            if let Some(t) = self.cur {
+                self.cmds.entity(e).insert(t);
+            }
         }
     }
 }
 
-/// The current room plus its 8 neighbours (left/right/up/down and the diagonals via the neighbours' links).
-pub fn build_room(mut cmds: Commands, g: Res<Game>, p: Res<Palette>) {
+/// The current room plus its 8 neighbours (left/right/up/down and the diagonals via the neighbours' links): (room, origin).
+fn rooms_around(g: &Game) -> Vec<(usize, Vec3)> {
     let level = &g.world.level;
     let link = |r: u8, d: usize| if (1..=ROOMS as u8).contains(&r) { level.links[r as usize - 1][d] } else { 0 };
     let [l, r, u, d] = level.links[g.room - 1];
@@ -185,52 +194,72 @@ pub fn build_room(mut cmds: Commands, g: Res<Game>, p: Res<Palette>) {
         (if link(d, 1) != 0 { link(d, 1) } else { link(r, 3) }, 1, -1),
     ];
     // POP_FX=rooms=1 (perf measurements): only the current room
-    for (room, dx, dy) in around.into_iter().take(crate::perf::fx().rooms.unwrap_or(9)) {
-        if (1..=ROOMS as u8).contains(&room) {
-            let origin = Vec3::new(dx as f32 * COLS as f32, dy as f32 * ROWS as f32 * TILE_H, 0.0);
-            spawn_room(&mut cmds, level, &g.world.mobs, room as usize, origin, &p, crate::kid::palace(g.level));
-        }
-    }
+    around
+        .into_iter()
+        .take(crate::perf::fx().rooms.unwrap_or(9))
+        .filter(|(room, ..)| (1..=ROOMS as u8).contains(room))
+        .map(|(room, dx, dy)| (room as usize, Vec3::new(dx as f32 * COLS as f32, dy as f32 * ROWS as f32 * TILE_H, 0.0)))
+        .collect()
 }
 
-/// Spawn `room` (1-based) with its left/bottom corner at `origin`; neighbours can be drawn with other origins.
-pub fn spawn_room(cmds: &mut Commands, level: &Level, mobs: &[pop_core::sim::Mob], room: usize, origin: Vec3, p: &Palette, palace: bool) {
+/// The room builder for `room` (1-based) with its left/bottom corner at `origin`; neighbours are drawn with other origins.
+fn room_builder<'a, 'w, 's>(cmds: &'a mut Commands<'w, 's>, level: &Level, room: usize, origin: Vec3, p: &'a Palette, palace: bool) -> B<'a, 'w, 's> {
     let items = p.items.as_ref().map(|i| (i, palace as usize));
-    spawn_tiles(&mut B { cmds, p, origin, chamber: false, room, start_room: room == level.start_room as usize, tiles: p.tiles[palace as usize].as_ref(), items }, level, mobs, room);
+    B { cmds, p, origin, chamber: false, room, start_room: room == level.start_room as usize, tiles: p.tiles[palace as usize].as_ref(), items, cur: None }
 }
 
 /// The same builder for the cutscene set: entities carry `Chamber` instead of `RoomEntity`. The set keeps the procedural look.
 pub fn spawn_chamber(cmds: &mut Commands, level: &Level, room: usize, origin: Vec3, p: &Palette) {
-    spawn_tiles(&mut B { cmds, p, origin, chamber: true, room, start_room: false, tiles: None, items: None }, level, &[], room);
+    spawn_tiles(&mut B { cmds, p, origin, chamber: true, room, start_room: false, tiles: None, items: None, cur: None }, level, &[], room);
 }
 
 /// A plain box of the room palette in the chamber set (`mat`: "stone", "dark", "wood", "flame"; anything else = metal).
 pub fn chamber_box(cmds: &mut Commands, p: &Palette, mat: &str, lo: Vec3, hi: Vec3) {
     let m = match mat { "stone" => p.stone.clone(), "dark" => p.dark.clone(), "wood" => p.wood.clone(), "flame" => p.flame.clone(), _ => p.metal.clone() };
-    B { cmds, p, origin: Vec3::ZERO, chamber: true, room: 0, start_room: false, tiles: None, items: None }.put(&m, lo, hi);
+    B { cmds, p, origin: Vec3::ZERO, chamber: true, room: 0, start_room: false, tiles: None, items: None, cur: None }.put(&m, lo, hi);
+}
+
+/// What a tile's pieces are built from: kind, modifier (not for a loose floor: its entity animates itself from it) and the
+/// pressure plate lift. Equal keys build identical entities, so `rebuild_on_change` keeps those tiles.
+type TileKey = (Tile, u8, u32);
+
+fn tile_key(level: &Level, room: usize, idx: usize) -> TileKey {
+    let t = level.tile_at(room, idx);
+    let lift = match t.kind { Tile::DropButton | Tile::RaiseButton => plate_lift(level.link_timer(t.modifier)), _ => 0.0 };
+    (t.kind, if t.kind == Tile::LooseFloor { 0 } else { t.modifier }, lift.to_bits())
+}
+
+/// Tile `idx` of the builder's room.
+fn spawn_tile(b: &mut B, level: &Level, room: usize, idx: usize) {
+    let (col, row) = (idx % COLS, idx / COLS);
+    let t = level.tile(room, col, row);
+    let (x, y) = (col as f32, (ROWS - 1 - row) as f32 * TILE_H);
+    b.cur = (!b.chamber).then_some(TileOf(room as u8, idx as u8));
+    if t.kind == Tile::LooseFloor {
+        // its own entity, moved every frame by `animate` (wobble from the trob state)
+        let e = b.put_id(&plain_floor(b), Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y, 0.5));
+        let base = b.origin + Vec3::new(x + 0.5, y - SLAB / 2.0, 0.0);
+        b.cmds.entity(e).insert(Loose { room: room as u8, idx: idx as u8, base });
+    } else {
+        let lift = match t.kind { Tile::DropButton | Tile::RaiseButton => plate_lift(level.link_timer(t.modifier)), _ => 0.0 };
+        tile(b, x, y, t, lift, idx as u8);
+    }
+    b.cur = None;
 }
 
 fn spawn_tiles(b: &mut B, level: &Level, mobs: &[pop_core::sim::Mob], room: usize) {
     let p = b.p;
     // back wall
     b.put(&p.dark, Vec3::new(-0.5, -SLAB, -1.0), Vec3::new(10.5, 3.0 * TILE_H, -0.9));
-    for row in 0..ROWS {
-        for col in 0..COLS {
-            let t = level.tile(room, col, row);
-            let (x, y) = (col as f32, (ROWS - 1 - row) as f32 * TILE_H);
-            if t.kind == Tile::LooseFloor {
-                // its own entity, moved every frame by `animate` (wobble from the trob state)
-                let e = b.put_id(&plain_floor(b), Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y, 0.5));
-                let base = b.origin + Vec3::new(x + 0.5, y - SLAB / 2.0, 0.0);
-                b.cmds.entity(e).insert(Loose { room: room as u8, idx: (row * COLS + col) as u8, base });
-                continue;
-            }
-            let lift = match t.kind { Tile::DropButton | Tile::RaiseButton => plate_lift(level.link_timer(t.modifier)), _ => 0.0 };
-            tile(b, x, y, t, lift, (row * COLS + col) as u8);
-        }
+    for idx in 0..ROWS * COLS {
+        spawn_tile(b, level, room, idx);
     }
-    // falling loose floors: mob y is a screen line, 65 + 63 * row = floor line of that row; drawn one tick behind the sim
-    // and interpolated by `animate` (y of the last tick = y - speed)
+    spawn_falling(b, mobs, room);
+}
+
+/// Falling loose floors: mob y is a screen line, 65 + 63 * row = floor line of that row; drawn one tick behind the sim
+/// and interpolated by `animate` (y of the last tick = y - speed).
+fn spawn_falling(b: &mut B, mobs: &[pop_core::sim::Mob], room: usize) {
     for m in mobs.iter().filter(|m| m.room as usize == room) {
         let (x, y) = ((m.xh >> 2) as f32, (191.0 - m.y as f32) * TILE_H / 63.0);
         let e = b.put_id(&plain_floor(b), Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y, 0.5));
@@ -709,17 +738,66 @@ pub fn torch_light() -> PointLight {
 /// Room rebuilds so far (POP_PERF).
 pub static REBUILDS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-/// Despawn and rebuild whenever level or room changed.
-pub fn rebuild_on_change(mut cmds: Commands, g: Res<Game>, old: Query<Entity, With<RoomEntity>>, p: Res<Palette>, mut last: Local<(usize, usize, u32)>) {
-    if *last == (g.level, g.room, g.world.version) {
+/// The rooms on screen as last built: (room, origin, key of each tile).
+#[derive(Default)]
+pub struct Built(Vec<(usize, Vec3, Vec<TileKey>)>);
+
+/// Level or room changed: despawn and rebuild the 9 rooms. Only the world changed (a gate, plate, loose floor, door, a new
+/// world on restart): respawn just the tiles whose key changed and the falling slabs; everything else, the torch lights
+/// with their shadow maps included, stays as it is (a respawned shadowed light gets new shadow views every time).
+#[allow(clippy::type_complexity)]
+pub fn rebuild_on_change(
+    mut cmds: Commands,
+    g: Res<Game>,
+    old: Query<(Entity, Option<&TileOf>, Has<Falling>), With<RoomEntity>>,
+    p: Res<Palette>,
+    mut last: Local<(usize, usize, u32, u32)>,
+    mut built: Local<Built>,
+) {
+    let now = (g.level, g.room, g.world.version, g.gen);
+    if *last == now {
         return;
     }
-    *last = (g.level, g.room, g.world.version);
+    let full = (last.0, last.1) != (g.level, g.room) || built.0.is_empty();
+    *last = now;
     REBUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    for e in &old {
-        cmds.entity(e).despawn();
+    let (level, palace) = (&g.world.level, crate::kid::palace(g.level));
+    if full {
+        for (e, ..) in &old {
+            cmds.entity(e).despawn();
+        }
+        built.0.clear();
+        for (room, origin) in rooms_around(&g) {
+            spawn_tiles(&mut room_builder(&mut cmds, level, room, origin, &p, palace), level, &g.world.mobs, room);
+            built.0.push((room, origin, (0..ROWS * COLS).map(|i| tile_key(level, room, i)).collect()));
+        }
+        return;
     }
-    build_room(cmds, g, p);
+    let mut changed = Vec::new();
+    for (room, _, keys) in &mut built.0 {
+        for (idx, k) in keys.iter_mut().enumerate() {
+            let now = tile_key(level, *room, idx);
+            // a room can show twice (links that loop): one entry in `changed`, respawned at each origin below
+            if *k != now {
+                *k = now;
+                if !changed.contains(&TileOf(*room as u8, idx as u8)) {
+                    changed.push(TileOf(*room as u8, idx as u8));
+                }
+            }
+        }
+    }
+    for (e, t, falling) in &old {
+        if falling || t.is_some_and(|t| changed.contains(t)) {
+            cmds.entity(e).despawn();
+        }
+    }
+    for (room, origin, _) in &built.0 {
+        let b = &mut room_builder(&mut cmds, level, *room, *origin, &p, palace);
+        for t in changed.iter().filter(|t| t.0 as usize == *room) {
+            spawn_tile(b, level, *room, t.1 as usize);
+        }
+        spawn_falling(b, &g.world.mobs, *room);
+    }
 }
 
 #[cfg(test)]
@@ -750,6 +828,22 @@ mod tests {
         // continuous across a tick: end of tick k = start of tick k + 1
         let (a, b) = (wobble(5, 0.999), wobble(6, 0.0));
         assert!((a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3);
+    }
+
+    #[test]
+    fn tile_key_changes_only_with_the_look() {
+        let mut l = Level::parse(&[0u8; 4096]).expect("zero level");
+        l.set_tile(1, 3, Tile::Gate);
+        let closed = tile_key(&l, 1, 3);
+        l.set_modifier(1, 3, 40);
+        assert_ne!(tile_key(&l, 1, 3), closed, "a moving gate is rebuilt");
+        l.set_tile(1, 4, Tile::LooseFloor);
+        let still = tile_key(&l, 1, 4);
+        l.set_modifier(1, 4, 0x81);
+        assert_eq!(tile_key(&l, 1, 4), still, "a wobbling loose floor animates itself");
+        l.set_tile(1, 4, Tile::Empty);
+        assert_ne!(tile_key(&l, 1, 4), still, "a fallen loose floor is rebuilt");
+        assert_eq!(tile_key(&l, 1, 5), tile_key(&l, 1, 5));
     }
 
     #[test]

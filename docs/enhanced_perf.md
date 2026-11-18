@@ -38,7 +38,8 @@ Machine: AMD Ryzen 7 7700X (8 cores / 16 threads), NVIDIA GeForce RTX 3090, Vulk
   `no_indirect` (`NoIndirectDrawing` on the camera, inherited by its shadow views), `lights=N` shadowed torches,
   `point_map=N` / `dir_map=N` shadow map sizes, `ssao=low|medium|high|ultra`, `filter=hw|gauss|temporal`, `rooms=1` (no
   neighbouring rooms, also in classic), `casters=boxes|none` (voxel room meshes / all room meshes stop casting; characters
-  still cast). `<feature>=off` works as well as `no_<feature>`. Render-resolution scaling was skipped: Bevy 0.20's
+  still cast), `core3d_shadows` (light shadow views back on Bevy's per-view `Core3d` schedule, i.e. without the fix in 5.2,
+  for A/B runs). `POP_GPU_ALL=1` adds the nested GPU spans to the BENCH line. `<feature>=off` works as well as `no_<feature>`. Render-resolution scaling was skipped: Bevy 0.20's
   `MainPassResolutionOverride` is a render-world component meant for DLSS and does not upscale by itself; the resolution
   sweep below answers the same question (the mode is CPU-bound up to 1440p).
 
@@ -105,7 +106,7 @@ SMAA ~0.5, bloom 0.26.
 Candidate presets (1080p / 4K, GPU timing off): `lights=2,casters=boxes,ssao=low` 3.06 / 3.92 ms; `lights=0,ssao=low`
 (sun shadow only) 1.59 / 3.23 ms; high 5.01 / 5.18 ms.
 
-### 2.3 The demo: room rebuilds at 12 Hz and a leak with shadowed point lights
+### 2.3 The demo: room rebuilds at 12 Hz and a leak with shadowed point lights (fixed, 5.3)
 
 The demo runs at 11 ms average with p95 17 ms, and **gets slower the longer it runs** (`POP_PERF=1`, 720p, 300-frame
 windows): 6.1, 7.0, 8.6, 12.0, 15.0, 18.7 ms. Causes found:
@@ -145,7 +146,7 @@ fallback (2.4) never fires at 60 Hz (threshold 20.8 ms).
   HDR + bloom together 0.4 ms frame time. They matter only at 4K (SSAO + SMAA + bloom ~1.4 ms).
 - **Presentation** is not a factor with vsync off (frame time = CPU time with Immediate present).
 
-## 3. Levers (research)
+## 3. Levers (research, before section 5)
 
 Sources: the Bevy 0.20.1 source in the cargo registry (paths below), measurements above, and:
 [Qt Quick 3D shadow mapping](https://doc.qt.io/qt-6/quick3d-shadow-mapping.html) ("a point light ... renders its
@@ -225,3 +226,99 @@ the average can stay under 20.8 ms at 60 Hz while p95 is over 16.7 ms, which wit
 **p95** of the window against **one refresh period** (minus ~10% headroom) while vsync is on (12 ms with vsync off), keep
 the focus check and the warm-up, and step down one preset (high -> medium -> low) before switching to classic, logging
 each step. The overlay's 1% low shows the same number to the user.
+
+## 5. Root cause and quality-neutral fixes (2026-11-18, second pass)
+
+Constraint: no visual change at all (same lights, same shadows, same presets). Everything below is **MEASURED** on the
+machine above, 1080p, release build, unless marked.
+
+### 5.1 Root cause (evidence)
+
+A Chrome trace (`cargo build --release --features bevy/trace_chrome`, level 1 room 13, 200 frames; trace spans inflate
+times about 2x) showed the frame is the **render thread**: the main thread spends most of its frame waiting in
+`RenderExtractApp` for it. Render thread 9.9 ms/frame (trace build), of which:
+
+- `camera_driver` **5.1 ms**: Bevy 0.20 marks each point-light cube face as a `RootNonCameraView`
+  (`bevy_pbr/src/render/light.rs` 2239) and `camera_driver` (`bevy_core_pipeline/src/schedule.rs` 136) runs the **whole
+  `Core3d` camera schedule** for each of them: 24 runs/frame for 4 torches, 0.19-0.26 ms each, ~1390 multithreaded-executor
+  spans per frame. Of the ~45 systems in `Core3d` only five do anything for a shadow view (`allocate_uniforms`,
+  `unpack_bins`, `early_gpu_preprocess`, `early_prepass_build_indirect_parameters`, `shared_shadow_pass`; the real work of
+  each is 0.01 ms); the rest are spawned on the executor and skip on parameter validation. The camera itself costs 0.35 ms.
+  The directional (sun) shadow does not have this cost: it is drawn inside the camera's schedule (`per_view_shadow_pass`).
+- `submit_pending_command_buffers` **2.15 ms**: each of the five systems records into its own command encoder, so a frame
+  submits **136 command buffers** (`queue_submit count=136`, 1.43 ms) after finishing them in parallel (0.5 ms).
+- Entity count, mesh merging, culling and specialisation are not the problem: `check_point_light_mesh_visibility` 0.13 ms,
+  shadow queue/batching < 0.3 ms together, 355 mesh entities. GPU time was 3.1 ms of a 5.3 ms frame.
+
+The demo's growth (2.3) has a separate cause: every gate tick despawned and respawned all 9 rooms, torch lights included, so
+the 4 shadowed lights were new entities with new shadow views ~12 times a second.
+
+### 5.2 Changes
+
+1. **`enhanced::light_shadow_views`** (render app, `RenderGraph` schedule, `RenderGraphSystems::Render`, before
+   `camera_driver`): calls exactly those five Bevy systems itself, per view in `Core3d`'s order and with its run condition
+   (`any_match_filter`), through `SystemState`s, sharing **one command encoder per light** (6 faces), then removes
+   `RootNonCameraView` from the views for this frame so `camera_driver` skips them (`prepare_lights` puts it back next
+   frame). The GPU receives the same commands in the same order. Views with `OcclusionCulling` (never set here) are left to
+   `Core3d`, since the late passes are not called. `POP_FX=core3d_shadows` turns it off for A/B runs.
+   One pitfall found on the way: ordered only `.before(camera_driver)`, the system could run ahead of
+   `update_sparse_buffers` (`RenderGraphSystems::Begin`) and drew changed meshes from last frame's buffers (68 pixels off in
+   the demo, 0 in the static room); `in_set(RenderGraphSystems::Render)` fixed it.
+2. **Incremental room updates** (`room::rebuild_on_change`): a level or room change still rebuilds the 9 rooms; a world
+   change (gate, plate, loose floor, door, restart) respawns only the tiles whose `(kind, modifier, plate lift)` changed
+   (loose floors without the modifier: they animate themselves) plus the falling slabs. Torch lights and everything else
+   stay. Entities carry `TileOf(room, index)`; a room shown twice is handled. Test `tile_key_changes_only_with_the_look`.
+
+Steps on room 13 (avg ms, GPU timing off, 2000-3000 frames): baseline 4.66-4.74; one slim single-threaded schedule per view
+instead of `Core3d` 3.64-3.70; all views in one system with one encoder 3.41-3.44; one encoder per light 2.74-2.80 (one
+encoder for everything was finished alone, ~1 ms in the trace; per view 2.82-2.97, per half light 2.73-2.74, all within
+noise of per light). Final trace: `camera_driver` 0.35 ms, `light_shadow_views` 0.18 ms, `queue_submit count=17`.
+
+### 5.3 Results: Classic / Enhanced baseline (git HEAD 890c254) / Optimized, 1920x1080
+
+GPU timing off (`POP_GPU_TIMES=0`), 500 warm-up frames, average of 2 runs, window focused in every run
+(`unfocused_frames=0`). Memory = process private bytes sampled every 0.5 s.
+
+| scene | config | avg ms | p95 | p99 | fps | memory |
+|---|---|---|---|---|---|---|
+| L1 room 13 | Classic | 1.19 | 1.39 | 1.55 | 839 | ~945 MB, flat |
+| L1 room 13 | Enhanced baseline | 4.66 | 5.21 | 5.52 | 215 | ~1.22 GB, flat |
+| L1 room 13 | **Optimized** | **2.78** | **3.14** | **3.41** | **360** | ~1.13 GB, flat (10000-frame run: +0.2 MB/s) |
+| demo (level 0, gate) | Classic | 1.25 | 1.44 | 1.58 | 801 | ~955 MB, flat |
+| demo | Enhanced baseline | 12.8 (1500 frames) | 20.8 | 23.1 | 79 | +15 to +21 MB/s, peak 1.58 GB |
+| demo | **Optimized** | **3.11** (3000 frames) | **3.56** | **3.92** | **322** | +0.1 MB/s, peak 1.04 GB |
+
+- Demo baseline: 1500 frames, because in a 3000-frame run the watchdog switches it to classic (BENCH `render=Classic`,
+  10 ms average). Per 300 frames (`POP_PERF`) it climbs 5.4, 6.2, 8.0, 11.3, 14.5, 18.4 ms; optimized stays at 3.0-3.3 ms
+  over 3300 frames. Classic was measured with both builds: 1.17 / 1.19 ms (room 13), 1.25 / 1.25 ms (demo).
+- Enhanced vs classic went from +3.5 ms to +1.6 ms in room 13. With GPU timing on: 3.46 ms frame, GPU 3.02 ms
+  (`light_shadow_views` 1.98 ms, was `auxiliary_views` 2.06 ms): the GPU work is unchanged and the mode is now close to
+  GPU-bound at 1080p on this machine.
+
+### 5.4 Image identity (`POP_SHOT`, 1920x1080, diff over all pixels)
+
+| shot | baseline vs optimized | baseline vs baseline (repeat) |
+|---|---|---|
+| room 13 classic | 0 pixels | - |
+| room 13 enhanced | 0-2 pixels, max delta 1 | 3 pixels, max delta 1 |
+| demo enhanced, tick 200 | 6-9 pixels, max delta 1 | 0 |
+| demo classic, tick 400 | 2 pixels, max delta 1 | - |
+| demo classic, tick 200 | 8 pixels up to delta 131 (6x2 px on the kid's hand edge) + 2 at delta 1 | 2 pixels, max delta 1 |
+
+The classic tick-200 difference stays when the optimized build is forced to do full rebuilds again, so it does not come
+from the incremental update; it sits on the interpolated kid sprite and is most likely the frame's interpolation phase
+(start-up timing differs between the builds). Not proven. A demo shot at tick 400 cannot compare enhanced: the baseline
+has fallen back to classic by then.
+
+### 5.5 Not done, not measured, risks
+
+- Not adopted: `NoIndirectDrawing` (-0.15 ms after the fix, CPU-built draws instead of GPU-driven), fewer lights / casters /
+  presets (change the look), static mesh merging (the trace shows no per-entity cost worth it), Bevy source patches.
+- What is left: on the GPU the shadow work is still 24 views x 5 small passes with barriers (~2 ms, mostly per-pass
+  overhead, the depth draws themselves are tiny). Batching all views into one dispatch per stage needs changes inside
+  `bevy_pbr`. Caching static shadow maps is not possible without Bevy changes either (the maps are re-rendered every frame).
+- `light_shadow_views` depends on Bevy 0.20 internals: the five system signatures, `RootNonCameraView`, `camera_driver`
+  and the `RenderGraphSystems` order. A Bevy update must re-check it (compile errors for signatures; `core3d_shadows` A/B
+  plus a `POP_SHOT` diff for behaviour).
+- The leak with respawned shadowed lights (2.3) is avoided, not fixed: a room change still respawns the lights (rare).
+- Only this machine (RTX 3090, Vulkan), only 1080p, only room 13 and the demo.
