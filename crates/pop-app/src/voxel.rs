@@ -334,6 +334,30 @@ impl VoxelModel {
         VoxelModel { w: self.w, h: self.h, d, plane: self.plane, voxels, jitter: self.jitter }
     }
 
+    /// The model with its top `rows` image rows moved back by `shift(d)` voxels, d = 1.. counted up from the line below them.
+    /// `solid`: each voxel fills the whole run from its place back to that distance (a hanging figure's hands, laid over the
+    /// ledge's top face while the body stays in front of its front face, joined to the arm); otherwise it only bridges to the
+    /// row below's shift (a ramp: the plate leans back with no solid wedge behind it). The front view is unchanged.
+    pub fn rows_swept(&self, rows: usize, shift: impl Fn(usize) -> usize, solid: bool) -> Self {
+        let s = |y: usize| if y < rows { shift(rows - y) } else { 0 };
+        let m = (0..rows.min(self.h)).map(s).max().unwrap_or(0);
+        let d = self.d + m;
+        let mut voxels = vec![0; self.w * self.h * d];
+        for z in 0..self.d {
+            for y in 0..self.h {
+                for x in 0..self.w {
+                    let v = self.voxels[x + self.w * (y + self.h * z)];
+                    if v != 0 {
+                        for k in (if solid { 0 } else { s(y + 1) })..=s(y) {
+                            voxels[x + self.w * (y + self.h * (z + m - k))] = v;
+                        }
+                    }
+                }
+            }
+        }
+        VoxelModel { w: self.w, h: self.h, d, plane: self.plane + m, voxels, jitter: self.jitter }
+    }
+
     /// Mesh z of the column axis (the depth centre of the grid), in voxels.
     pub fn axis_z(&self) -> f32 {
         self.d as f32 / 2.0 - self.plane as f32 - 0.5

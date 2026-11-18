@@ -15,6 +15,8 @@ use std::collections::HashMap;
 
 #[derive(Resource)]
 pub struct KidAssets {
+    /// eased voxel depth of the kid and the guard (see `ease_z`)
+    voxel_zs: [f32; 2],
     pub data: Arc<Data>,
     dat: Dat,
     pal: Vec<[u8; 3]>,
@@ -31,7 +33,7 @@ pub struct KidAssets {
     /// (kind, image, shadow tint, palace) -> (material, width px, height px); kind 255 = kid images
     cache: HashMap<(u8, u8, bool, bool, u8), (Handle<StandardMaterial>, f32, f32)>,
     /// voxel meshes: the material key plus mirrored -> mesh (None = image did not decode)
-    vcache: HashMap<(u8, u8, bool, bool, u8, bool), Option<Handle<Mesh>>>,
+    vcache: HashMap<(u8, u8, bool, bool, u8, bool, Hang), Option<Handle<Mesh>>>,
     /// the unit quad of the sprites, the shared material of the voxel meshes (vertex colours) and its hit flash variant,
     /// and whether the voxel meshes get smooth normals; set in `setup`
     quad: Handle<Mesh>,
@@ -74,7 +76,7 @@ impl KidAssets {
         let pdat = open("PRINCE.DAT");
         let sword_pal = image::palette(pdat.get(700).unwrap()).unwrap();
         let sword_table = data.exe.sword_table();
-        KidAssets { data, dat, pal, gdats, gpals, colours, pdat, sword_pal, sword_table, cache: HashMap::new(), vcache: HashMap::new(), quad: default(), voxel_mat: default(), voxel_flash: default(), smooth: true }
+        KidAssets { data, dat, pal, gdats, gpals, colours, pdat, sword_pal, sword_table, cache: HashMap::new(), vcache: HashMap::new(), quad: default(), voxel_mat: default(), voxel_flash: default(), smooth: true, voxel_zs: [VOXEL_Z; 2] }
     }
 }
 
@@ -168,14 +170,14 @@ fn rgb(pal: &[[u8; 3]], p: u8, shadow: bool) -> [u8; 3] {
 
 /// Voxel mesh of the same image as `material_for` (key plus `mirrored`), built once from the original pixels.
 #[allow(clippy::too_many_arguments)]
-fn voxel_for(a: &mut KidAssets, meshes: &mut Assets<Mesh>, kind: u8, n: u8, shadow: bool, pal_palace: bool, colour: u8, mirrored: bool) -> Option<Handle<Mesh>> {
-    let key = (kind, n, shadow, pal_palace, colour, mirrored);
+fn voxel_for(a: &mut KidAssets, meshes: &mut Assets<Mesh>, kind: u8, n: u8, shadow: bool, pal_palace: bool, colour: u8, mirrored: bool, hang: Hang) -> Option<Handle<Mesh>> {
+    let key = (kind, n, shadow, pal_palace, colour, mirrored, hang);
     if let Some(m) = a.vcache.get(&key) {
         return m.clone();
     }
     let m = decoded(a, kind, n, pal_palace, colour).map(|(im, pal)| {
         // the profile's colour regions come from the untinted palette (the shadow's dark tint would merge them)
-        let model = crate::voxel::VoxelModel::character(im.width, im.height, &im.pixels, mirrored, |p| rgb(&pal, p, false));
+        let model = posed_model(&im, &pal, mirrored, hang);
         let smooth = a.smooth;
         meshes.add(model.mesh_with(
             |p| {
@@ -187,6 +189,16 @@ fn voxel_for(a: &mut KidAssets, meshes: &mut Assets<Mesh>, kind: u8, n: u8, shad
     });
     a.vcache.insert(key, m.clone());
     m
+}
+
+/// The voxel model of image `im`, with the hands swept or the climb's ramp applied (`hang`).
+fn posed_model(im: &image::Image, pal: &[[u8; 3]], mirrored: bool, hang: Hang) -> crate::voxel::VoxelModel {
+    let model = crate::voxel::VoxelModel::character(im.width, im.height, &im.pixels, mirrored, |p| rgb(pal, p, false));
+    match hang {
+        (0, _) => model,
+        (rows, false) => model.rows_swept(rows, hand_back, true),
+        (rows, true) => model.rows_swept(rows, ramp_back(rows), false),
+    }
 }
 
 /// The decoded image and its palette (see `material_for`).
@@ -274,6 +286,14 @@ pub fn keys(k: Res<ButtonInput<KeyCode>>, m: Res<KeyMap>, pads: Query<&Gamepad>,
 
 /// 60 Hz step of the world; on logic ticks the latched keys are consumed (or the test script is played).
 pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: Keys) {
+    // test hook: POP_WARMUP=n holds the world for n steps (60 Hz), so POP_SHOT_TICK screenshots wait out the shader compile
+    static WARM: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if WARM.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < std::env::var("POP_WARMUP").ok().and_then(|v| v.parse().ok()).unwrap_or(0) {
+        return;
+    }
+    if std::env::var("POP_SHOT_TICK").ok().and_then(|v| v.parse::<u64>().ok()).is_some_and(|t| g.world.tick >= t) {
+        return; // test hook: freeze at the screenshot tick
+    }
     if g.world.exit.is_some() {
         return; // an exit is pending: Update consumes it before any further tick mutates the carried state
     }
@@ -317,6 +337,7 @@ fn draw_char(
     level: &pop_core::level::Level,
     gtype: i8,
     level_no: usize,
+    (slot, dt): (usize, f32),
     imgs: &mut Assets<Image>,
     mats: &mut Assets<StandardMaterial>,
     vx: &mut Voxels,
@@ -342,7 +363,9 @@ fn draw_char(
     let (sw, sh) = (w / 32.0, h * crate::room::TILE_H / TILE_H_PX as f32);
     // facing left: p.x is the left edge, image as stored; facing right: p.x is the right edge and the image is mirrored
     let (cx, flip) = if k.facing_left { (p.x + sw / 2.0, 1.0) } else { (p.x - sw / 2.0, -1.0) };
-    show(a, vx, key, !k.facing_left, m, Vec3::new(cx, p.y + sh / 2.0, 0.6), Vec2::new(flip * sw, sh), VOXEL_Z, t, mat, mesh);
+    let vz = settle_z(&mut a.voxel_zs[slot], k.frame, k.action, dt);
+    let hang = hang_of(k.frame, h as i32, f.dy as i32);
+    show(a, vx, key, !k.facing_left, m, Vec3::new(cx, p.y + sh / 2.0, 0.6), Vec2::new(flip * sw, sh), vz, hang, t, mat, mesh);
     // hit flash (voxel only): hp_delta stays negative until the next logic tick clears it
     if k.hp_delta < 0 && mat.0 == a.voxel_mat {
         mat.0 = a.voxel_flash.clone();
@@ -356,6 +379,76 @@ fn draw_char(
 /// The flat sprite quads stay at z 0.6 (in front).
 const VOXEL_Z: f32 = 0.25;
 
+/// Hanging and climbing poses (jump-up grab, hang, climb up/down, drop; actions 2 and 6, frames 78..=99 and 135..=149) are
+/// authored for the 2D painter order: hands and body overlap the ledge's end face and the wall beside it. In 3D those
+/// blocks reach z 0.5 (their front face), so at VOXEL_Z the arms and shoulders sink into the slab and the climber into the
+/// wall. The whole figure goes in front of the faces instead: its rearmost layer (about 0.08 behind the plane) just clears 0.5.
+const HANG_Z: f32 = 0.62;
+
+/// Where the hands lie: the ledge slab is z -0.95..0.5 (room.rs), a hanging figure's arms reach over its top face. The rows
+/// above the ledge line are swept back by HAND_BACK voxels (to z HAND_Z at HANG_Z, joined to the arm);
+/// so the body (below the line, in front of the front face) and the hands (above the top face, inside the footprint) never touch the slab.
+const HAND_Z: f32 = 0.30;
+const HAND_BACK: usize = ((HANG_Z - HAND_Z) * 32.0 + 0.5) as usize;
+
+/// Voxels the row `d` (>= 1) rows above the ledge line moves back: one run at the line, where the arm goes over the front lip.
+fn hand_back(_d: usize) -> usize {
+    HAND_BACK
+}
+
+/// The climb (frames 135..=149): the rows above the slab top lean back from HANG_Z at the line to VOXEL_Z (the slab's
+/// footprint) within RAMP_BACK rows, 1 voxel per row (fewer rows: the same total over the rows there are), while the rows below stay in front of the front face.
+const RAMP_BACK: usize = ((HANG_Z - VOXEL_Z) * 32.0 + 0.5) as usize;
+
+/// Voxels the row `d` (>= 1) above the line moves back in a figure with `rows` rows above it.
+fn ramp_back(rows: usize) -> impl Fn(usize) -> usize {
+    let r = rows.min(RAMP_BACK);
+    move |d| (RAMP_BACK * d.min(r) + r / 2) / r
+}
+
+/// Image rows (from the top) above the ledge top of a hanging frame's image `h` px tall with offset `dy`: the ledge is one
+/// tile (TILE_H_PX) above the logic y the sprite bottom hangs from (k.y + dy), whatever the room.
+fn hang_rows(h: i32, dy: i32) -> usize {
+    (h - dy - TILE_H_PX as i32).clamp(0, h) as usize
+}
+
+/// The mesh variant of a ledge frame: (rows above the slab top, true = leaning ramp / false = swept hands); (0, _) = plain.
+/// The climb's Dy(-63) comes after frame 140: from 141 the logic y is the slab top itself, the legs still dangle below it.
+type Hang = (usize, bool);
+fn hang_of(frame: u8, h: i32, dy: i32) -> Hang {
+    let rows = ledge_rows(frame, h, dy);
+    match frame {
+        78..=99 => (rows, false),
+        135..=149 if rows > 0 && (rows as i32) < h => (rows, true),
+        _ => (0, false),
+    }
+}
+
+/// `hang_rows` of a ledge frame; from 141 on the logic y is the slab top itself (the climb's Dy(-63), see `hang_of`).
+fn ledge_rows(frame: u8, h: i32, dy: i32) -> usize {
+    hang_rows(h, if frame >= 141 { dy - TILE_H_PX as i32 } else { dy })
+}
+
+/// Moves the drawn depth `z` towards `target` (frame-rate independent exponential ease, time constant 40 ms), so the
+/// figure slides in front of the blocks when it grabs a ledge and back when it stands up instead of jumping.
+fn ease_z(z: &mut f32, target: f32, dt: f32) -> f32 {
+    *z += (target - *z) * (1.0 - (-dt / 0.04).exp());
+    *z
+}
+
+/// The depth of this frame. The climb frames (135..=149) set it at once: their mesh already leans from HANG_Z to VOXEL_Z, an ease would slide the whole figure through the slab.
+fn settle_z(z: &mut f32, frame: u8, action: u8, dt: f32) -> f32 {
+    if matches!(frame, 135..=149) {
+        *z = voxel_z(frame, action);
+        return *z;
+    }
+    ease_z(z, voxel_z(frame, action), dt)
+}
+
+fn voxel_z(frame: u8, action: u8) -> f32 {
+    if matches!(action, 2 | 6) || matches!(frame, 78..=99 | 135..=144) { HANG_Z } else { VOXEL_Z }
+}
+
 /// The voxel side of `render`: the style in use and the mesh store.
 pub struct Voxels<'a> {
     pub on: bool,
@@ -367,8 +460,8 @@ pub struct Voxels<'a> {
 /// The mirrored image is a separate mesh (no negative scale, so face winding and normals stay right). An image without a
 /// voxel mesh falls back to the sprite.
 #[allow(clippy::too_many_arguments)]
-fn show(a: &mut KidAssets, vx: &mut Voxels, key: (u8, u8, bool, bool, u8), mirrored: bool, sprite: Handle<StandardMaterial>, centre: Vec3, size: Vec2, vz: f32, t: &mut Transform, mat: &mut MeshMaterial3d<StandardMaterial>, mesh: &mut Mesh3d) {
-    let voxel = if vx.on { voxel_for(a, vx.meshes, key.0, key.1, key.2, key.3, key.4, mirrored) } else { None };
+fn show(a: &mut KidAssets, vx: &mut Voxels, key: (u8, u8, bool, bool, u8), mirrored: bool, sprite: Handle<StandardMaterial>, centre: Vec3, size: Vec2, vz: f32, hang: Hang, t: &mut Transform, mat: &mut MeshMaterial3d<StandardMaterial>, mesh: &mut Mesh3d) {
+    let voxel = if vx.on { voxel_for(a, vx.meshes, key.0, key.1, key.2, key.3, key.4, mirrored, hang) } else { None };
     if let Some(v) = voxel {
         let px = Vec3::new(1.0 / 32.0, crate::room::TILE_H / TILE_H_PX as f32, 1.0 / 32.0);
         mesh.0 = v;
@@ -426,11 +519,12 @@ fn draw_sword(
     let y = p.y - dy as f32 * crate::room::TILE_H / TILE_H_PX as f32;
     let (cx, flip) = if k.facing_left { (x + sw / 2.0, 1.0) } else { (x - sw / 2.0, -1.0) };
     // voxel sword just in front of the body's thickest layers (the original draws it over the body)
-    show(a, vx, (254, img, false, false, 0), !k.facing_left, m, Vec3::new(cx, y + sh / 2.0, 0.65), Vec2::new(flip * sw, sh), VOXEL_Z + 5.0 / 32.0, t, mat, mesh);
+    show(a, vx, (254, img, false, false, 0), !k.facing_left, m, Vec3::new(cx, y + sh / 2.0, 0.65), Vec2::new(flip * sw, sh), VOXEL_Z + 5.0 / 32.0, (0, false), t, mat, mesh);
 }
 
 pub fn render(
     g: Res<Game>,
+    time: Res<Time>,
     a: ResMut<KidAssets>,
     mut imgs: ResMut<Assets<Image>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
@@ -441,6 +535,7 @@ pub fn render(
     mut qs: Query<(&SwordSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d), (Without<KidSprite>, Without<GuardSprite>)>,
 ) {
     let mut a = a;
+    let dt = time.delta_secs();
     let w = &g.world;
     let mut kid_body = None;
     let mut guard_body = None;
@@ -451,12 +546,12 @@ pub fn render(
         if !kid_here {
             *vis = Visibility::Hidden;
         } else {
-            kid_body = draw_char(&w.kid, g.kid_prev, w.alpha(), &mut a, &w.level, w.guard_type, w.level_no, &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh);
+            kid_body = draw_char(&w.kid, g.kid_prev, w.alpha(), &mut a, &w.level, w.guard_type, w.level_no, (0, dt), &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh);
         }
     }
     if let Ok((mut t, mut vis, mut mat, mut mesh)) = qg.single_mut() {
         match &w.guard {
-            Some(gd) if gd.room as usize == g.room => guard_body = draw_char(gd, g.guard_prev, w.alpha(), &mut a, &w.level, w.guard_type, w.level_no, &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh),
+            Some(gd) if gd.room as usize == g.room => guard_body = draw_char(gd, g.guard_prev, w.alpha(), &mut a, &w.level, w.guard_type, w.level_no, (1, dt), &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh),
             _ => *vis = Visibility::Hidden,
         }
     }
@@ -489,11 +584,134 @@ fn script() -> Option<&'static Vec<Keys>> {
 mod tests {
     use super::*;
 
+    /// Every frame from the grab (78; 67..77 is the plain jump-up rise) on in the grab / hang / climb sequences (8, 9, 10, 16, 24, 25, 68, 73) is drawn in front of the blocks' front face (z 0.5).
+    #[test]
+    fn hang_and_climb_frames_stand_in_front_of_the_block_faces() {
+        let Ok(exe) = Exe::open(format!("{}/../../Original_data/PRINCE.EXE", env!("CARGO_MANIFEST_DIR"))) else { return };
+        for seq in [8, 9, 16, 24, 25, 73, 68] {
+            for op in exe.sequence(seq).unwrap() {
+                if let pop_core::exe::Op::Frame(f @ 78..=140) = op {
+                    assert!(voxel_z(f, 0) > 0.5 + 0.08, "seq {seq} frame {f}");
+                }
+            }
+        }
+        for f in 135..=140 {
+            assert!(voxel_z(f, 1) > 0.58, "climb frame {f}");
+        }
+        for f in 141..=144 {
+            assert!(voxel_z(f, 1) > 0.58, "legs still over the edge, frame {f}");
+        }
+        for f in 145..=149 {
+            assert_eq!(voxel_z(f, 1), VOXEL_Z, "on the slab, frame {f}");
+        }
+        assert_eq!((voxel_z(15, 1), voxel_z(0, 0)), (VOXEL_Z, VOXEL_Z), "standing is unchanged");
+    }
+
+    /// The ledge line of the hang frames (h px tall, bottom offset dy; measured in the running game: 91 -> 4 rows, 138 -> 14, the
+    /// grab frame 78 -> none) and the swept-back hands: no voxel of the body below the line is inside the slab (z < front face,
+    /// y in the slab's thickness), no hand voxel above it is in front of the front face or below the top.
+    #[test]
+    fn hands_lie_on_the_ledge_top_and_the_body_clears_the_slab() {
+        use crate::room::{SLAB, SLAB_FRONT};
+        assert_eq!((hang_rows(57, -10), hang_rows(53, -12), hang_rows(45, -32), hang_rows(47, -3)), (4, 2, 14, 0));
+        let (w, h, rows) = (6, 40, 4);
+        let model = crate::voxel::VoxelModel::character(w, h, &vec![1; w * h], false, |_| [200, 150, 100]).rows_swept(rows, hand_back, true);
+        let (slab_rows, px) = ((SLAB * 63.0 / 2.0).ceil() as usize, 1.0 / 32.0);
+        for y in 0..h {
+            for z in 0..model.d {
+                for x in 0..w {
+                    if model.get(x as isize, y as isize, z as isize) == 0 {
+                        continue;
+                    }
+                    let (back, front) = (HANG_Z + (z as f32 - 0.5 - model.plane as f32) * px, HANG_Z + (z as f32 + 0.5 - model.plane as f32) * px);
+                    if y >= rows && y < rows + slab_rows {
+                        assert!(back >= SLAB_FRONT, "body row {y} voxel at z {back} is inside the slab");
+                    }
+                    if y < rows {
+                        assert!(back >= HAND_Z - 5.0 * px, "hand row {y} reaches back past the footprint: {back}");
+                        // joined to the arm: unbroken from here forward to the body's plane layer
+                        assert!((z..=model.plane).all(|k| model.get(x as isize, y as isize, k as isize) != 0), "hand gap at {x},{y},{z}");
+                    }
+                }
+            }
+        }
+        assert_eq!(hand_back(1), HAND_BACK);
+    }
+
     /// Hang frame 91 (image 102, 14 px wide, hands in stored columns 7..9; dx 3, flags 0x80) on the same ledge edge, logic x
     /// from pop-core: facing left on level 8 room 19 (ledge col 3, kid x 118), facing right on level 2 room 1 (ledge col 4,
     /// kid x 123). Both edges are logic x 121 = screen px 144 (128 after the -16 px tile shift). Facing left the image is
     /// 131..145 (hands 138..140, 4..6 px over the ledge), facing right 141..155 mirrored (hands 145..147, 1..3 px over it):
     /// the 2 px difference is the original's own rounding (core mirror pairs x <-> 283 - x, the 8/7 truncation), not an anchor error.
+    #[test]
+    fn depth_eases_without_a_jump_and_independent_of_the_frame_rate() {
+        let (mut a, mut b) = (VOXEL_Z, VOXEL_Z);
+        let first = ease_z(&mut a, HANG_Z, 1.0 / 60.0);
+        assert!(first > VOXEL_Z && first < HANG_Z - 0.2, "no jump: {first}");
+        for _ in 0..30 { ease_z(&mut a, HANG_Z, 1.0 / 60.0); }
+        for _ in 0..15 { ease_z(&mut b, HANG_Z, 1.0 / 30.0); }
+        assert!((a - b).abs() < 1e-4 && HANG_Z - a < 0.01, "{a} {b}");
+    }
+
+    /// The leaning ramp: 1 voxel per row from the line up to RAMP_BACK (HANG_Z -> VOXEL_Z), fewer rows reach it sooner.
+    #[test]
+    fn ramp_goes_from_the_front_face_to_the_footprint() {
+        let f = ramp_back(14);
+        assert_eq!((f(1), f(6), f(12), f(14)), (1, 6, RAMP_BACK, RAMP_BACK));
+        assert!((HANG_Z - RAMP_BACK as f32 / 32.0 - VOXEL_Z).abs() < 0.02);
+        let g = ramp_back(2);
+        assert_eq!((g(1), g(2)), (RAMP_BACK / 2, RAMP_BACK));
+        let mut z = HANG_Z;
+        assert_eq!(settle_z(&mut z, 145, 1, 1.0 / 60.0), VOXEL_Z, "the climb sets its depth at once");
+        assert_eq!(settle_z(&mut z, 15, 1, 1.0 / 60.0), VOXEL_Z);
+    }
+
+    /// The real sprite meshes of the ledge poses (hang 78..=99, climb 135..=149, both directions: the climb down plays the
+    /// same frames), in room coordinates: no voxel of the figure below the slab top lies inside the slab / wall box (its
+    /// back behind the front face z 0.5), above the top the ramp has brought every row past the plateau into the footprint.
+    #[test]
+    fn real_ledge_poses_stay_out_of_the_slab() {
+        use crate::room::{SLAB_BACK, SLAB_FRONT};
+        let dir = format!("{}/../../Original_data", env!("CARGO_MANIFEST_DIR"));
+        if Exe::open(format!("{dir}/PRINCE.EXE")).is_err() {
+            return;
+        }
+        let a = KidAssets::load(&dir);
+        let px = 1.0 / 32.0;
+        for frame in (78u8..=99).chain(135..=149) {
+            let fr = a.data.frames[frame as usize];
+            let Some((im, pal)) = decoded(&a, 255, fr.image, false, 0) else { continue };
+            let (h, dy) = (im.height as i32, fr.dy as i32);
+            let (line, hang) = (ledge_rows(frame, h, dy), hang_of(frame, h, dy));
+            let vz = voxel_z(frame, if frame < 100 { 2 } else { 1 });
+            for mirrored in [false, true] {
+                let m = posed_model(&im, &pal, mirrored, hang);
+                for y in 0..m.h {
+                    for z in 0..m.d {
+                        for x in 0..m.w {
+                            if m.get(x as isize, y as isize, z as isize) == 0 {
+                                continue;
+                            }
+                            let (back, front) = (vz + (z as f32 - 0.5 - m.plane as f32) * px, vz + (z as f32 + 0.5 - m.plane as f32) * px);
+                            let what = format!("frame {frame} row {y} (line {line}) x {x}: z {back:.3}..{front:.3}");
+                            if y >= line {
+                                assert!(back >= SLAB_FRONT - 1e-4, "inside the slab, {what}");
+                            } else if hang.1 {
+                                assert!(back >= SLAB_BACK, "behind the slab, {what}");
+                                if line - y >= RAMP_BACK.min(line) {
+                                    assert!(front <= SLAB_FRONT + 1e-4, "above the top but in front of the face, {what}");
+                                }
+                            }
+                        }
+                    }
+                }
+                if line >= h as usize && frame >= 145 {
+                    assert!(vz + (m.d as f32 - 0.5 - m.plane as f32) * px <= SLAB_FRONT, "frame {frame} stands on the slab");
+                }
+            }
+        }
+    }
+
     #[test]
     fn hang_anchor_matches_the_original_formula() {
         let (left, right) = (screen_x(118, 3, 0x80, true), screen_x(123, 3, 0x80, false));

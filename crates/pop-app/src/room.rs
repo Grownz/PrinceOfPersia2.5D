@@ -7,12 +7,14 @@ use pop_core::level::*;
 
 /// Height of one tile row (tile width and depth are 1).
 pub const TILE_H: f32 = 2.0;
-const SLAB: f32 = 0.3;
+pub(crate) const SLAB: f32 = 0.3;
 /// The back wall box (z, depth) behind every room, front face at -0.9.
 const BACK_WALL: (f32, f32) = (-1.0, -0.9);
 /// Back face of the floor slabs and wall blocks: inside the back wall box, so slabs, walls and the back wall close without
 /// a gap (no torch or sun light through the seams, no slit at an angle). The front stays at 0.5.
-const SLAB_BACK: f32 = -0.95;
+pub(crate) const SLAB_BACK: f32 = -0.95;
+/// Front face z of slabs and wall blocks.
+pub(crate) const SLAB_FRONT: f32 = 0.5;
 
 #[derive(Component)]
 pub struct RoomEntity;
@@ -182,7 +184,7 @@ impl<'a> B<'a, '_, '_> {
     /// A floor slab (or wall block) from `y0` to `y1` in the column at `x`, reaching back into the back wall.
     fn slab(&mut self, mat: &Handle<StandardMaterial>, x: f32, y0: f32, y1: f32) -> Entity {
         let z = self.back();
-        self.put_id(mat, Vec3::new(x, y0, z), Vec3::new(x + 1.0, y1, 0.5))
+        self.put_id(mat, Vec3::new(x, y0, z), Vec3::new(x + 1.0, y1, SLAB_FRONT))
     }
 
     fn tag(&mut self, e: Entity) {

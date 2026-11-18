@@ -3,6 +3,16 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.4.2] - 2026-11-18
+
+### Fixed
+- Voxel characters: hanging, grabbing and climbing poses stood at the same depth as walking, so hands, head and body sank
+  into the ledge slab and the neighbouring wall. These poses now stand in front of the block faces, with an eased
+  (frame-rate independent) depth change at grab and drop. The hands of a hanging kid lie over the top of the ledge; while
+  climbing up the figure leans back row by row so it ends standing on the slab, never inside it (a test checks the real
+  sprite meshes, frames 78-99 and 135-149).
+- Debug hooks `POP_WARMUP=n` (hold the simulation for n steps) and a freeze at `POP_SHOT_TICK` for exact tick screenshots.
+
 ## [0.4.1] - 2026-11-18
 
 ### Fixed
