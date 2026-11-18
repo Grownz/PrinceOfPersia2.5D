@@ -818,3 +818,89 @@ front of the actors. Cause of the gap: column 295 has a 4-px shaft (palace latti
 bed and ending at the floor line, so 6 px of floor showed through (the old box was 10 px but 4 px too far right). The palace
 set has no 10-px column, so both front columns use PV 952's shaft. Tests: `cutscene::tests::chamber_pieces_use_the_palace_mapping`,
 `cutscene::tests::bed_gap_is_the_left_front_column`.
+
+## 18. Background (back wall) of the rooms
+
+### 18.1 What the original draws behind the tiles
+
+- **The background itself is palette colour 0** (black: palette 200 starts `00 00 00` in both sets, section 4). There is no
+  background image, no per-room back panel and no dark slab: an Empty cell is black unless a piece covers it; the "wall"
+  impression comes only from the Wall tiles (dungeon 368 / 370 with the 367 / 369 strips, palace built faces) and the
+  pieces of each tile. The hurt flash (`main.rs::flash`) recolours exactly this colour 0. **[V]** (Empty record all zero,
+  section 3; per-cell routines `A1C2, A299, A332, A639, A700, A9DD`, section 8.0, none fills the cell.)
+- **Background pieces from the modifier of the left neighbour** (draw_tile_right `0000:A332..A563`, read for this
+  section) **[V]**. `[4E0B]` = current cell kind, `[66D0]` / `[4E0A]` = kind / modifier of the cell to its left, `[5AA4]` =
+  draw x (the current column), `[4364]` = the row's bottom line; drawn into the back table (`ACDF`) with blitter 2 (OR, on
+  black the same as a cut-out). Nothing when the current cell is a Wall (`A33E`). Then by the left kind:
+  - **Empty**, modifier 1 / 2 / 3: image `200 + ds:27AA[mod]` = **324 / 325 / 326**, bottom at the row line +
+    `ds:27AE[mod]` = -20 / -20 / 0 px (20 px up for 324 / 325). Modifier 0 draws id 0 (nothing), above 3 returns
+    (`A3AE..A3E1`).
+  - **Floor** (kind 1 only): first its right piece 242, then (a modifier above 3 counts as 0) image `200 + ds:27B2[mod]` =
+    **244** for 0 / 1, **245** for 2 / 3, 20 px up (`A410..A45B`); the dungeon skips modifier 0, the palace skips 1.
+  - Doortop / DoortopWithFloor (palace only): `ds:27A2[mod]` = 1278, 1280, 1282, -, -, 1281, 1283 (the "palace cap, column
+    n" rows of 12.1 are **by modifier, not column**; not used here). Wall (palace, modifier bit 80h clear): 284 at x+3,
+    27 px up (`A492`).
+  - Tables (ds dump): `27A2: 4E 50 52 00 00 51 53 00 00`, `27AA: 00 7C 7D 7E`, `27AE: 00 EC EC 00`, `27B2: 2C 2C 2D 2D`.
+- What the pieces are (decoded, both sets): 244 / 245 / 324 / 325 are faint mortar outlines of a stone wall in the dark
+  (dungeon: dark blue brick lines, palace: dark teal ornaments), 326 is the lattice window with its arch (29x52). They are
+  the pattern on the black background. Level data (LEVELS.DAT, counted): Empty modifiers dungeon 0:859 1:283 2:9 3:48
+  255:405, palace 0:294 1:204 2:33 3:87 255:482; Floor dungeon 0:360 1:242 2:4 255:50, palace 0:309 1:55 2:56 255:49, so
+  most rooms show some.
+- **Level edge** **[I, SDLPoP get_tile_to_draw / level_edge_hit_tile, from memory, not traced here]**: outside the level the
+  original draws a wall at the left edge and a floor in the row above, and treats it as a wall (`Level::tile_wrapped`).
+  Torch cells have no background of their own (floor, stub 346 and the flame on black).
+- Correction to 12.1: 244 / 245 and 324..326 depend on the **left neighbour's modifier** (not the column) and are drawn
+  in the column right of that neighbour.
+
+### 18.2 What the port does (room.rs, tiles.rs)
+
+| part | before | now |
+|---|---|---|
+| back wall | dark box z -1.0 .. -0.9 over each built room | same look (procedural `dark`, also with original tiles: a black albedo would hide the torch light the enhanced mode is built on); casts no shadow (every light is in front of it) |
+| floor slabs, wall blocks, plates, loose / falling slabs | z -0.5 .. 0.5, a 0.4 gap to the back wall | back face at `SLAB_BACK` = -0.95, inside the back wall box: no seam for light or the eye. Front face unchanged; top and side textures span the deeper box (1.45x along z) |
+| background pieces | none | `tiles::back_decor` (rule of 18.1, unit test): 324 / 325 / 326 / 244 / 245 as cut-outs on the back wall (z -0.88) in the column the original draws them, bottom 7 px above the floor surface (20 px above the row line minus the 13 floor rows); 326 cut at the floor surface. Original tiles only, not in the cutscene set, no shadow casting; part of the tile key, so a changed left neighbour rebuilds the cell |
+| places with no room (outside the level) in the 3x3 view | nothing (clear colour, 10-20 % of the window) | `spawn_edge`: back wall plus the level edge: a row of floors at the bottom of a missing room above (the original's top edge), wall blocks elsewhere; only the cells next to the shown room (5 columns, 1 row) |
+| torch shadow near plane | Bevy default 0.1 = the gap from the light to the slab above | 0.02: the slab above was clipped out of the upward shadow face and the light leaked through it in a 90-degree wedge |
+
+Cutscene set (`spawn_chamber`): unchanged (`B::back` keeps -0.5 there, no pieces, back wall still a caster); POP_SHOT diff
+0 px.
+
+### 18.3 Seams found (enhanced shadows and side views)
+
+1. Floor slab / wall block back faces at z -0.5, back wall front at -0.9: a 0.4 gap behind every slab and wall. The torch
+   lights (enhanced z -0.6, inside that gap) lit the back wall above and below through it, the sun lit the wall behind
+   slabs that should shadow it, and at an angle (POP_CAM_ANGLE=30) the floors floated in front of the wall. Fixed by
+   SLAB_BACK.
+2. Torch shadow near plane (above). Fixed.
+3. Room borders and rows: slabs abut at integer x and row lines (no gap); back walls overlap their neighbours by half a
+   column (x -0.5 .. 10.5) and 0.3 vertically. Nothing to fix.
+4. Columns, door posts, exit boxes, torch holders and back panels stand on the slab top in front of the wall (z >= -0.88);
+   none reaches below the floor surface, so the deeper slab hides nothing.
+5. Open: torches beyond the shadow budget (the 4 nearest with `shadow_quality` high) have no shadow map and light through
+   everything in their range (9 units), e.g. faint light on the back wall above the ceiling in level 1 room 13's top left.
+
+### 18.4 Black areas: causes and what is left
+
+| cause | fix |
+|---|---|
+| no room left / right / above / below / diagonal: clear colour in the margin of the 80 % view (level 1 start: 20 % of the window) | edge geometry (18.2) |
+| looking through the slab gap at the wall's shadowed lower part | gap closed |
+| torch light leaking through the slab above (wedges) | near plane |
+| back wall in full sun shadow (under a ceiling or an overhanging wall), only ambient on the dark albedo: RGB about 18 | **kept**: physically right now that the slabs close, and the original is truly black there (colour 0, no piece); not pure black. Level 1 start enhanced: 4.3 % of the window, all of it such shadow |
+| debug camera (POP_DEBUG_CAM) looking past the built 3x3 rooms | kept: outside the built area |
+
+Near-black share (max channel <= 22, 1280x720) before / after: level 1 start classic 20.1 / 0.0 %, enhanced 20.3 / 4.3 %;
+level 1 room 13 classic 12.5 / 0.0 %, enhanced 10.9 / 0.5 %; level 4 room 1 classic 12.4 / 0.0 %, enhanced 12.2 / 0.0 %;
+level 6 room 18 enhanced 12.4 / 0.0 %.
+
+Classic changes (POP_SHOT 1280x720, pixels with any difference): level 1 start 25.9 %, level 1 room 13 16.2 %, level 4
+room 1 20.4 %: the margins (clear colour -> edge walls / ceiling floors), the deeper floor tops, the background pieces and
+the deeper wall sides. Gameplay untouched (render only).
+
+Performance (POP_BENCH=1000, level 1 room 13, enhanced, 1920x1080, 3 runs each): avg 3.58-3.65 ms before, 3.78-3.91 ms
+after (+0.15..0.25 ms, about 5 %: the edge geometry above the torches is in their shadow maps; taking the back wall out of
+the shadow maps paid back about 0.1 ms).
+
+Tests: `tiles::tests::background_pieces_follow_draw_tile_right`, `room::tests::slabs_and_walls_close_against_the_back_wall`
+(spawns a room and an edge place into a bare World and checks every slab ends inside the back wall box),
+`room::tests::tile_key_changes_only_with_the_look` (left-neighbour rebuild).

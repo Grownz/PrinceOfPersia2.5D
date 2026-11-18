@@ -8,6 +8,11 @@ use pop_core::level::*;
 /// Height of one tile row (tile width and depth are 1).
 pub const TILE_H: f32 = 2.0;
 const SLAB: f32 = 0.3;
+/// The back wall box (z, depth) behind every room, front face at -0.9.
+const BACK_WALL: (f32, f32) = (-1.0, -0.9);
+/// Back face of the floor slabs and wall blocks: inside the back wall box, so slabs, walls and the back wall close without
+/// a gap (no torch or sun light through the seams, no slit at an angle). The front stays at 0.5.
+const SLAB_BACK: f32 = -0.95;
 
 #[derive(Component)]
 pub struct RoomEntity;
@@ -169,6 +174,17 @@ impl<'a> B<'a, '_, '_> {
         e
     }
 
+    /// Back face z of slabs and wall blocks (SLAB_BACK; the cutscene set keeps its tuned -0.5).
+    fn back(&self) -> f32 {
+        if self.chamber { -0.5 } else { SLAB_BACK }
+    }
+
+    /// A floor slab (or wall block) from `y0` to `y1` in the column at `x`, reaching back into the back wall.
+    fn slab(&mut self, mat: &Handle<StandardMaterial>, x: f32, y0: f32, y1: f32) -> Entity {
+        let z = self.back();
+        self.put_id(mat, Vec3::new(x, y0, z), Vec3::new(x + 1.0, y1, 0.5))
+    }
+
     fn tag(&mut self, e: Entity) {
         if self.chamber {
             self.cmds.entity(e).insert(Chamber);
@@ -181,8 +197,9 @@ impl<'a> B<'a, '_, '_> {
     }
 }
 
-/// The current room plus its 8 neighbours (left/right/up/down and the diagonals via the neighbours' links): (room, origin).
-fn rooms_around(g: &Game) -> Vec<(usize, Vec3)> {
+/// The current room plus its 8 neighbours (left/right/up/down and the diagonals via the neighbours' links): (room, dx, dy,
+/// origin); room 0 = no room there (outside the level).
+fn rooms_around(g: &Game) -> Vec<(usize, i32, i32, Vec3)> {
     let level = &g.world.level;
     let link = |r: u8, d: usize| if (1..=ROOMS as u8).contains(&r) { level.links[r as usize - 1][d] } else { 0 };
     let [l, r, u, d] = level.links[g.room - 1];
@@ -202,8 +219,10 @@ fn rooms_around(g: &Game) -> Vec<(usize, Vec3)> {
     around
         .into_iter()
         .take(crate::perf::fx().rooms.unwrap_or(9))
-        .filter(|(room, ..)| (1..=ROOMS as u8).contains(room))
-        .map(|(room, dx, dy)| (room as usize, Vec3::new(dx as f32 * COLS as f32, dy as f32 * ROWS as f32 * TILE_H, 0.0)))
+        .map(|(room, dx, dy)| {
+            let room = if (1..=ROOMS as u8).contains(&room) { room as usize } else { 0 };
+            (room, dx, dy, Vec3::new(dx as f32 * COLS as f32, dy as f32 * ROWS as f32 * TILE_H, 0.0))
+        })
         .collect()
 }
 
@@ -270,14 +289,16 @@ pub fn voxel_px() -> Vec3 {
     Vec3::new(1.0 / 32.0, px_h(1.0), 1.0 / 32.0)
 }
 
-/// What a tile's pieces are built from: kind, modifier (not for a loose floor: its entity animates itself from it) and the
-/// pressure plate lift. Equal keys build identical entities, so `rebuild_on_change` keeps those tiles.
-type TileKey = (Tile, u8, u32);
+/// What a tile's pieces are built from: kind, modifier (not for a loose floor: its entity animates itself from it), the
+/// pressure plate lift and the background piece from the left neighbour. Equal keys build identical entities, so
+/// `rebuild_on_change` keeps those tiles.
+type TileKey = (Tile, u8, u32, Option<(u16, i32)>);
 
-fn tile_key(level: &Level, room: usize, idx: usize) -> TileKey {
+fn tile_key(level: &Level, room: usize, idx: usize, palace: bool) -> TileKey {
     let t = level.tile_at(room, idx);
     let lift = match t.kind { Tile::DropButton | Tile::RaiseButton => plate_lift(level.link_timer(t.modifier)), _ => 0.0 };
-    (t.kind, if t.kind == Tile::LooseFloor { 0 } else { t.modifier }, lift.to_bits())
+    let (lk, lm) = left_tile(level, room, idx);
+    (t.kind, if t.kind == Tile::LooseFloor { 0 } else { t.modifier }, lift.to_bits(), crate::tiles::back_decor(lk, lm, t.kind, palace))
 }
 
 /// Tile `idx` of the builder's room.
@@ -288,24 +309,66 @@ fn spawn_tile(b: &mut B, level: &Level, room: usize, idx: usize) {
     b.cur = (!b.chamber).then_some(TileOf(room as u8, idx as u8));
     if t.kind == Tile::LooseFloor {
         // its own entity, moved every frame by `animate` (wobble from the trob state)
-        let e = b.put_id(&plain_floor(b), Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y, 0.5));
-        let base = b.origin + Vec3::new(x + 0.5, y - SLAB / 2.0, 0.0);
+        let e = b.slab(&plain_floor(b), x, y - SLAB, y);
+        let base = b.origin + Vec3::new(x + 0.5, y - SLAB / 2.0, (b.back() + 0.5) / 2.0);
         b.cmds.entity(e).insert(Loose { room: room as u8, idx: idx as u8, base });
     } else {
         let lift = match t.kind { Tile::DropButton | Tile::RaiseButton => plate_lift(level.link_timer(t.modifier)), _ => 0.0 };
         tile(b, x, y, t, lift, idx as u8);
     }
+    // the original's background piece from the left neighbour, on the back wall (not in the cutscene set)
+    let (lk, lm) = left_tile(level, room, idx);
+    if let Some((d, up)) = b.tiles.filter(|_| !b.chamber).and_then(|s| s.decor(lk, lm, t.kind)) {
+        // flat on the wall: its shadow would be invisible, and each cut-out material is its own shadow draw
+        let lo = Vec3::new(x, y + px_h(up), BACK_Z);
+        let e = b.put_id(&d.mat, lo, lo + Vec3::new(px_w(d.w), px_h(d.h), 0.004));
+        b.cmds.entity(e).insert(bevy::light::NotShadowCaster);
+    }
     b.cur = None;
 }
 
-fn spawn_tiles(b: &mut B, level: &Level, mobs: &[pop_core::sim::Mob], room: usize) {
+/// Kind and modifier of the tile left of tile `idx` of `room` (through the room links; outside the level: a wall).
+fn left_tile(level: &Level, room: usize, idx: usize) -> (Tile, u8) {
+    let (c, r) = ((idx % COLS) as i32 - 1, (idx / COLS) as i32);
+    (level.tile_wrapped(room as i32, c, r), level.modifier_wrapped(room as i32, c, r))
+}
+
+/// The back wall of a room: one dark box over the whole room (and half a column into each neighbour), at BACK_WALL.
+/// Every light is in front of it, so in the levels it casts no shadow (it only filled the shadow maps).
+fn back_wall(b: &mut B) {
     let p = b.p;
-    // back wall
-    b.put(&p.dark, Vec3::new(-0.5, -SLAB, -1.0), Vec3::new(10.5, 3.0 * TILE_H, -0.9));
+    let e = b.put_id(&p.dark, Vec3::new(-0.5, -SLAB, BACK_WALL.0), Vec3::new(10.5, 3.0 * TILE_H, BACK_WALL.1));
+    if !b.chamber {
+        b.cmds.entity(e).insert(bevy::light::NotShadowCaster);
+    }
+}
+
+fn spawn_tiles(b: &mut B, level: &Level, mobs: &[pop_core::sim::Mob], room: usize) {
+    back_wall(b);
     for idx in 0..ROWS * COLS {
         spawn_tile(b, level, room, idx);
     }
     spawn_falling(b, mobs, room);
+}
+
+/// Columns of a missing left / right neighbour that are built (the game camera shows up to about 2.4 columns past the
+/// room at 16:9 and 4.8 at 21:9).
+const EDGE_COLS: usize = 5;
+
+/// A place around the shown room with no room (outside the level), `dx` / `dy` in rooms: its back wall, and the level edge
+/// as the original draws it (SDLPoP get_tile_to_draw, from memory: wall at the left edge, floor in the row above) and as
+/// the game treats it (`Level::tile_wrapped`: wall): a row of floors at the bottom of a missing room above, wall blocks
+/// elsewhere; only the cells next to the shown room.
+fn spawn_edge(b: &mut B, dx: i32, dy: i32) {
+    back_wall(b);
+    for idx in 0..ROWS * COLS {
+        let (col, row) = (idx % COLS, idx / COLS);
+        let near = (dx >= 0 || col >= COLS - EDGE_COLS) && (dx <= 0 || col < EDGE_COLS) && (dy >= 0 || row == 0) && (dy <= 0 || row == ROWS - 1);
+        if near {
+            let kind = if dy > 0 { Tile::Floor } else { Tile::Wall };
+            tile(b, col as f32, (ROWS - 1 - row) as f32 * TILE_H, TileRef { kind, flags: 0, modifier: 0 }, 0.0, idx as u8);
+        }
+    }
 }
 
 /// Falling loose floors: mob y is a screen line, 65 + 63 * row = floor line of that row; drawn one tick behind the sim
@@ -313,8 +376,8 @@ fn spawn_tiles(b: &mut B, level: &Level, mobs: &[pop_core::sim::Mob], room: usiz
 fn spawn_falling(b: &mut B, mobs: &[pop_core::sim::Mob], room: usize) {
     for m in mobs.iter().filter(|m| m.room as usize == room) {
         let (x, y) = ((m.xh >> 2) as f32, (191.0 - m.y as f32) * TILE_H / 63.0);
-        let e = b.put_id(&plain_floor(b), Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y, 0.5));
-        let base = b.origin + Vec3::new(x + 0.5, y - SLAB / 2.0, 0.0);
+        let e = b.slab(&plain_floor(b), x, y - SLAB, y);
+        let base = b.origin + Vec3::new(x + 0.5, y - SLAB / 2.0, (b.back() + 0.5) / 2.0);
         b.cmds.entity(e).insert(Falling { base, up: m.speed.max(0) as f32 * TILE_H / 63.0 });
     }
 }
@@ -425,7 +488,9 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
     // the other pieces (chomper and spike frames, door slices, torch stub, balcony, lattice, wall top), tiles::pieces
     let pc: Vec<(Role, Tex)> = b.tiles.map_or(vec![], |s| s.pieces(t.kind, t.modifier));
     let piece = |r: Role| pc.iter().find(|(pr, _)| *pr == r).map(|(_, t)| t.clone());
-    let floor = |b: &mut B, m: &Handle<StandardMaterial>| b.put(m, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y, 0.5));
+    let floor = |b: &mut B, m: &Handle<StandardMaterial>| {
+        b.slab(m, x, y - SLAB, y);
+    };
     let column = |b: &mut B, m: &Handle<StandardMaterial>, w: f32, h: f32| {
         b.put(m, Vec3::new(x + 0.5 - w / 2.0, y, -w / 2.0), Vec3::new(x + 0.5 + w / 2.0, y + h, w / 2.0))
     };
@@ -438,13 +503,17 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                 let top = y + TILE_H - SLAB;
                 match piece(Role::WallTop) {
                     Some(cap) => {
-                        b.put(&m, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, top - CAP, 0.5));
-                        b.put(&cap.mat, Vec3::new(x, top - CAP, -0.5), Vec3::new(x + 1.0, top, 0.5));
+                        b.slab(&m, x, y - SLAB, top - CAP);
+                        b.slab(&cap.mat, x, top - CAP, top);
                     }
-                    None => b.put(&m, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, top, 0.5)),
+                    None => {
+                        b.slab(&m, x, y - SLAB, top);
+                    }
                 }
             }
-            None => b.put(&stone, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y + TILE_H, 0.5)),
+            None => {
+                b.slab(&stone, x, y - SLAB, y + TILE_H);
+            }
         },
         Skeleton => match b.items.and_then(|(i, set)| Some((i.skeleton[set].clone()?, i.mat.clone()))) {
             // the bones as a voxel relief standing on the plain floor, centred on the tile, behind the figures (z 0.25)
@@ -554,7 +623,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             // pressed (lift 0): the original draws a held drop button as the stuck button and a raise button as plain floor
             let look = match (t.kind, lift == 0.0) { (DropButton, true) => StuckButton, (RaiseButton, true) => Floor, (k, _) => k };
             let m = b.tiles.and_then(|s| s.floor(look)).unwrap_or_else(|| stone.clone());
-            b.put(&m, Vec3::new(x, y - SLAB, -0.5), Vec3::new(x + 1.0, y + lift, 0.5));
+            b.slab(&m, x, y - SLAB, y + lift);
             // the original shows a button only by its own floor images (raised plate, lip); keep the marker box without them
             if b.tiles.and_then(|s| s.floor(t.kind)).is_none() {
                 let m = if t.kind == RaiseButton { &p.blue } else { &p.red };
@@ -781,10 +850,15 @@ fn door_post(b: &mut B, d: &Tex, x: f32, y: f32, kind: Tile, modifier: u8) {
     }
 }
 
-/// The light of a torch (levels and the cutscene set).
+/// The light of a torch (levels and the cutscene set). It sits 0.1 below the slab above (TILE_H * 0.65 + 0.3 = 1.6 over
+/// the floor, the slab's underside at 1.7): with Bevy's default shadow near plane (0.1) that slab was clipped out of the
+/// shadow map's upward face and the light leaked through it in a 90-degree wedge onto the back wall above (enhanced).
 pub fn torch_light() -> PointLight {
-    PointLight { color: Color::srgb(1.0, 0.65, 0.3), intensity: 250_000.0, range: 9.0, shadow_maps_enabled: false, ..default() }
+    PointLight { color: Color::srgb(1.0, 0.65, 0.3), intensity: 250_000.0, range: 9.0, shadow_maps_enabled: false, shadow_map_near_z: TORCH_NEAR_Z, ..default() }
 }
+
+/// Near plane of the torch shadow maps, well inside the 0.1 gap between a torch light and the slab above it.
+const TORCH_NEAR_Z: f32 = 0.02;
 
 /// Room rebuilds so far (POP_PERF).
 pub static REBUILDS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -818,16 +892,21 @@ pub fn rebuild_on_change(
             cmds.entity(e).despawn();
         }
         built.0.clear();
-        for (room, origin) in rooms_around(&g) {
-            spawn_tiles(&mut room_builder(&mut cmds, level, room, origin, &p, palace), level, &g.world.mobs, room);
-            built.0.push((room, origin, (0..ROWS * COLS).map(|i| tile_key(level, room, i)).collect()));
+        for (room, dx, dy, origin) in rooms_around(&g) {
+            let b = &mut room_builder(&mut cmds, level, room, origin, &p, palace);
+            if room == 0 {
+                spawn_edge(b, dx, dy);
+                continue;
+            }
+            spawn_tiles(b, level, &g.world.mobs, room);
+            built.0.push((room, origin, (0..ROWS * COLS).map(|i| tile_key(level, room, i, palace)).collect()));
         }
         return;
     }
     let mut changed = Vec::new();
     for (room, _, keys) in &mut built.0 {
         for (idx, k) in keys.iter_mut().enumerate() {
-            let now = tile_key(level, *room, idx);
+            let now = tile_key(level, *room, idx, palace);
             // a room can show twice (links that loop): one entry in `changed`, respawned at each origin below
             if *k != now {
                 *k = now;
@@ -885,16 +964,58 @@ mod tests {
     fn tile_key_changes_only_with_the_look() {
         let mut l = Level::parse(&[0u8; 4096]).expect("zero level");
         l.set_tile(1, 3, Tile::Gate);
-        let closed = tile_key(&l, 1, 3);
+        let closed = tile_key(&l, 1, 3, false);
         l.set_modifier(1, 3, 40);
-        assert_ne!(tile_key(&l, 1, 3), closed, "a moving gate is rebuilt");
+        assert_ne!(tile_key(&l, 1, 3, false), closed, "a moving gate is rebuilt");
         l.set_tile(1, 4, Tile::LooseFloor);
-        let still = tile_key(&l, 1, 4);
+        let still = tile_key(&l, 1, 4, false);
         l.set_modifier(1, 4, 0x81);
-        assert_eq!(tile_key(&l, 1, 4), still, "a wobbling loose floor animates itself");
+        assert_eq!(tile_key(&l, 1, 4, false), still, "a wobbling loose floor animates itself");
         l.set_tile(1, 4, Tile::Empty);
-        assert_ne!(tile_key(&l, 1, 4), still, "a fallen loose floor is rebuilt");
-        assert_eq!(tile_key(&l, 1, 5), tile_key(&l, 1, 5));
+        assert_ne!(tile_key(&l, 1, 4, false), still, "a fallen loose floor is rebuilt");
+        assert_eq!(tile_key(&l, 1, 5, false), tile_key(&l, 1, 5, false));
+        // the background piece of tile 7 comes from tile 6: rebuilt when that changes
+        l.set_tile(1, 6, Tile::Empty);
+        let plain = tile_key(&l, 1, 7, false);
+        l.set_modifier(1, 6, 1);
+        assert_ne!(tile_key(&l, 1, 7, false), plain, "a background piece appears");
+    }
+
+    /// Floor slabs and wall blocks reach into the back wall box (no gap for light or the eye), the back wall covers the
+    /// whole room, and a place outside the level gets a back wall and its edge geometry.
+    #[test]
+    fn slabs_and_walls_close_against_the_back_wall() {
+        let mut world = World::new();
+        let (mut meshes, mut mats, mut imgs) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default());
+        let p = Palette::new(&mut meshes, &mut mats, &mut imgs, None, false, false);
+        let mut l = Level::parse(&[0u8; 4096]).expect("zero level");
+        for (i, t) in [(0, Tile::Floor), (1, Tile::Wall), (2, Tile::LooseFloor), (3, Tile::DropButton), (4, Tile::Pillar), (11, Tile::Torch)] {
+            l.set_tile(1, i, t);
+        }
+        let boxes = |world: &mut World| -> Vec<(Vec3, Vec3)> {
+            world.query_filtered::<&Transform, With<RoomEntity>>().iter(world).filter(|t| t.scale != Vec3::ONE).map(|t| (t.translation - t.scale / 2.0, t.translation + t.scale / 2.0)).collect()
+        };
+        let mut q = bevy::ecs::world::CommandQueue::default();
+        spawn_tiles(&mut room_builder(&mut Commands::new(&mut q, &world), &l, 1, Vec3::ZERO, &p, false), &l, &[], 1);
+        q.apply(&mut world);
+        let all = boxes(&mut world);
+        let wall = *all.iter().find(|(lo, hi)| lo.z == BACK_WALL.0 && hi.z == BACK_WALL.1).expect("back wall");
+        assert!(wall.0.x <= 0.0 && wall.1.x >= COLS as f32 && wall.0.y <= -SLAB && wall.1.y >= ROWS as f32 * TILE_H);
+        // every box that spans the tile depth (slabs, walls, plates, loose floors) ends inside the back wall box
+        let slabs: Vec<_> = all.iter().filter(|(lo, hi)| hi.z == 0.5 && hi.x - lo.x == 1.0).collect();
+        assert!(slabs.len() >= 6, "{slabs:?}");
+        for (lo, _) in &slabs {
+            assert!(lo.z < BACK_WALL.1 && lo.z > BACK_WALL.0, "slab back {lo}");
+        }
+        // outside the level: back wall plus the wall cells next to the room (left neighbour missing: its right columns)
+        world.clear_entities();
+        spawn_edge(&mut room_builder(&mut Commands::new(&mut q, &world), &l, 0, Vec3::ZERO, &p, false), -1, 0);
+        q.apply(&mut world);
+        let edge = boxes(&mut world);
+        assert!(edge.iter().any(|(lo, hi)| lo.z == BACK_WALL.0 && hi.z == BACK_WALL.1));
+        let cells: Vec<_> = edge.iter().filter(|(_, hi)| hi.z == 0.5).collect();
+        assert_eq!(cells.len(), EDGE_COLS * ROWS);
+        assert!(cells.iter().all(|(lo, _)| lo.x >= (COLS - EDGE_COLS) as f32 && lo.z < BACK_WALL.1));
     }
 
     #[test]

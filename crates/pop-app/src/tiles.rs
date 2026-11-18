@@ -89,6 +89,31 @@ pub fn pieces(kind: Tile, modifier: u8, palace: bool, present: impl Fn(u16) -> b
     v
 }
 
+/// Rows of a tile-bottom-aligned image below the floor surface (the 2D floor rows; the 3D slab shows them).
+const FLOOR_ROWS: i32 = 13;
+
+/// The background piece the original draws in a cell from its left neighbour (draw_tile_right `0000:A332`, docs
+/// texture_inventory.md 18): (image id, bottom of the image in px above the cell's floor surface; negative = below it).
+/// Nothing when the cell itself is a wall. Left Empty, modifier 1..3: 324 / 325 / 326 (`ds:27AA`), bottom 20 / 20 / 0 px
+/// above the tile's bottom line (`ds:27AE`); left Floor: 244 for modifier 0 / 1, 245 for 2 / 3 (above 3 counts as 0,
+/// `ds:27B2`), 20 px up, skipped for modifier 0 in the dungeon and 1 in the palace. Everything else on the original's
+/// background is palette colour 0 (black).
+pub fn back_decor(left: Tile, left_mod: u8, curr: Tile, palace: bool) -> Option<(u16, i32)> {
+    let (v, up) = match (left, curr) {
+        (_, Tile::Wall) => return None,
+        (Tile::Empty, _) if left_mod <= 3 => ([0, 124, 125, 126][left_mod as usize], [0, 20, 20, 0][left_mod as usize]),
+        (Tile::Floor, _) => {
+            let m = if left_mod > 3 { 0 } else { left_mod };
+            if m == palace as u8 {
+                return None;
+            }
+            ([44, 44, 45, 45][m as usize], 20)
+        }
+        _ => return None,
+    };
+    (v != 0).then_some((200 + v, up - FLOOR_ROWS))
+}
+
 /// Floor rows at the bottom of a piece that `role` cuts off (the 3D floor slab shows the floor): images drawn from the
 /// tile's bottom line have 13 floor rows; the 62-row ones reach 2 px lower (as the exit frame, EXIT_FRAME_H).
 pub fn floor_rows(role: Role, h: usize) -> usize {
@@ -309,6 +334,14 @@ impl TileSet {
                 }
             }
         }
+        // background pieces, cut at the floor surface (326 reaches 13 rows below it)
+        for (kind, m) in [Tile::Empty, Tile::Floor].into_iter().flat_map(|k| (0..4).map(move |m| (k, m))) {
+            let Some((id, up)) = back_decor(kind, m, Tile::Empty, palace) else { continue };
+            let Some(im) = decoded.get(&id).filter(|_| !set.imgs.contains_key(&id)) else { continue };
+            let h = im.height - ((-up).max(0) as usize).min(im.height);
+            let mat = texture(im.width, h, &im.pixels[..im.width * h], &p200, false);
+            set.imgs.insert(id, Tex { mat, w: im.width as f32, h: h as f32 });
+        }
         if palace {
             if grain.is_empty() {
                 missing.push(format!("{name}: no 1-bit wall strips 366..371, procedural palace walls"));
@@ -348,6 +381,12 @@ impl TileSet {
     /// Resource id of the tile's extra piece (the voxel columns are looked up by it).
     pub fn extra_id(&self, kind: Tile, modifier: u8) -> Option<u16> {
         tile_images(kind, modifier, |id| self.present.contains(&id)).1
+    }
+
+    /// The background piece of a cell from its left neighbour (`back_decor`): texture and px of its bottom above the floor.
+    pub fn decor(&self, left: Tile, left_mod: u8, curr: Tile) -> Option<(Tex, f32)> {
+        let (id, up) = back_decor(left, left_mod, curr, self.palace)?;
+        Some((self.imgs.get(&id)?.clone(), up.max(0) as f32))
     }
 
     /// Any loaded image by resource id (exit lintels).
@@ -477,6 +516,26 @@ mod tests {
         assert_eq!(resolve(30, &|id| id == 230 || id == 1230), Some(1230));
         assert_eq!(resolve(41, &|id| id == 241), Some(241));
         assert_eq!(resolve(10, &dungeon), None);
+    }
+
+    #[test]
+    fn background_pieces_follow_draw_tile_right() {
+        // left Empty by modifier (ds:27AA / 27AE), none above 3
+        assert_eq!(back_decor(Empty, 0, Floor, false), None);
+        assert_eq!(back_decor(Empty, 1, Empty, false), Some((324, 7)));
+        assert_eq!(back_decor(Empty, 2, Floor, true), Some((325, 7)));
+        assert_eq!(back_decor(Empty, 3, Empty, true), Some((326, -13)));
+        assert_eq!(back_decor(Empty, 255, Empty, false), None);
+        // left Floor (ds:27B2): dungeon skips 0, palace skips 1; above 3 counts as 0
+        assert_eq!(back_decor(Floor, 0, Empty, false), None);
+        assert_eq!(back_decor(Floor, 1, Empty, false), Some((244, 7)));
+        assert_eq!(back_decor(Floor, 2, Floor, false), Some((245, 7)));
+        assert_eq!(back_decor(Floor, 255, Empty, true), Some((244, 7)));
+        assert_eq!(back_decor(Floor, 1, Empty, true), None);
+        assert_eq!(back_decor(Floor, 255, Empty, false), None);
+        // a wall cell hides it; other left kinds draw none here
+        assert_eq!(back_decor(Empty, 1, Wall, false), None);
+        assert_eq!(back_decor(Torch, 1, Empty, false), None);
     }
 
     #[test]

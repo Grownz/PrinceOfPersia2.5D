@@ -3,6 +3,19 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## Unreleased
+
+### Fixed
+- Background light-tight: floor slabs, wall blocks, plates and loose floors now reach into the back wall (they ended
+  0.4 units in front of it), so torch and sun light no longer leak through the seams and the floors no longer float in
+  front of the wall in angled views. Torch shadow maps use a near plane of 0.02 (was 0.1, exactly the gap to the slab
+  above, which let the light through it in a wedge).
+- No more black margins: places around the shown room with no room (outside the level) get a back wall and the level
+  edge as the original draws it (floors in the row above, walls elsewhere), instead of the clear colour.
+- Background pieces of the original: the faint wall patterns 244 / 245 / 324 / 325 and the lattice window 326 are drawn
+  on the back wall from the left neighbour's Empty / Floor modifier, as draw_tile_right does (original tiles only;
+  `docs/texture_inventory.md` 18).
+
 ## [0.2.0] - 2026-11-18
 
 ### Added

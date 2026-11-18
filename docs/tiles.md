@@ -444,6 +444,9 @@ Start mod = prandom(8); each tick (drawn room only) `8CC5`: r = prandom(255); if
   calls in the same order, including those for the visual-only tiles; otherwise use a separate RNG for visuals and accept a
   different sequence.
 
+Background note: for drawing, the modifier of an Empty (1..3) or Floor tile picks the background piece that
+draw_tile_right draws in the next column (`0000:A332`, docs/texture_inventory.md 18).
+
 ## 11. Not verified / open
 - Whether the guard's `5D31` is a chomper check for guards (not traced).
 - `[00B8]` in the exit-door closing sound condition, and the meaning of leveldoor_open == 2 (both INFERRED).
