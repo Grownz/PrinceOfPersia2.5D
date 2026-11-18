@@ -3,6 +3,14 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## Unreleased
+
+### Changed
+- Enhanced auto fallback judges the p95 frame time of each 300-frame window against 1.25 refresh periods (counted at
+  no more than 60 Hz, so 20.8 ms on 60 Hz and faster monitors) instead of the average, and needs 3 slow windows in a row,
+  so a 30 fps vsync stutter is caught while a single hitch is not. Warm-up and the focus check stay; the log line names
+  avg, p95 and the limit.
+
 ## [0.2.1] - 2026-11-18
 
 ### Fixed

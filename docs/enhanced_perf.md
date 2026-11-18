@@ -221,11 +221,17 @@ All three after fix 1; without it any room with a moving gate grows past 16.7 ms
 
 ### 4.4 Auto fallback
 
-The current rule (300-frame average over max(12 ms, 1.25 refresh periods), once, to classic) misses the real failure:
-the average can stay under 20.8 ms at 60 Hz while p95 is over 16.7 ms, which with vsync means 30 fps. Suggested: judge the
-**p95** of the window against **one refresh period** (minus ~10% headroom) while vsync is on (12 ms with vsync off), keep
-the focus check and the warm-up, and step down one preset (high -> medium -> low) before switching to classic, logging
-each step. The overlay's 1% low shows the same number to the user.
+The old rule (300-frame average over max(12 ms, 1.25 refresh periods), once, to classic) missed the real failure:
+the average can stay under 20.8 ms at 60 Hz while p95 is over 16.7 ms, which with vsync means 30 fps.
+
+**Done (2026-11-18)**: `enhanced::FallbackJudge` (pure, unit-tested) judges the **p95** (nearest rank: up to 15 slow
+frames per window pass) of each 300-frame window against **1.25 refresh periods** of the slowest monitor (60 Hz when
+unknown), counted at no more than 60 Hz, so the limit is 20.8 ms on 60 Hz and faster monitors (41.7 ms at 30 Hz). With
+vsync the measured frame is a whole number of periods (16.7 / 33.3 ms), so the 25% separates on-time frames plus
+jitter from missed vblanks; with vsync off it means more than 5% of the frames under 48 fps. It falls back only after
+**3 slow windows in a row** (a shader-compile or room-change hitch spoils at most one), keeps the 600-frame warm-up,
+and an unfocused frame restarts warm-up and streak. The step-down through presets was dropped: no quality reduction,
+the only action stays classic for the session, logged with avg, p95 and limit.
 
 ## 5. Root cause and quality-neutral fixes (2026-11-18, second pass)
 
@@ -322,3 +328,5 @@ has fallen back to classic by then.
   plus a `POP_SHOT` diff for behaviour).
 - The leak with respawned shadowed lights (2.3) is avoided, not fixed: a room change still respawns the lights (rare).
 - Only this machine (RTX 3090, Vulkan), only 1080p, only room 13 and the demo.
+- Auto fallback now on p95 (4.4). Not tried on a slow GPU or a high-refresh monitor; only unit tests. On a 120/144 Hz
+  monitor it deliberately tolerates 60+ fps (limit as at 60 Hz) instead of demanding the full refresh rate.

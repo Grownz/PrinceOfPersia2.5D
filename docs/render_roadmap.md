@@ -283,7 +283,7 @@ the registry source):
   torches no longer sink into blue-black. No extra rim light needed.
 - **Dropped**: contact shadows (`ContactShadows` exists in 0.20.1 but the sun shadow already grounds the figures and the
   torch side cannot help, see above), volumetric/distance fog (no benefit in these closed rooms), TAA (above).
-- **Fallback**: after a 600-frame warm-up, a 300-frame window averaging over max(12 ms, 1.25 refresh periods of the slowest
+- **Fallback** (since 0.2.1+ judged on p95 over 3 windows in a row, see `enhanced_perf.md` 4.4; original rule): after a 600-frame warm-up, a 300-frame window averaging over max(12 ms, 1.25 refresh periods of the slowest
   monitor), counted only while the window is focused, switches to classic for the session (logged, not saved, fires once).
   The refresh floor came from testing: Windows throttled the unfocused test window to exactly 16.67 ms even with vsync off,
   and a plain 12 ms rule fell back on it. Startup logs which features were enabled.

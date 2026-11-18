@@ -46,11 +46,58 @@ pub fn nearest(lights: &[Vec2], focus: Vec2, n: usize) -> Vec<usize> {
     idx
 }
 
-/// Frame-time budget for the automatic fallback: 12 ms, but at least 1.25 frame periods of the slowest monitor. A frame
-/// capped at the refresh rate (vsync, or Windows throttling a background window to 60 Hz even with vsync off, seen while
-/// testing) is 16.7 ms at 60 Hz and runs smoothly, so it must not count as slow.
-pub fn too_slow(avg_ms: f32, slowest_hz: f32) -> bool {
-    avg_ms > 12.0f32.max(1250.0 / slowest_hz.max(1.0))
+/// p95 limit for the automatic fallback: 1.25 refresh periods of the slowest monitor, counted at no more than 60 Hz.
+/// With vsync a frame is shown for whole periods (16.7 or 33.3 ms at 60 Hz), so the 25% separates "on time" (plus
+/// jitter) from "missed vblank". On a high-refresh monitor a game running at 60-144 fps is still smooth enough to keep
+/// enhanced (the only alternative is classic), so the limit never gets stricter than at 60 Hz (20.8 ms).
+pub fn fallback_limit_ms(slowest_hz: f32) -> f32 {
+    1250.0 / slowest_hz.clamp(1.0, 60.0)
+}
+
+const WARMUP_FRAMES: u32 = 600;
+const WINDOW_FRAMES: usize = 300;
+/// Consecutive slow windows before falling back: one hitch (shader compile, room change) spoils at most one window.
+const SLOW_WINDOWS: u32 = 3;
+
+/// Why the watchdog fell back (for the log line).
+#[derive(Debug, PartialEq)]
+pub struct SlowVerdict {
+    pub avg_ms: f32,
+    pub p95_ms: f32,
+    pub limit_ms: f32,
+}
+
+/// Pure fallback logic: fed one frame time at a time, answers once `SLOW_WINDOWS` consecutive windows had a p95 over
+/// `fallback_limit_ms`. An unfocused frame (throttled background window) restarts everything, warm-up included.
+#[derive(Default)]
+pub struct FallbackJudge {
+    warm: u32,
+    frames: Vec<f32>,
+    slow: u32,
+}
+
+impl FallbackJudge {
+    pub fn frame(&mut self, dt_ms: f32, focused: bool, slowest_hz: f32) -> Option<SlowVerdict> {
+        if !focused {
+            *self = Self::default();
+            return None;
+        }
+        if self.warm < WARMUP_FRAMES {
+            self.warm += 1;
+            return None;
+        }
+        self.frames.push(dt_ms);
+        if self.frames.len() < WINDOW_FRAMES {
+            return None;
+        }
+        let avg_ms = self.frames.iter().sum::<f32>() / WINDOW_FRAMES as f32;
+        self.frames.sort_by(f32::total_cmp);
+        let p95_ms = self.frames[(WINDOW_FRAMES * 95).div_ceil(100) - 1]; // nearest rank: up to 15 slow frames pass
+        self.frames.clear();
+        let limit_ms = fallback_limit_ms(slowest_hz);
+        self.slow = if p95_ms > limit_ms { self.slow + 1 } else { 0 };
+        (self.slow >= SLOW_WINDOWS).then_some(SlowVerdict { avg_ms, p95_ms, limit_ms })
+    }
 }
 
 /// Sun (fill) illuminance: classic, and enhanced (lower, so the torches stay the main light next to the sun's shadows).
@@ -346,37 +393,30 @@ pub fn mode_key(k: Res<ButtonInput<KeyCode>>, mut mode: ResMut<RenderMode>, mut 
     set.save();
 }
 
-/// Automatic fallback: in enhanced mode, after a 600-frame warm-up (shader compiles), a 300-frame window averaging over
-/// the budget (`too_slow`) switches to classic for this session (not saved). Fires at most once, so it cannot oscillate.
+/// Automatic fallback: in enhanced mode, `FallbackJudge` (600-frame warm-up, 300-frame windows, p95 against the refresh
+/// period, 3 slow windows in a row, focused only) switches to classic for this session (not saved). Fires at most once,
+/// so it cannot oscillate.
 pub fn watchdog(
     mut mode: ResMut<RenderMode>,
     time: Res<Time<Real>>,
     win: Query<&Window, With<PrimaryWindow>>,
     monitors: Query<&Monitor>,
-    mut st: Local<(u32, f32, bool)>,
+    mut st: Local<(FallbackJudge, bool)>,
 ) {
-    // only a focused window counts (background windows are throttled)
-    if st.2 || *mode != RenderMode::Enhanced || !win.single().is_ok_and(|w| w.focused) {
-        st.0 = 0;
+    if st.1 || *mode != RenderMode::Enhanced {
+        st.0 = FallbackJudge::default();
         return;
     }
-    st.0 += 1;
-    if st.0 <= 600 {
-        st.1 = 0.0;
-        return;
-    }
-    st.1 += time.delta_secs();
-    if st.0 < 900 {
-        return;
-    }
-    let avg_ms = st.1 / 300.0 * 1000.0;
-    let hz = monitors.iter().filter_map(|m| m.refresh_rate_millihertz).min().map_or(60.0, |mhz| mhz as f32 / 1000.0);
-    if too_slow(avg_ms, hz) {
-        warn!("enhanced renderer too slow ({avg_ms:.2} ms/frame over 300 frames); falling back to classic for this session");
+    let focused = win.single().is_ok_and(|w| w.focused);
+    let hz = monitors.iter().filter_map(|m| m.refresh_rate_millihertz).filter(|&m| m > 0).min().map_or(60.0, |mhz| mhz as f32 / 1000.0);
+    if let Some(v) = st.0.frame(time.delta_secs() * 1000.0, focused, hz) {
+        warn!(
+            "enhanced renderer too slow: avg {:.2} ms, p95 {:.2} ms > {:.2} ms (1.25 periods at {hz:.0} Hz, capped at 60) in {SLOW_WINDOWS} windows of {WINDOW_FRAMES} frames in a row; falling back to classic for this session",
+            v.avg_ms, v.p95_ms, v.limit_ms
+        );
         *mode = RenderMode::Classic;
-        st.2 = true;
+        st.1 = true;
     }
-    (st.0, st.1) = (600, 0.0);
 }
 
 #[cfg(test)]
@@ -396,8 +436,68 @@ mod tests {
         assert_eq!(shadow_budget("off").0, 0);
         assert!(shadow_budget("low").0 < shadow_budget("high").0);
         assert_eq!(shadow_budget("unknown"), shadow_budget("high"));
-        // 60 Hz: frames capped at 16.7 ms are fine, 25 ms are not; at 144 Hz the 12 ms line applies
-        assert!(!too_slow(16.7, 60.0) && too_slow(25.0, 60.0));
-        assert!(!too_slow(11.0, 144.0) && too_slow(13.0, 144.0));
+        assert!((fallback_limit_ms(60.0) - 20.833).abs() < 0.01);
+        assert_eq!(fallback_limit_ms(144.0), fallback_limit_ms(60.0));
+        assert!((fallback_limit_ms(30.0) - 41.667).abs() < 0.01);
+    }
+
+    /// Feeds `windows` windows of frame times from `frame(i)` after the warm-up; the first verdict and the window it came in.
+    fn run(windows: usize, focused: bool, hz: f32, frame: impl Fn(usize) -> f32) -> Option<(usize, SlowVerdict)> {
+        let mut j = FallbackJudge::default();
+        for _ in 0..WARMUP_FRAMES {
+            assert!(j.frame(100.0, focused, hz).is_none(), "warm-up never counts");
+        }
+        (0..windows * WINDOW_FRAMES).find_map(|i| j.frame(frame(i), focused, hz).map(|v| (i / WINDOW_FRAMES, v)))
+    }
+
+    #[test]
+    fn fallback_steady_60fps_with_vsync_jitter_stays() {
+        assert!(run(20, true, 60.0, |i| if i % 7 == 0 { 17.4 } else { 16.6 }).is_none());
+        // vsync off, fast GPU
+        assert!(run(20, true, 60.0, |_| 3.0).is_none());
+    }
+
+    #[test]
+    fn fallback_slow_p95_triggers_after_three_windows() {
+        // vsync at 60 Hz, every 10th frame misses vblank (33.3 ms): avg 18.3 ms, but p95 over 16.7 means 30 fps stutter
+        let (w, v) = run(20, true, 60.0, |i| if i % 10 == 0 { 33.3 } else { 16.7 }).unwrap();
+        assert_eq!(w, 2);
+        assert_eq!(v.p95_ms, 33.3);
+        assert!(v.avg_ms < v.limit_ms, "the old average rule would not have fired");
+    }
+
+    #[test]
+    fn fallback_single_spike_or_one_bad_window_does_not_trigger() {
+        // one 2 s hitch, then a few slow frames per window (room changes)
+        assert!(run(20, true, 60.0, |i| match i {
+            0 => 2000.0,
+            _ if i % 300 < 10 => 40.0,
+            _ => 16.7,
+        })
+        .is_none());
+        // a whole slow window (shader compiles after a level change), twice, but never three in a row
+        assert!(run(20, true, 60.0, |i| if (i / WINDOW_FRAMES) % 3 == 0 { 40.0 } else { 16.7 }).is_none());
+    }
+
+    #[test]
+    fn fallback_ignores_unfocused_frames() {
+        assert!(run(20, false, 60.0, |_| 50.0).is_none());
+        // focus lost mid-way restarts the warm-up and the streak
+        let mut j = FallbackJudge::default();
+        let mut fired = false;
+        for i in 0..20 * WINDOW_FRAMES {
+            fired |= j.frame(50.0, i % 1000 != 999, 60.0).is_some();
+        }
+        assert!(!fired);
+    }
+
+    #[test]
+    fn fallback_high_refresh_monitors() {
+        // 144 Hz with vsync, enhanced only reaching 72 fps (every frame misses one vblank): smooth enough, stays
+        assert!(run(20, true, 144.0, |_| 13.9).is_none());
+        // 240 Hz, vsync off, 100-150 fps
+        assert!(run(20, true, 240.0, |i| if i % 2 == 0 { 6.7 } else { 10.0 }).is_none());
+        // 144 Hz but under 48 fps for more than 5% of the frames: falls back
+        assert!(run(20, true, 144.0, |i| if i % 10 == 0 { 25.0 } else { 6.9 }).is_some());
     }
 }
