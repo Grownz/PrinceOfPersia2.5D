@@ -3,6 +3,14 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## Unreleased
+
+### Changed
+- Cutscenes: the princess chamber uses the palace texture mapping of the levels with `tile_textures` original (palace wall
+  faces, floors, lattice arches, voxel or flat columns 295 for the arcade, bed-gap column and front pillar, torch holders
+  346, voxel torch flames driven by the cutscene's torch frames), honouring `column_style` and `object_style`. Procedural
+  tiles, composition, camera and timing unchanged (`docs/texture_inventory.md` 17).
+
 ## [0.1.0] - 2026-11-18
 
 First release: a Windows x64 2.5D remake of the VGA *Prince of Persia* (1990) that reuses the original game logic and

@@ -3,7 +3,9 @@
 //! chamber built with the room builder (room.rs tiles, torch lights). The set stays at `ORIGIN`, away from the level rooms;
 //! the camera moves there for the cutscenes and the title/story screens.
 //! Per element: room, arcade, front pillar, window = tile geometry; actors, flames, hourglass, sand, bed = decoded original
-//! sprites as textured quads (the bed is a flat painted carpet in PV 981, so it stays a sprite). With character_style voxel
+//! sprites as textured quads (the bed is a flat painted carpet in PV 981, so it stays a sprite). With tile_textures original
+//! the set uses the palace texture mapping of the levels (walls, floors, arches, columns 295, holders 346 and, with voxel
+//! objects, the voxel flames; docs/texture_inventory.md 17); the sky opening and procedural tiles keep the plain boxes. With character_style voxel
 //! the actors (princess, Jaffar, kid, mouse) are voxel meshes built like the level characters (voxel.rs), anchored the same
 //! way; flames, hourglass, sand and the bed stay sprites (set dressing, not characters).
 use crate::room::{self, Chamber, Palette, TILE_H};
@@ -134,19 +136,25 @@ pub fn setup(mut cmds: Commands, g: Res<Game>, p: Res<Palette>, mut meshes: ResM
         cmds.spawn((Mesh3d(cube.clone()), MeshMaterial3d(star_mats[2].clone()), Transform::from_translation(o + c).with_scale(Vec3::splat(0.05)), StarDot(i), Chamber));
     }
     cmds.insert_resource(StarMats(star_mats));
-    // the column the bed picture leaves a gap for (PV 981 is transparent at px 68..77)
-    room::chamber_box(&mut cmds, &p, "stone", o + Vec3::new(wx(68.0), 0.0, 0.25), o + Vec3::new(wx(78.0), TILE_H, 0.5));
-    // the front pillar piece (PV 952 at x 240, drawn in front of the actors) as a stone column
-    room::chamber_box(&mut cmds, &p, "stone", o + Vec3::new(wx(240.0), 0.0, 0.8), o + Vec3::new(wx(256.0), TILE_H, 1.2));
-    // torches: holder, original flame sprite, the level torch light
-    for (i, &x) in TORCH_X.iter().enumerate() {
-        let cx = wx(x + 8.0);
-        room::chamber_box(&mut cmds, &p, "dark", o + Vec3::new(cx - 0.08, wy(TORCH_BOTTOM) - 0.25, -0.88), o + Vec3::new(cx + 0.08, wy(TORCH_BOTTOM) + 0.02, -0.75));
-        cmds.spawn((room::torch_light(), Transform::from_translation(o + Vec3::new(cx, wy(TORCH_BOTTOM) + 0.6, -0.2)), Chamber));
-        cmds.spawn((Mesh3d(meshes.add(Rectangle::new(1.0, 1.0))), MeshMaterial3d::<StandardMaterial>::default(), Transform::default(), Visibility::Hidden, FlameSprite(i), bevy::light::NotShadowCaster));
+    // the column the bed picture leaves a gap for (PV 981 is transparent at px 68..77); its front stays behind the bed (z 0.52)
+    if !room::chamber_column(&mut cmds, &p, o + Vec3::new(wx(72.5), 0.0, 0.25)) {
+        room::chamber_box(&mut cmds, &p, "stone", o + Vec3::new(wx(68.0), 0.0, 0.25), o + Vec3::new(wx(78.0), TILE_H, 0.5));
+    }
+    // the front pillar piece (PV 952 at x 240, 16 px, drawn in front of the actors) as a palace column
+    if !room::chamber_column(&mut cmds, &p, o + Vec3::new(wx(248.0), 0.0, 1.0)) {
+        room::chamber_box(&mut cmds, &p, "stone", o + Vec3::new(wx(240.0), 0.0, 0.8), o + Vec3::new(wx(256.0), TILE_H, 1.2));
     }
     let quad = meshes.add(Rectangle::new(1.0, 1.0));
     cut.quad = quad.clone();
+    // torches: holder (the level's 346 with original tiles), flame (original sprite, or the level's voxel flame), the level light
+    for (i, &x) in TORCH_X.iter().enumerate() {
+        let cx = wx(x + 8.0);
+        if !room::chamber_holder(&mut cmds, &p, o + Vec3::new(cx, wy(TORCH_BOTTOM), 0.0)) {
+            room::chamber_box(&mut cmds, &p, "dark", o + Vec3::new(cx - 0.08, wy(TORCH_BOTTOM) - 0.25, -0.88), o + Vec3::new(cx + 0.08, wy(TORCH_BOTTOM) + 0.02, -0.75));
+        }
+        cmds.spawn((room::torch_light(), Transform::from_translation(o + Vec3::new(cx, wy(TORCH_BOTTOM) + 0.6, -0.2)), Chamber));
+        cmds.spawn((Mesh3d(quad.clone()), MeshMaterial3d::<StandardMaterial>::default(), Transform::default(), Visibility::Hidden, FlameSprite(i), bevy::light::NotShadowCaster));
+    }
     for s in [Slot::Kid, Slot::Princess] {
         cmds.spawn((Mesh3d(quad.clone()), MeshMaterial3d::<StandardMaterial>::default(), Transform::default(), Visibility::Hidden, ActorSprite(s)));
     }
@@ -271,10 +279,11 @@ pub fn render(
     win: Single<&Window, With<bevy::window::PrimaryWindow>>,
     style: Res<crate::settings::CharacterStyle>,
     mut meshes: ResMut<Assets<Mesh>>,
+    pal: Res<Palette>,
     mut q: ParamSet<(
         Query<(&ActorSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d)>,
         Query<(&GlassSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>)>,
-        Query<(&FlameSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>)>,
+        Query<(&FlameSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d)>,
         Query<(&StarDot, &mut MeshMaterial3d<StandardMaterial>)>,
         Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>), With<Bed>>,
         Query<&mut BackgroundColor, With<FadeOverlay>>,
@@ -339,14 +348,22 @@ pub fn render(
         });
         set_vis(&mut vis, &mut mat, shown);
     }
-    // torch flames: PRINCE.DAT 151 + frame (palette 150)
+    // torch flames: PRINCE.DAT 151 + frame (palette 150); voxel objects: the level's voxel flame of that frame on its holder
     let idle = c.idle;
-    for (FlameSprite(i), mut t, mut vis, mut mat) in &mut q.p2() {
+    let vflames = room::chamber_flames(&pal);
+    for (FlameSprite(i), mut t, mut vis, mut mat, mut mesh) in &mut q.p2() {
         let frame = cs.map_or(((idle / 6 + *i as u32 * 5) % 9) as u8, |cs| cs.torch[*i]);
-        let shown = on_set.then(|| material(c, &mut imgs, &mut mats, 2, 151 + frame as u16, 150)).flatten().map(|(m, w, h)| {
-            place(&mut t, wx(TORCH_X[*i]), wy(TORCH_BOTTOM), -0.7, w, h, false);
-            m
-        });
+        let shown = match vflames {
+            Some((frames, fmat, rel)) => on_set.then(|| {
+                *t = Transform::from_translation(ORIGIN + Vec3::new(wx(TORCH_X[*i] + 8.0), wy(TORCH_BOTTOM), 0.0) + rel).with_scale(room::voxel_px());
+                mesh.set_if_neq(Mesh3d(frames[frame as usize % frames.len()].mesh.clone()));
+                fmat.clone()
+            }),
+            None => on_set.then(|| material(c, &mut imgs, &mut mats, 2, 151 + frame as u16, 150)).flatten().map(|(m, w, h)| {
+                place(&mut t, wx(TORCH_X[*i]), wy(TORCH_BOTTOM), -0.7, w, h, false);
+                m
+            }),
+        };
         set_vis(&mut vis, &mut mat, shown);
     }
     if let Some(cs) = cs {
@@ -405,5 +422,26 @@ mod tests {
         assert_eq!(crate::kid::screen_x(120, 0, 0x80, true), 142);
         assert!((super::wx(141.0) - (141.0 / 32.0 - 0.5)).abs() < 1e-6);
         assert_eq!(super::wy(166.0), 0.0);
+    }
+
+    /// The set's pieces through the palace mapping (docs/texture_inventory.md 17): every lattice screen but LatticeRight
+    /// gets its arch, the columns (set and added pillars) image 295, the torches holder 346; walls are built palace faces.
+    #[test]
+    fn chamber_pieces_use_the_palace_mapping() {
+        use crate::tiles::{pieces, tile_images, Role};
+        use pop_core::level::{Level, Tile};
+        // VPALACE (texture_inventory 2.2): the base-200 ids plus the palace slots 1201..1213
+        let palace = |id: u16| id < 1200 || (1201..=1213).contains(&id);
+        let l = super::chamber_level(&Level::parse(&[0u8; 4096]).expect("zero level"));
+        for idx in 0..10 {
+            let t = l.tile_at(1, idx).kind;
+            let arch = pieces(t, 0, true, palace).iter().any(|(r, _)| *r == Role::BackPanel);
+            assert_eq!(arch, t != Tile::LatticeRight, "{t:?}");
+        }
+        assert_eq!(l.tile_at(1, 13).kind, Tile::LatticePillar);
+        assert_eq!(tile_images(Tile::LatticePillar, 0, palace).1, Some(295));
+        assert_eq!(tile_images(Tile::Pillar, 0, palace).1, Some(295));
+        assert_eq!(pieces(Tile::Torch, 0, true, palace), vec![(Role::TorchStub, 346)]);
+        assert!(tile_images(Tile::Floor, 0, palace).0.is_some());
     }
 }

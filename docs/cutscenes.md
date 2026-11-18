@@ -506,6 +506,9 @@ uses the cutscene player.
     -> world x 4.25..4.8, standing on the floor in front of the actors' line;
   - pillar piece: a front column at px 240..255 -> world x 7.0..7.5, z in front of the actors (it occludes them, as the
     foretable does).
+- Implemented look: with `tile_textures` original the set uses the palace texture mapping of the levels (walls, floors,
+  arches, columns 295 for the arcade, the bed-gap column and the front pillar piece, torch holders 346, voxel flames with
+  `object_style` voxel); the sky opening, bed, hourglass and actors keep their own look (docs/texture_inventory.md 17).
 - Camera: the normal single-room gameplay framing, fixed (the original is a fixed full-screen view). Optional later: a slow
   dolly; keep it off by default for timing fidelity.
 - Flash: full-screen white overlay for the 5 flash frames (the existing `World::flash` overlay code), not the original flicker.

@@ -431,7 +431,7 @@ What the images are (checked by eye, sheets from `dump_png` at 6x): 241 / 242 ar
 | ExitLeft / ExitRight | frame 237 / 239 cut to 47 rows over a dark doorway, lintel 238 / 240 above | verified visually (both sets); each frame is drawn in its own column (the original draws +3 pieces one column to the right): guess |
 | Wall | dungeon 368 (mod 0) / 370 (mod 1) on the block, one row tall (`TILE_H - SLAB` top, no overlapping faces); palace: procedural | dungeon verified visually; palace KEEP (1-bit overlays need the unknown fill routine) |
 | SmallLattice, LatticeLeft, LatticeRight, Unknown31 | procedural | KEEP |
-| cutscene chamber (`spawn_chamber`) | procedural | KEEP (its own look) |
+| cutscene chamber (`spawn_chamber`) | procedural | superseded: palace mapping, section 17 |
 
 ## 6. Open questions and limits
 
@@ -784,3 +784,29 @@ overlapped the bottle top by one row (now on top). Tests `potion_kinds` (the tab
 levels 1..14 maps to a bottle of the expected size). Screenshots (classic + enhanced): level 2 room 13 blue hurt next to red heal,
 level 9 room 7 green invert (big), level 4 room 23 palace life bottle (165) with red bubbles. Not verified: on-screen RGB in DOSBox,
 the open potion (level 15 is not reachable with POP_LEVEL).
+
+## 17. Cutscene set (princess chamber)
+
+All cutscenes (intro / attract, levels 2, 4, 6, 8, 9, 12, time out, ending) share one set built at `cutscene::ORIGIN`
+(docs/cutscenes.md 6.2). It now uses the same mapping and builders as a **palace** level room (VPALACE, set index 1),
+honouring `tile_textures`, `column_style` and `object_style`; lighting is the set's own torch lights in both render modes.
+Code: `room.rs` `chamber_builder` (the room builder with the palace `TileSet` and voxel items, entities tagged `Chamber`),
+`chamber_column`, `chamber_holder`, `chamber_flames`; placement in `cutscene.rs` `setup` / `render`. Composition, camera
+and timing are unchanged; every added piece keeps the old box when its image is missing.
+
+| element | was | now (original tiles) |
+|---|---|---|
+| side walls (row 1, cols 0 / 9) | stone boxes | built palace wall faces (section 13), variant per tile of room 1 |
+| floors (row 2) | stone slabs | palace floor texture 241 / 242 / 243 |
+| lattice row (row 0) | metal plates | arches 1203 / 1204 / 1205 on the back wall (LatticeRight has no image: procedural plate, as in the levels) |
+| arcade columns (LatticePillar, cols 3 / 8) | stone boxes | column 295, voxel (round) or flat as `column_style` |
+| column in the bed gap (px 68..77) | 10-px stone box z 0.25..0.5 | column 295 at px 72.5, axis z 0.25 (front behind the bed at 0.52) |
+| front pillar piece (PV 952 at px 240, in front of the actors) | stone box z 0.8..1.2 | column 295 (16 px, as wide as PV 952) at px 248, axis z 1.0 |
+| torch holders (px 101 / 219) | dark boxes | holder 346: voxel (object_style voxel, no shadow) or the flat image on the back wall, cup at the flame's bottom line 116 |
+| torch flames | PRINCE.DAT 151..159 sprites | object_style voxel: the levels' voxel flame meshes, frame = the cutscene's own `torch[i]` (get_torch_frame), stem on the holder axis; flat: the sprites as before |
+
+Not mapped (current look kept): the night-sky opening and its stars (an arched door in PV 951, no tile piece; a balcony
+1210 / 1212 would need a layout change), the back wall slab, the hourglass, sand stream, bed (PV sprites), actors, fade and
+flash. `tile_textures=procedural`: identical to before (pixel diff 0 for intro, 2, 8, end, timeout in classic and enhanced).
+Known look: the voxel column in the bed gap is narrower than the 10-px gap, so the palace floor shows through it (the old box
+filled it). Test: `cutscene::tests::chamber_pieces_use_the_palace_mapping`.

@@ -208,15 +208,58 @@ fn room_builder<'a, 'w, 's>(cmds: &'a mut Commands<'w, 's>, level: &Level, room:
     B { cmds, p, origin, chamber: false, room, start_room: room == level.start_room as usize, tiles: p.tiles[palace as usize].as_ref(), items, cur: None }
 }
 
-/// The same builder for the cutscene set: entities carry `Chamber` instead of `RoomEntity`. The set keeps the procedural look.
+/// The builder for the cutscene set (a palace chamber): entities carry `Chamber` instead of `RoomEntity`; palace tile images,
+/// voxel columns and objects as in a palace level room (procedural tiles: the plain boxes, as before).
+fn chamber_builder<'a, 'w, 's>(cmds: &'a mut Commands<'w, 's>, room: usize, origin: Vec3, p: &'a Palette) -> B<'a, 'w, 's> {
+    B { cmds, p, origin, chamber: true, room, start_room: false, tiles: p.tiles[1].as_ref(), items: p.items.as_ref().map(|i| (i, 1)), cur: None }
+}
+
 pub fn spawn_chamber(cmds: &mut Commands, level: &Level, room: usize, origin: Vec3, p: &Palette) {
-    spawn_tiles(&mut B { cmds, p, origin, chamber: true, room, start_room: false, tiles: None, items: None, cur: None }, level, &[], room);
+    spawn_tiles(&mut chamber_builder(cmds, room, origin, p), level, &[], room);
 }
 
 /// A plain box of the room palette in the chamber set (`mat`: "stone", "dark", "wood", "flame"; anything else = metal).
 pub fn chamber_box(cmds: &mut Commands, p: &Palette, mat: &str, lo: Vec3, hi: Vec3) {
     let m = match mat { "stone" => p.stone.clone(), "dark" => p.dark.clone(), "wood" => p.wood.clone(), "flame" => p.flame.clone(), _ => p.metal.clone() };
-    B { cmds, p, origin: Vec3::ZERO, chamber: true, room: 0, start_room: false, tiles: None, items: None, cur: None }.put(&m, lo, hi);
+    chamber_builder(cmds, 0, Vec3::ZERO, p).put(&m, lo, hi);
+}
+
+/// A palace pillar (image 295, as LatticePillar) in the chamber set, one row tall: axis at `base.x` / `base.z`, standing on
+/// `base.y` (world). Voxel or flat column as in the levels; false with procedural tiles (the caller keeps its box).
+pub fn chamber_column(cmds: &mut Commands, p: &Palette, base: Vec3) -> bool {
+    let mut b = chamber_builder(cmds, 0, Vec3::ZERO, p);
+    let Some(c) = b.tiles.and_then(|s| s.extra(Tile::Pillar, 0)).cloned() else { return false };
+    let w = px_w(c.w);
+    if !b.voxel_column(b.tiles.and_then(|s| s.extra_id(Tile::Pillar, 0)), base.x - w / 2.0, base.y, base.y + TILE_H, base.z) {
+        b.put(&c.mat, base - Vec3::new(w / 2.0, 0.0, w / 2.0), base + Vec3::new(w / 2.0, TILE_H, w / 2.0));
+    }
+    true
+}
+
+/// A torch holder (346) in the chamber set as in the levels, `top` = the level's flame anchor (world: cup centre x, y the
+/// flame stands on): the voxel holder with voxel objects, else the flat image; false with procedural tiles (keep the box).
+pub fn chamber_holder(cmds: &mut Commands, p: &Palette, top: Vec3) -> bool {
+    let mut b = chamber_builder(cmds, 0, Vec3::ZERO, p);
+    if let Some((items, h, axis)) = b.objects().filter(|(i, _)| !i.flames.is_empty()).and_then(|(i, o)| Some((i, o.ids.get(&346)?.clone(), o.holder_axis))) {
+        let e = b.object(&h, &items.mat, Vec3::new(top.x - px_w(axis), top.y - px_h(h.h as f32 - 2.0), TORCH_Z), 1.0);
+        b.cmds.entity(e).insert(bevy::light::NotShadowCaster);
+        return true;
+    }
+    let Some(s) = b.tiles.map_or(vec![], |s| s.pieces(Tile::Torch, 0)).into_iter().find(|(r, _)| *r == Role::TorchStub) else { return false };
+    b.sprite(&s.1, Vec3::new(top.x - 0.5, top.y - px_h(s.1.h - 2.0), -0.86));
+    true
+}
+
+/// Voxel torch flames for the chamber (voxel objects with the holder built): frames, material and the bottom-left corner of
+/// a flame relative to its `top` (as `chamber_holder`), one voxel = one pixel (scale `voxel_px`).
+pub fn chamber_flames(p: &Palette) -> Option<(&[crate::items::Model], &Handle<StandardMaterial>, Vec3)> {
+    let i = p.items.as_ref().filter(|i| !i.flames.is_empty() && i.objects[1].ids.contains_key(&346))?;
+    Some((&i.flames, &i.flame_mat, Vec3::new(-px_w(FLAME_AXIS), -px_h(FLAME_SINK), TORCH_Z)))
+}
+
+/// Scale of a voxel model whose one voxel is one screen pixel (1/32 unit across and deep, TILE_H/63 up).
+pub fn voxel_px() -> Vec3 {
+    Vec3::new(1.0 / 32.0, px_h(1.0), 1.0 / 32.0)
 }
 
 /// What a tile's pieces are built from: kind, modifier (not for a loose floor: its entity animates itself from it) and the
