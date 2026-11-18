@@ -6,7 +6,8 @@
 //! (with it on: Ctrl+arrows = neighbouring room, Ctrl+PageUp/PageDown = level, sequence viewer keys).
 //! POP_LEVEL / POP_ROOM skip the title; POP_CUTSCENE=<level>|end|timeout|intro plays that cutscene at once (then quits
 //! back into the normal flow); POP_SOUND=original uses the game's own sounds; POP_DATA = game data folder;
-//! POP_PERF=1 logs the average frame time (vsync off) and room rebuilds every 300 frames.
+//! POP_PERF=1 logs the average frame time (vsync off) and room rebuilds every 300 frames. F9 / POP_FPS=1 frame-time overlay,
+//! POP_BENCH=<frames> benchmark run (POP_RES, POP_FX: perf.rs, docs/enhanced_perf.md).
 //! POP_RENDER / POP_CHARS / POP_TILES / POP_COLUMNS / POP_OBJECTS override settings.json "render_mode" / "character_style" / "tile_textures" / "column_style" / "object_style"; F5 toggles classic / enhanced rendering,
 //! F6 sprite / voxel characters,
 //! F7 (debug text on, or POP_DEBUG_CAM=1) a closer, turned camera on the kid (POP_CAM_ANGLE="degrees[,distance]").
@@ -16,6 +17,7 @@ mod enhanced;
 mod flow;
 mod items;
 mod kid;
+mod perf;
 mod room;
 mod settings;
 mod synth;
@@ -136,19 +138,27 @@ fn main() {
     let playing = || in_state(flow::Screen::Playing);
 
     let perf = std::env::var("POP_PERF").is_ok();
+    let bench = perf::bench_frames().is_some();
     let (render_mode, char_style) = set.render();
+    // POP_RES=WxH (windowed) or "full" (borderless fullscreen at the monitor's size), for benchmarks
+    let res = std::env::var("POP_RES").ok();
     let window = Window {
         title: "Prince of Persia x64".into(),
-        resolution: (set.width.max(320), set.height.max(200)).into(),
-        mode: if set.borderless() { WindowMode::BorderlessFullscreen(MonitorSelection::Current) } else { WindowMode::Windowed },
-        // POP_PERF measures the real frame cost, so it turns vsync off
-        present_mode: if perf { PresentMode::AutoNoVsync } else { PresentMode::AutoVsync },
+        resolution: res.as_deref().and_then(perf::parse_res).unwrap_or((set.width.max(320), set.height.max(200))).into(),
+        mode: if res.as_deref() == Some("full") || (res.is_none() && set.borderless()) { WindowMode::BorderlessFullscreen(MonitorSelection::Current) } else { WindowMode::Windowed },
+        // POP_PERF / POP_BENCH measure the real frame cost, so they turn vsync off (Immediate where the surface has it)
+        present_mode: if perf || bench { PresentMode::AutoNoVsync } else { PresentMode::AutoVsync },
         resizable: true,
         ..default()
     };
 
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }).set(bevy::log::LogPlugin { custom_layer: log_file_layer, ..default() }))
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }).set(bevy::log::LogPlugin { custom_layer: log_file_layer, ..default() }));
+    // per-pass GPU times (wgpu timestamp queries; the device already has TIMESTAMP_QUERY when the adapter offers it)
+    if perf::gpu_timing() {
+        app.add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin);
+    }
+    app
         .insert_resource(set.key_map())
         .insert_resource(render_mode)
         .insert_resource(char_style)
@@ -197,6 +207,7 @@ fn main() {
                 char_style_key,
                 (enhanced::mode_key, enhanced::watchdog, enhanced::apply, enhanced::torch_shadows).chain(),
                 perf_log.run_if(move || perf),
+                (perf::overlay, perf::bench, perf::casters),
                 screenshot_and_quit,
             )
                 .chain(),
@@ -247,7 +258,7 @@ fn probe_gpu(info: Option<Res<bevy::render::renderer::RenderAdapterInfo>>, adapt
         return;
     };
     let rq = adapter.is_some_and(|a| a.features().contains(bevy::render::settings::WgpuFeatures::EXPERIMENTAL_RAY_QUERY));
-    info!("GPU: {} ({:?}, {:?}, driver {}), ray queries: {}; renderer {:?}", info.name, info.backend, info.device_type, info.driver, if rq { "exposed by the adapter (not enabled)" } else { "no" }, *mode);
+    info!("GPU: {} ({:?}, {:?}, driver {} {}), ray queries: {}; renderer {:?}", info.name, info.backend, info.device_type, info.driver, info.driver_info, if rq { "exposed by the adapter (not enabled)" } else { "no" }, *mode);
 }
 
 /// F7 with the debug text on (or POP_DEBUG_CAM=1): a closer camera, turned 35 degrees around the kid, to inspect voxel depth.

@@ -20,6 +20,7 @@
 | F3 | Debug text and debug keys |
 | F5 | Rendering: classic / enhanced (torch and sun shadows, SSAO, bloom; saved as `render_mode`) |
 | F6 | Characters: original sprites / voxel figures built from them (saved as `character_style`) |
+| F9 | Frame-time overlay (top right): FPS, avg / min / max / 1% low over 120 frames, mode, resolution, mesh and light counts, GPU pass times when started with `POP_FPS=1` |
 
 The keypad is fixed like the original (its key handler `0000:1533` reads scancodes 0x47..0x50): keypad 1, 3 and 0 (End, PgDn, Ins)
 do nothing. It works alongside the rebindable keys below.
@@ -28,6 +29,13 @@ With the debug text on (F3): Ctrl+arrows = neighbouring room, Ctrl+PageUp / Ctrl
 `,` / `.` = previous / next animation sequence (sequence viewer), Space = restart the sequence, F = flip, C = back to the
 controlled kid at the level start. F7 = closer camera turned 35 degrees around the kid (inspect the voxel depth; also
 `POP_DEBUG_CAM=1`; `POP_CAM_ANGLE="degrees[,distance]"` sets its angle and distance, default 34 degrees, 4 units).
+
+Performance (docs/enhanced_perf.md): `POP_FPS=1` starts with the F9 overlay on and per-pass GPU timing (wgpu timestamp
+queries; F9 alone shows CPU frame times only). `POP_BENCH=<frames>` runs a benchmark (vsync off, 500 warm-up frames,
+`POP_BENCH_WARMUP`), logs one `BENCH ...` line and quits; `POP_RES=WxH` or `full` sets the window; `POP_FX` switches
+enhanced features off for cost measurements (`no_torch_shadows`, `no_sun_shadow`, `no_ssao`, `no_bloom`, `no_smaa`,
+`no_hdr`, `no_ambient`, `lights=N`, `point_map=N`, `dir_map=N`, `ssao=low|medium|high|ultra`, `filter=hw|gauss|temporal`,
+`rooms=1`, `casters=boxes|none`). `tools/bench.ps1` runs a matrix and prints a table.
 
 The kid's five keys (left, right, up, down, shift) can be rebound in `settings.json` under `"keys"`, each as a list of
 Bevy `KeyCode` names, for example `"left": ["ArrowLeft", "KeyA"]`. Unknown names are ignored with a warning; an empty

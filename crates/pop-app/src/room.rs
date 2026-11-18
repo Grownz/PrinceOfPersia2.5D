@@ -18,7 +18,7 @@ pub struct Chamber;
 
 #[derive(Resource)]
 pub struct Palette {
-    cube: Handle<Mesh>,
+    pub cube: Handle<Mesh>,
     stone: Handle<StandardMaterial>,
     dark: Handle<StandardMaterial>,
     wood: Handle<StandardMaterial>,
@@ -184,7 +184,8 @@ pub fn build_room(mut cmds: Commands, g: Res<Game>, p: Res<Palette>) {
         (if link(d, 0) != 0 { link(d, 0) } else { link(l, 3) }, -1, -1),
         (if link(d, 1) != 0 { link(d, 1) } else { link(r, 3) }, 1, -1),
     ];
-    for (room, dx, dy) in around {
+    // POP_FX=rooms=1 (perf measurements): only the current room
+    for (room, dx, dy) in around.into_iter().take(crate::perf::fx().rooms.unwrap_or(9)) {
         if (1..=ROOMS as u8).contains(&room) {
             let origin = Vec3::new(dx as f32 * COLS as f32, dy as f32 * ROWS as f32 * TILE_H, 0.0);
             spawn_room(&mut cmds, level, &g.world.mobs, room as usize, origin, &p, crate::kid::palace(g.level));
