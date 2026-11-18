@@ -183,6 +183,149 @@ pub fn torch_shadows(mut cmds: Commands, mode: Res<RenderMode>, set: Res<Setting
     }
 }
 
+/// Point (and spot) light shadow views, all in one go. Bevy 0.20 renders each cube face of a shadowed point light as a root
+/// view that runs the whole `Core3d` camera schedule (~45 systems on the multithreaded executor; all but five skip, the view
+/// has no camera components), and each of the five records its own command encoder. 4 torches = 24 schedule runs and 120
+/// command buffers per frame, serial on the render thread: the largest CPU cost of enhanced mode (docs/enhanced_perf.md 5).
+/// This system runs in `RenderGraphSystems::Render` (after the sparse buffer uploads in `Begin`: ordered only before
+/// `camera_driver`, it ran ahead of them and drew changed meshes one frame stale) and calls exactly those five Bevy systems,
+/// per view in `Core3d`'s order and with its run condition, sharing one command encoder per light; then it takes the views out of `camera_driver`'s list for this frame
+/// (`prepare_lights` adds them again next frame). Same commands in the same order on the GPU, same image.
+pub fn light_shadow_views_plugin(app: &mut App) {
+    use bevy::render::{renderer::{RenderGraph, RenderGraphSystems}, RenderApp};
+    let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
+    render_app.add_systems(RenderGraph, light_shadow_views.in_set(RenderGraphSystems::Render).before(bevy::core_pipeline::schedule::camera_driver));
+}
+
+mod shadow_views {
+    pub use bevy::core_pipeline::prepass::{DeferredPrepass, DepthPrepass, MotionVectorPrepass, NormalPrepass};
+    pub use bevy::core_pipeline::schedule::RootNonCameraView;
+    pub use bevy::pbr::*;
+    pub use bevy::prelude::*;
+    pub use bevy::render::batching::gpu_preprocessing::{BatchedInstanceBuffers, BuildIndirectParametersMetadata, IndirectParametersBuffers};
+    pub use bevy::render::diagnostic::{DiagnosticsRecorder, RecordDiagnostics};
+    pub use bevy::render::render_phase::ViewBinnedRenderPhases;
+    pub use bevy::render::render_resource::PipelineCache;
+    pub use bevy::render::renderer::{CurrentView, RenderContext, ViewQuery};
+    pub use bevy::render::occlusion_culling::OcclusionCulling;
+    pub use bevy::render::view::{ExtractedView, NoIndirectDrawing, ViewUniformOffset};
+    pub type Prepass = Or<(With<DepthPrepass>, With<NormalPrepass>, With<MotionVectorPrepass>, With<DeferredPrepass>, With<ShadowView>)>;
+    /// `early_prepass_build_indirect_parameters`' run condition in `Core3d`
+    pub type Indirect = (With<PreprocessBindGroups>, Without<SkipGpuPreprocess>, Without<NoIndirectDrawing>, Prepass);
+    pub type Mesh = BatchedInstanceBuffers<MeshUniform, MeshInputUniform>;
+    /// the parameters of `allocate_uniforms`, `unpack_bins`, `early_gpu_preprocess`, `early_prepass_build_indirect_parameters`
+    /// and `shared_shadow_pass` without their `RenderContext`
+    pub type Alloc = (
+        ViewQuery<'static, 'static, Option<&'static ViewLightEntities>, Without<SkipGpuPreprocess>>,
+        Query<'static, 'static, &'static ExtractedView, Without<SkipGpuPreprocess>>,
+        Query<'static, 'static, &'static LightEntity>,
+        Res<'static, Mesh>,
+        Res<'static, PipelineCache>,
+        Res<'static, PreprocessPipelines>,
+        Res<'static, UniformAllocationBindGroups>,
+    );
+    pub type Unpack = (
+        ViewQuery<'static, 'static, Option<&'static ViewLightEntities>, Without<SkipGpuPreprocess>>,
+        Query<'static, 'static, &'static ExtractedView, Without<SkipGpuPreprocess>>,
+        Query<'static, 'static, &'static LightEntity>,
+        Res<'static, Mesh>,
+        Res<'static, PipelineCache>,
+        Res<'static, PreprocessPipelines>,
+        Res<'static, BinUnpackingBindGroups>,
+    );
+    pub type Preprocess = (
+        ViewQuery<'static, 'static, Option<&'static ViewLightEntities>, Without<SkipGpuPreprocess>>,
+        Query<'static, 'static, (&'static ExtractedView, Option<&'static PreprocessBindGroups>, Option<&'static ViewUniformOffset>, Has<NoIndirectDrawing>, Has<OcclusionCulling>), Without<SkipGpuPreprocess>>,
+        Query<'static, 'static, &'static LightEntity>,
+        Res<'static, Mesh>,
+        Res<'static, PipelineCache>,
+        Res<'static, PreprocessPipelines>,
+    );
+    pub type Build = (
+        ViewQuery<'static, 'static, &'static ExtractedView>,
+        Res<'static, PreprocessPipelines>,
+        Option<Res<'static, BuildIndirectParametersBindGroups>>,
+        Res<'static, PipelineCache>,
+        Option<Res<'static, IndirectParametersBuffers>>,
+        Res<'static, BuildIndirectParametersMetadata>,
+    );
+    pub type Pass = (
+        &'static World,
+        ViewQuery<'static, 'static, (Entity, &'static ShadowView, &'static ExtractedView, Has<OcclusionCulling>)>,
+        Res<'static, ViewBinnedRenderPhases<Shadow>>,
+    );
+    pub type Ctx = RenderContext<'static, 'static>;
+}
+
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn light_shadow_views(
+    world: &mut World,
+    views: &mut QueryState<Entity, With<shadow_views::RootNonCameraView>>,
+    indirect: &mut QueryState<(), shadow_views::Indirect>,
+    mut ctx_s: Local<Vec<bevy::ecs::system::SystemState<shadow_views::Ctx>>>,
+    alloc_s: &mut bevy::ecs::system::SystemState<shadow_views::Alloc>,
+    unpack_s: &mut bevy::ecs::system::SystemState<shadow_views::Unpack>,
+    pre_s: &mut bevy::ecs::system::SystemState<shadow_views::Preprocess>,
+    build_s: &mut bevy::ecs::system::SystemState<shadow_views::Build>,
+    pass_s: &mut bevy::ecs::system::SystemState<shadow_views::Pass>,
+) {
+    use shadow_views::*;
+    if crate::perf::fx().core3d_shadows {
+        return;
+    }
+    let list: Vec<Entity> = views.iter(world).collect();
+    // the late (occlusion culling) passes are not called here: views with OcclusionCulling stay on Core3d
+    if list.is_empty() || list.iter().any(|v| world.entity(*v).contains::<OcclusionCulling>()) {
+        return;
+    }
+    // one encoder per light (6 cube faces): Bevy finishes encoders in parallel just before the submit, one big one alone took
+    // ~1 ms there
+    let groups = list.len().div_ceil(6);
+    while ctx_s.len() < groups {
+        let s = bevy::ecs::system::SystemState::new(world);
+        ctx_s.push(s);
+    }
+    // `any_match_filter` is evaluated per schedule run in Core3d; nothing changes between the views of one frame
+    let build_indirect = indirect.iter(world).next().is_some();
+    if let (Some(d), Ok(mut ctx)) = (world.get_resource::<DiagnosticsRecorder>(), ctx_s[0].get(world)) {
+        d.begin_time_span(ctx.command_encoder(), "light_shadow_views".into());
+    }
+    for (i, v) in list.iter().enumerate() {
+        world.insert_resource(CurrentView(*v));
+        let w: &World = world;
+        let ctx_s = &mut ctx_s[i / 6];
+        // each call skips when its parameters do not validate, as a system in a schedule would
+        if let (Ok((a, b, c, d, e, f, g)), Ok(ctx)) = (alloc_s.get(w), ctx_s.get(w)) {
+            allocate_uniforms(a, b, c, d, e, f, g, ctx);
+        }
+        if let (Ok((a, b, c, d, e, f, g)), Ok(ctx)) = (unpack_s.get(w), ctx_s.get(w)) {
+            unpack_bins(a, b, c, d, e, f, g, ctx);
+        }
+        if let (Ok((a, b, c, d, e, f)), Ok(ctx)) = (pre_s.get(w), ctx_s.get(w)) {
+            early_gpu_preprocess(a, b, c, d, e, f, ctx);
+        }
+        if build_indirect {
+            if let (Ok((a, b, c, d, e, f)), Ok(ctx)) = (build_s.get(w), ctx_s.get(w)) {
+                early_prepass_build_indirect_parameters(a, b, c, d, e, f, ctx);
+            }
+        }
+        if let (Ok((a, b, c)), Ok(ctx)) = (pass_s.get(w), ctx_s.get(w)) {
+            shared_shadow_pass::<EARLY_SHADOW_PASS>(a, b, c, ctx);
+        }
+    }
+    world.remove_resource::<CurrentView>();
+    if let (Some(d), Ok(mut ctx)) = (world.get_resource::<DiagnosticsRecorder>(), ctx_s[groups - 1].get(world)) {
+        d.end_time_span(ctx.command_encoder());
+    }
+    // the encoders go to PendingCommandBuffers here, in view order, before camera_driver adds the cameras' work
+    for s in &mut ctx_s[..groups] {
+        s.apply(world);
+    }
+    for v in list {
+        world.entity_mut(v).remove::<RootNonCameraView>();
+    }
+}
+
 /// F5: classic <-> enhanced, saved in settings.json.
 pub fn mode_key(k: Res<ButtonInput<KeyCode>>, mut mode: ResMut<RenderMode>, mut set: ResMut<Settings>) {
     if !k.just_pressed(KeyCode::F5) {
