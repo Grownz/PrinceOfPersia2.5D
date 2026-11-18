@@ -519,6 +519,7 @@ pub fn menu_action(mut ui: ResMut<MenuUi>, mut g: ResMut<Game>, a: Res<KidAssets
         Action::Quit => {
             exit.write(AppExit::Success);
         }
+        Action::Download(i) => crate::soundfont::start(i),
         Action::Close | Action::Changed(_) => {}
     }
 }

@@ -14,6 +14,7 @@ pub enum Page {
     Settings,
     Controls,
     Hof,
+    SoundFonts,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -30,6 +31,12 @@ pub enum Item {
     Quit,
     /// index into OPTS
     Opt(usize),
+    /// opens the SoundFonts page
+    SoundFonts,
+    /// a downloadable SoundFont (index into soundfont::FONTS)
+    Font(usize),
+    /// a line of the licence notice (not selectable in effect)
+    Note(usize),
     Back,
 }
 
@@ -55,6 +62,8 @@ pub enum Action {
     Quit,
     /// OPTS[i] changed in the settings: apply it and save settings.json
     Changed(usize),
+    /// start downloading soundfont::FONTS[i] (the user confirmed the licence notice)
+    Download(usize),
 }
 
 /// One settings.json key: shown label, the values it cycles through, whether it applies at once (else after a restart).
@@ -68,14 +77,15 @@ pub struct Opt {
 const ON_OFF: &[&str] = &["true", "false"];
 const VOLUMES: &[&str] = &["0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1"];
 
-pub const OPTS: [Opt; 14] = [
+pub const OPTS: [Opt; 15] = [
     Opt { key: "render_mode", label: "Rendering", values: &["classic", "enhanced"], live: true },
     Opt { key: "character_style", label: "Characters", values: &settings::CHARACTER_STYLES, live: true },
     Opt { key: "camera_scroll", label: "Room change", values: &settings::CAMERA_SCROLLS, live: true },
     Opt { key: "window", label: "Window", values: &["windowed", "borderless"], live: true },
     Opt { key: "volume", label: "Volume", values: VOLUMES, live: true },
     Opt { key: "muted", label: "Mute", values: ON_OFF, live: true },
-    Opt { key: "sound", label: "Sound set", values: &["synth", "original"], live: false },
+    Opt { key: "sound", label: "Sound set", values: &["synth", "original", "adlib", "soundfont"], live: false },
+    Opt { key: "soundfont", label: "SoundFont", values: &["musescore", "fluidr3"], live: false },
     Opt { key: "tile_textures", label: "Tile textures", values: &settings::TILE_TEXTURES, live: false },
     Opt { key: "column_style", label: "Columns", values: &settings::COLUMN_STYLES, live: false },
     Opt { key: "object_style", label: "Objects", values: &settings::OBJECT_STYLES, live: false },
@@ -153,6 +163,7 @@ impl Menu {
             (Page::Settings, _) => "SETTINGS",
             (Page::Controls, _) => "CONTROLS",
             (Page::Hof, _) => "HALL OF FAME",
+            (Page::SoundFonts, _) => "SOUNDFONTS",
         }
     }
 
@@ -161,7 +172,11 @@ impl Menu {
         match (self.page, self.ctx) {
             (Page::Main, Ctx::Title) => [Start, Load, Settings, Controls, Hof, Quit].into_iter().filter(|&i| i != Load || self.has_save).collect(),
             (Page::Main, Ctx::Pause) => [Resume, Restart, Save, Settings, Controls, QuitTitle, Quit].into_iter().filter(|&i| i != Save || self.can_save).collect(),
-            (Page::Settings, _) => (0..OPTS.len()).map(Item::Opt).chain([Back]).collect(),
+            (Page::Settings, _) => (0..OPTS.len()).map(Item::Opt).chain([Item::SoundFonts, Back]).collect(),
+            (Page::SoundFonts, _) => match crate::soundfont::confirming() {
+                Some(_) => (0..3).map(Item::Note).chain([Item::Font(crate::soundfont::confirming().unwrap()), Back]).collect(),
+                None => (0..crate::soundfont::FONTS.len()).map(Item::Font).chain([Back]).collect(),
+            },
             (Page::Controls | Page::Hof, _) => vec![Back],
         }
     }
@@ -179,6 +194,16 @@ impl Menu {
             Item::QuitTitle => "Quit to title".into(),
             Item::Quit => "Quit game".into(),
             Item::Back => "Back".into(),
+            Item::SoundFonts => "SoundFonts (download)".into(),
+            Item::Font(i) => crate::soundfont::label(i),
+            Item::Note(k) => match crate::soundfont::confirming() {
+                Some(i) => match k {
+                    0 => format!("{}: {}", crate::soundfont::FONTS[i].name, crate::soundfont::licence_line(i)),
+                    1 => "Downloaded from the source's server. You are".into(),
+                    _ => "responsible for respecting its licence.".into(),
+                },
+                None => String::new(),
+            },
             Item::Opt(i) => {
                 let o = &OPTS[i];
                 format!("{}:  < {} >{}", o.label, shown(o.key, &value(s, o.key)), if o.live { "" } else { "  (after restart)" })
@@ -199,9 +224,18 @@ impl Menu {
                 return Some(Action::Changed(i));
             }
             (Nav::Left | Nav::Right, _) => {}
+            (Nav::Back, _) if self.page == Page::SoundFonts && crate::soundfont::confirming().is_some() => {
+                crate::soundfont::cancel_all();
+                self.sel = 0;
+            }
             (Nav::Back, _) | (Nav::Enter, Item::Back) => {
                 if self.page == Page::Main {
                     return Some(Action::Close);
+                }
+                if self.page == Page::SoundFonts {
+                    self.page = Page::Settings;
+                    self.sel = self.items().iter().position(|&i| i == Item::SoundFonts).unwrap_or(0);
+                    return None;
                 }
                 let from = match self.page {
                     Page::Settings => Item::Settings,
@@ -211,6 +245,19 @@ impl Menu {
                 self.page = Page::Main;
                 self.sel = self.items().iter().position(|&i| i == from).unwrap_or(0);
             }
+            (Nav::Enter, Item::SoundFonts) => (self.page, self.sel) = (Page::SoundFonts, 0),
+            (Nav::Enter, Item::Font(i)) => match crate::soundfont::status(i) {
+                crate::soundfont::Status::Confirm => {
+                    self.sel = i;
+                    return Some(Action::Download(i));
+                }
+                crate::soundfont::Status::Absent | crate::soundfont::Status::Failed(_) => {
+                    crate::soundfont::ask(i);
+                    self.sel = 3; // the font line below the notice
+                }
+                _ => {}
+            },
+            (Nav::Enter, Item::Note(_)) => {}
             (Nav::Enter, Item::Settings) => (self.page, self.sel) = (Page::Settings, 0),
             (Nav::Enter, Item::Controls) => (self.page, self.sel) = (Page::Controls, 0),
             (Nav::Enter, Item::Hof) => (self.page, self.sel) = (Page::Hof, 0),

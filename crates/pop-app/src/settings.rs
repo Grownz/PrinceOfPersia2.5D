@@ -13,8 +13,10 @@ pub struct Settings {
     pub height: u32,
     pub volume: f32,
     pub muted: bool,
-    /// "synth" or "original" (POP_SOUND overrides)
+    /// "synth", "original", "adlib" (original effects, music through the AdLib driver + OPL2 emulation) or "soundfont" (POP_SOUND overrides)
     pub sound: String,
+    /// sound = "soundfont": which downloaded SoundFont plays the music ("musescore" or "fluidr3", Settings > SoundFonts)
+    pub soundfont: String,
     pub keys: Bindings,
     /// folder with the user's own game files (LEVELS.DAT, PRINCE.EXE, ...); tried after POP_DATA, exe dir and cwd
     pub data_path: Option<String>,
@@ -134,7 +136,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into() }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into() }
     }
 }
 
@@ -165,6 +167,7 @@ impl Settings {
             volume: field(&o, "volume", d.volume, |v| (0.0..=1.0).contains(v)),
             muted: field(&o, "muted", d.muted, |_| true),
             sound: field(&o, "sound", d.sound, |_| true),
+            soundfont: field(&o, "soundfont", d.soundfont, |s| crate::soundfont::index_of(s).is_some()),
             keys,
             data_path: field(&o, "data_path", d.data_path, |_| true),
             render_mode: field(&o, "render_mode", d.render_mode, |m| RENDER_MODES.contains(&m.as_str())),

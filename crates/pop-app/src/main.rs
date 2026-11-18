@@ -25,9 +25,12 @@ mod items;
 mod kid;
 mod menu;
 mod menu_ui;
+mod mixer;
+mod music;
 mod perf;
 mod room;
 mod settings;
+mod soundfont;
 #[cfg(feature = "solari")]
 mod solari;
 mod synth;

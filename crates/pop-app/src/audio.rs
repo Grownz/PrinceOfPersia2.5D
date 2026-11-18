@@ -3,57 +3,27 @@
 //! digitized effects (DIGISND*.DAT) and PC-speaker tunes (IBM_SND*.DAT) instead. M = mute, - / = volume. docs/audio.md.
 use crate::settings::Settings;
 use crate::Game;
-use bevy::audio::{AddAudioSource, ChannelCount, Decodable, Sample, SampleRate, Source, Volume};
+use crate::mixer::{Cmd, Mixer, Shared};
+use bevy::audio::{AddAudioSource, Volume};
 use bevy::prelude::*;
 use pop_core::dat::Dat;
 use std::sync::Arc;
 
 /// Mono PCM clip generated in memory.
-#[derive(Asset, TypePath, Clone)]
+#[derive(Clone)]
 pub struct Pcm {
     rate: u32,
     samples: Arc<[f32]>,
 }
 
-pub struct PcmDecoder(Pcm, usize);
-
-impl Iterator for PcmDecoder {
-    type Item = Sample;
-    fn next(&mut self) -> Option<Sample> {
-        let s = *self.0.samples.get(self.1)?;
-        self.1 += 1;
-        Some(s as Sample)
-    }
-}
-
-impl Source for PcmDecoder {
-    fn current_span_len(&self) -> Option<usize> {
-        Some(self.0.samples.len() - self.1)
-    }
-    fn channels(&self) -> ChannelCount {
-        ChannelCount::new(1).unwrap()
-    }
-    fn sample_rate(&self) -> SampleRate {
-        SampleRate::new(self.0.rate).unwrap()
-    }
-    fn total_duration(&self) -> Option<std::time::Duration> {
-        Some(std::time::Duration::from_secs_f32(self.0.samples.len() as f32 / self.0.rate as f32))
-    }
-}
-
-impl Decodable for Pcm {
-    type Decoder = PcmDecoder;
-    fn decoder(&self) -> PcmDecoder {
-        PcmDecoder(self.clone(), 0)
-    }
-}
-
 /// One clip per sound id (index = id) and its length in fixed steps (60 Hz).
 #[derive(Resource)]
-pub struct Sounds(Vec<Option<(Handle<Pcm>, u32)>>);
+pub struct Sounds(Vec<Option<(Pcm, u32)>>);
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct AudioState {
+    /// command queue of the single mixer source (limiter, docs/audio.md 7)
+    mix: Arc<Shared>,
     /// fixed steps until every started sound has ended ("a sound is playing" in the original)
     pub busy: u32,
     gen: u32,
@@ -63,13 +33,13 @@ pub struct AudioState {
 
 /// A playing sound effect / music cue.
 #[derive(Component)]
-pub struct Sfx(u8);
+pub struct Sfx(#[allow(dead_code)] u8);
 
 const IDS: u8 = 57;
 
 pub fn plugin(app: &mut App) {
-    app.add_audio_source::<Pcm>()
-        .insert_resource(AudioState { busy: 0, gen: 0, volume: 0.7, muted: false })
+    app.add_audio_source::<Mixer>()
+        .insert_resource(AudioState { volume: 0.7, ..default() })
         .add_systems(Startup, setup);
 }
 
@@ -108,21 +78,44 @@ fn decode(r: &[u8]) -> Option<Pcm> {
     }
 }
 
-fn setup(mut cmds: Commands, mut pcms: ResMut<Assets<Pcm>>, mut a: ResMut<AudioState>, set: Res<Settings>) {
+/// The SoundFont chosen in settings ("soundfont" key), loaded from `soundfonts/` next to the exe.
+fn load_soundfont(id: &str) -> Option<Arc<rustysynth::SoundFont>> {
+    let i = crate::soundfont::index_of(id)?;
+    let path = crate::soundfont::path(i);
+    let mut r = std::io::BufReader::new(std::fs::File::open(&path).map_err(|e| warn!("soundfont {}: {e} (download it in Settings > SoundFonts); using adlib", path.display())).ok()?);
+    rustysynth::SoundFont::new(&mut r).map_err(|e| warn!("soundfont {}: {e:?}; using adlib", path.display())).ok().map(Arc::new)
+}
+
+fn setup(mut cmds: Commands, mut mixers: ResMut<Assets<Mixer>>, mut a: ResMut<AudioState>, set: Res<Settings>) {
     (a.volume, a.muted) = (set.volume.clamp(0.0, 1.0), set.muted);
-    let orig = std::env::var("POP_SOUND").map_or(set.sound == "original", |v| v == "original");
+    let mode = std::env::var("POP_SOUND").unwrap_or_else(|_| set.sound.clone());
+    // soundfont: the downloaded SoundFont plays the music; without a usable file it falls back to adlib (log line)
+    let sf = (mode == "soundfont").then(|| load_soundfont(&set.soundfont)).flatten();
+    let adlib = mode == "adlib" || (mode == "soundfont" && sf.is_none()); // original effects + MIDI through the AdLib driver and an OPL2 emulator
+    let orig = adlib || sf.is_some() || mode == "original";
     let dir = crate::data_dir();
     let dats: Vec<Dat> = if orig { ["DIGISND1", "DIGISND2", "DIGISND3", "IBM_SND1", "IBM_SND2"].iter().filter_map(|f| Dat::open(format!("{dir}/{f}.DAT")).ok()).collect() } else { vec![] };
+    let midi: Vec<Dat> = if adlib || sf.is_some() { ["MIDISND1", "MIDISND2"].iter().filter_map(|f| Dat::open(format!("{dir}/{f}.DAT")).ok()).collect() } else { vec![] };
+    let bank = adlib.then(|| Dat::open(format!("{dir}/PRINCE.DAT")).ok().and_then(|d| pop_core::adlib::Bank::parse(d.get(1)?))).flatten();
+    let t0 = std::time::Instant::now();
     let clips = (0..IDS)
         .map(|id| {
-            // original mode: the game's clip where it has one, else the synthesized one
-            let pcm = orig.then(|| original(&dats, id)).flatten().or_else(|| crate::synth::sound(id).map(|v| Pcm { rate: crate::synth::RATE, samples: v.into() }))?;
+            // original mode: the game's clip where it has one, else the synthesized one; adlib / soundfont: MIDI first
+            let smf = || pop_core::midi::Smf::parse(midi.iter().find_map(|d| d.get(10000 + id as u16))?.get(1..)?);
+            let music = match (&sf, &bank) {
+                (Some(f), _) => smf().map(|m| Pcm { rate: crate::music::SF_RATE, samples: crate::music::render_sf(&m, f, crate::music::SF_RATE).into() }),
+                (None, Some(b)) => smf().map(|m| Pcm { rate: crate::music::RATE, samples: crate::music::render_opl(&m, b).into() }),
+                _ => None,
+            };
+            let pcm = music.or_else(|| orig.then(|| original(&dats, id)).flatten()).or_else(|| crate::synth::sound(id).map(|v| Pcm { rate: crate::synth::RATE, samples: v.into() }))?;
             let steps = (pcm.samples.len() as u64 * pop_core::sim::STEP_HZ as u64).div_ceil(pcm.rate as u64) as u32;
-            Some((pcms.add(pcm), steps))
+            Some((pcm, steps))
         })
         .collect::<Vec<_>>();
-    info!("audio: {} mode, {} clips", if orig { "original" } else { "synthesized" }, clips.iter().flatten().count());
+    info!("audio: {mode} mode, {} clips, rendered in {:?}", clips.iter().flatten().count(), t0.elapsed());
     cmds.insert_resource(Sounds(clips));
+    // the one source that mixes and limits everything; `Sfx(255)` lets pause / volume reach its sink
+    cmds.spawn((AudioPlayer::<Mixer>(mixers.add(Mixer(a.mix.clone()))), PlaybackSettings::ONCE.with_volume(a.gain()), Sfx(255)));
 }
 
 impl AudioState {
@@ -136,17 +129,14 @@ fn synth_steps(id: u8) -> u32 {
     crate::synth::sound(id).map_or(0, |v| (v.len() as u64 * pop_core::sim::STEP_HZ as u64).div_ceil(crate::synth::RATE as u64) as u32)
 }
 
-pub fn play(cmds: &mut Commands, s: &Sounds, a: &mut AudioState, id: u8, playing: &Query<(Entity, &Sfx)>) {
-    let Some(Some((h, steps))) = s.0.get(id as usize) else {
+pub fn play(_cmds: &mut Commands, s: &Sounds, a: &mut AudioState, id: u8, _playing: &Query<(Entity, &Sfx)>) {
+    let Some(Some((pcm, steps))) = s.0.get(id as usize) else {
         a.busy = a.busy.max(synth_steps(id)); // no clip: still "playing" for its known length, so Len::Quiet waits the same
         return;
     };
     // the same sound again restarts it (the original has one channel; this keeps repeated door/gate ticks from piling up)
-    for (e, _) in playing.iter().filter(|(_, x)| x.0 == id) {
-        cmds.entity(e).despawn();
-    }
     debug!("sound {id} ({steps} steps)");
-    cmds.spawn((AudioPlayer::<Pcm>(h.clone()), PlaybackSettings::DESPAWN.with_volume(a.gain()), Sfx(id)));
+    a.mix.send(Cmd::Play { id, rate: pcm.rate, samples: pcm.samples.clone() });
     a.busy = a.busy.max(*steps);
 }
 
@@ -184,10 +174,8 @@ pub fn fixed(mut cmds: Commands, mut g: ResMut<Game>, s: Res<Sounds>, mut a: Res
     }
 }
 
-pub fn stop_all(cmds: &mut Commands, a: &mut AudioState, playing: &Query<(Entity, &Sfx)>) {
-    for (e, _) in playing {
-        cmds.entity(e).despawn();
-    }
+pub fn stop_all(_cmds: &mut Commands, a: &mut AudioState, _playing: &Query<(Entity, &Sfx)>) {
+    a.mix.send(Cmd::StopAll);
     a.busy = 0;
 }
 
@@ -257,7 +245,7 @@ mod tests {
         assert!(super::decode(&r).is_none());
         r[1] = 0x2B; r[2] = 0x2B; // 11051 Hz
         assert_eq!(super::decode(&r).unwrap().samples.len(), 4);
-        let mut a = super::AudioState { busy: 3, gen: 0, volume: 1.0, muted: false };
+        let mut a = super::AudioState { busy: 3, volume: 1.0, ..Default::default() };
         assert_eq!(a.begin_step(0), (false, true)); // busy 3 -> hold, drains
         assert_eq!(a.begin_step(1), (true, false)); // new World: cleared
         assert_eq!(a.busy, 0);
@@ -274,14 +262,14 @@ mod tests {
     /// busy counts fixed steps: a 3-step sound holds exactly the next 3 steps, then releases; a new World clears it.
     #[test]
     fn busy_drains_one_step_at_a_time() {
-        let mut a = super::AudioState { busy: 3, gen: 7, volume: 1.0, muted: false };
+        let mut a = super::AudioState { busy: 3, gen: 7, volume: 1.0, ..Default::default() };
         let holds: Vec<_> = (0..5).map(|_| a.begin_step(7)).collect();
         assert_eq!(holds, [(false, true), (false, true), (false, true), (false, false), (false, false)]);
         a.busy = 100;
         assert_eq!(a.begin_step(8), (true, false));
         assert_eq!((a.busy, a.begin_step(8)), (0, (false, false)));
         // mute does not change the timing, only the gain
-        let m = super::AudioState { busy: 2, gen: 0, volume: 0.5, muted: true };
+        let m = super::AudioState { busy: 2, volume: 0.5, muted: true, ..Default::default() };
         assert!(matches!(m.gain(), bevy::audio::Volume::Linear(v) if v == 0.0));
     }
 

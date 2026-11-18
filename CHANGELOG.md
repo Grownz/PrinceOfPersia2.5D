@@ -3,6 +3,31 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.4.0] - 2026-11-18
+
+### Added
+- Music from the original MIDI files (M7, docs/audio.md 6.4, 7, 8). Sound set `adlib`: the effects of the original, the
+  music through a re-implementation of the original AdLib driver (traced in PRINCE.EXE: instrument layout of PRINCE.DAT
+  resource 1, F-number table, 9 round-robin voices without stealing, velocity formula, sysex transpose; controllers and
+  pitch bend are ignored like in the original) feeding the MIT-licensed `oplon` OPL2 emulator. `pop_core::midi` (SMF
+  reader with a tempo map) and `pop_core::adlib` (SMF -> timed OPL register writes) are headless and tested.
+- Sound set `soundfont`: the same MIDI files through `rustysynth` and a downloaded SoundFont. Settings > SoundFonts
+  downloads MuseScore_General (SF2, 216 MB) or FluidR3_GM (from Debian's package, 120 MB) after showing the licence
+  notice (both MIT; the source's licence text is saved next to the font); you are responsible for respecting the
+  licences of the sources. Nothing is bundled. Needs Windows' own curl.exe and tar.exe. The mapping of the 18 AdLib
+  instruments to General MIDI is a guess (`music::GM_MAP`).
+- Own mixer with a peak limiter (-1 dBFS): every sound is mixed in one audio source, so overlapping sounds can no longer
+  clip. Waits (title, cutscenes, death counter, stairs) follow the length of the clip that actually plays, i.e. the MIDI
+  length in `adlib` / `soundfont`.
+
+### Changed
+- The sound set list is `synth`, `original`, `adlib`, `soundfont`; settings.json gets `soundfont` (`musescore` or `fluidr3`).
+- Sounds stay polyphonic (the original's one-sound rule is not applied).
+
+### Known limits
+- The audio output was not listened to during development (unit tests only); the SoundFont instrument map is unverified.
+- The original sequencer's tempo-byte swap (up to 7 % faster) is not reproduced; nominal tempo is used.
+
 ## [0.3.0] - 2026-11-18
 
 ### Added

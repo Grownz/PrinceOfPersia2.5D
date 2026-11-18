@@ -370,13 +370,125 @@ speaker**. Typical setups:
 Music and effects are not different classes in the code: a "music cue" is simply an id whose best resource is MIDI or a long
 speaker tune with priority 1 and interruptible 0.
 
-### 6.4 The AdLib driver (`0C83:690A`, data segment `1AA7`) - partly traced
+### 6.4 The AdLib driver (`0C83:690A`, data segment `1AA7`) - traced
 
-Dispatch on the MIDI status nibble through the table at `1AA7:0004`; 9 melodic voices (`[18C]` = 9, rhythm mode bit `BD` 20h
-when not 9); program per MIDI channel at `[14A + ch]`; the bank pointer from resource 1. Not traced yet (needed for a faithful
-OPL rendering, M7 plan WP4): the 16-byte instrument layout (which bytes go to registers 20h/40h/60h/80h/E0h/C0h per operator),
-the note -> F-number/block table, voice allocation and stealing, velocity / channel volume / `[31C2]` master volume scaling,
-pitch bend, what the sysex does, and the driver's tempo clock (the PIT is reprogrammed, `0C83:6946`).
+VERIFIED = read directly from code or data bytes (`tools/disasm`, PRINCE.EXE v1.1, PRINCE.DAT); INFERRED = a conclusion drawn from
+that. The driver is only the voice layer; SMF parsing and the clock are in the sequencer (6.4.8). Its register write is `0C83:6DD6`
+(`ah` = register, `al` = value): it keeps a shadow `ds1AA7:[48h + reg]` and writes ports 388h/389h (the settle delays are calibrated
+loops, irrelevant for an emulator).
+
+**6.4.1 Entry and dispatch (VERIFIED).** Far entry `690A`; `al <= 5` is a command, otherwise `al >> 4` is the MIDI status nibble;
+jump through the word table at `1AA7:0004`. `ah` = channel, `dl` = data 1, `dh` = data 2 (C0/D0 have no data 2):
+
+| index | handler | meaning |
+|---|---|---|
+| 0 | `692C` | init: calibrates the delay loops (runs the PIT at 5042 = 236.6 Hz for a moment, `6946`, then restores the game's PIT value), writes reg 01h = 0, BDh = 0, 01h = 20h (waveform select on), installs a dummy bank (count 1), reset |
+| 1, 3 | `6A28` | reset / stop: A0h = 0 and B0h = 0 on all 9 voices (key off), BDh = 20h only if `[18C]` is not 9; `[148]` = FFFFh (all channels enabled), transpose `[191]` = 0, program of channel c = c if c < count else 0, voice tables cleared, `[18C]` = 9 |
+| 4 | `6A46` | master volume 0..15 (`ah`), see 6.4.5 |
+| 5 | `6ADF` | set bank: `[177]` = instrument count (`ah`), `[178]` = far pointer to the first instrument (`es:bx`), then reset of the channel table |
+| 8 | `6BBE` | note off |
+| 9 | `6B4D` | note on (velocity 0 = note off) |
+| C | `6AEF` | program change: `[14A + ch] = dl`, only if `dl < [177]` (a program >= count is ignored) |
+| F | `69D2` | sysex, see 6.4.6 |
+| 2, 6, 7, A, B, D, E | `69D1` (`ret`) | **ignored: all controllers (7 volume, 10 pan, 64 sustain...), poly/channel pressure, pitch bend** |
+
+All 16 channels are melodic (no drum channel 10, channel 9 is not special).
+
+**6.4.2 Instrument layout, 16 bytes (VERIFIED: code `6C1C`/`6C4B`, data checked on the real bank).** PRINCE.DAT resource 1 = 289
+bytes: u8 count (0x12 = 18; the DAT checksum byte in front is not counted) + 18 x 16. Register address = base + operator offset
+(operator offsets by voice below).
+
+| byte | register (melodic voice) | contents in the shipped bank |
+|---|---|---|
+| 0 | A0h, rhythm instruments only (fnum low) | 26h in all 18 |
+| 1 | B0h, rhythm only (key-on bit stripped) | 0Ah in all 18 (fnum 226h, block 2) |
+| 2 | C0h feedback/connection (bit 0 = 1: additive) | 04, 02, 0A, 08, 0E, 00 ... |
+| 3 | modulator 20h (AM/VIB/EGT/KSR/MULT) | |
+| 4 | modulator 40h (KSL bits 7..6, TL bits 5..0) | |
+| 5 | modulator 60h (AR/DR) | |
+| 6 | modulator 80h (SL/RR) | |
+| 7 | modulator E0h (waveform) | |
+| 8..12 | carrier 20h, 40h, 60h, 80h, E0h | same order |
+| 13 | rhythm type: 0 melodic, 1 bass drum, 2 snare, 3 tom, 4 cymbal, 5 hi-hat | **0 in all 18** |
+| 14, 15 | never read | 0 |
+
+Write order for a melodic note: C0h, the 5 modulator registers, the 5 carrier registers (TL scaled, 6.4.5), then A0h, then B0h with
+key-on. Example, instrument 0: `26 0A 04 | 52 88 41 21 00 | 73 86 71 14 00 | 00 00 00 00`.
+Operator offsets (`ds:192`, standard OPL2), voice 0..8 = (modulator, carrier): (00,03) (01,04) (02,05) (08,0B) (09,0C) (0A,0D) (10,13) (11,14) (12,15).
+
+**6.4.3 Note to pitch (VERIFIED, `6D56`).** `n = key - 31 + transpose` (`transpose` = `[191]`, signed 7 bit, default 0, set by the sysex
+in 6.4.6; while `n < 0` add 12); `octave = n / 12`, `idx = n % 12`; `A0h = FNUM[idx] & 0xFF`;
+`B0h = 0x20 | (octave << 2) | (FNUM[idx] >> 8)` (an octave >= 8 only spills into the key-on bit, so the block is `octave & 7`; keys that
+high do not occur). B0h is remembered in `[16E + voice]`. `FNUM` (`ds:0030`, 12 words):
+`0200 021E 023F 0261 0285 02AB 02D4 0300 032E 035E 0390 03C7` (idx 0 is key 31 + 12k; each step x1.0595, and 03C7 x1.0595 = 0400 = 0200 one block up).
+With the OPL2 clock of 49716 Hz, key 60 at transpose 0 gives 129.5 Hz: **one octave below General MIDI numbering**. Every shipped file
+contains the sysex "transpose +12" (one MIDISND1 file +24, 6.4.6), which gives 259 Hz (INFERRED to be the intent). The table is about 16 cents flat
+against equal temperament (0200 at block 1 = 48.55 Hz vs G1 49.00 Hz, arithmetic only). **Pitch bend is ignored.**
+
+**6.4.4 Voices, allocation and note off (VERIFIED, `6DA0`, `6BBE`, `6CC9`).** 9 voices (`[18C]` = 9; nothing ever writes another value). Per voice:
+`[15C+v]` = key (0 = free), `[165+v]` = channel. Allocation is round robin: the search starts at the pointer `[2E]` and takes the first voice with
+`[15C+v] == 0`; afterwards `[2E]` is advanced by exactly 1 (mod 9) from where it started, whichever voice was chosen. **There is no stealing**: with all 9
+voices busy the note on is dropped. Note off (or note on with velocity 0) takes the first voice, in index order, whose key and channel both match, clears
+`[15C+v]` and writes B0h = `[16E+v] & ~0x20` (key off); release velocity is ignored; only one voice is released per note off; no match = nothing happens.
+The same key twice uses two voices. A note on is also dropped if master volume is 0 (`[190] == 3Fh`), if the channel is disabled in `[148]`, or if the
+channel's program is >= the bank count.
+
+**6.4.5 Volume (VERIFIED, `6C4B`, `6A46`).** Controller 7 and pressure do nothing. There are two inputs only.
+- Velocity (data 2, 1..127), applied at note on to the carrier TL, and to the modulator TL only if the instrument is additive (`C0h & 1`):
+  `tl = byte & 0x3F; v = ((tl + 64) * 225) / (vel + 161)` (integer division); `v = clamp(v, 64, 127) - 64`; `v = max(v, MASTER_FLOOR)`;
+  `reg40 = (byte & 0xC0) | v` (KSL kept). A non-additive modulator TL is written unchanged. At vel 127 the factor is 0.78 (louder than the stored TL), at vel 1 it is 1.39.
+- Master volume `[31C2]` (0..15), command 4: `MASTER_FLOOR = (vol >= 15) ? 0 : 63 - 4*vol` (`[190]`), a minimum attenuation. A change also rewrites reg 40h of every
+  carrier (and additive modulator) whose current value is below the floor; raising the volume later does not restore sounding notes. `vol = 0`: floor 63 and every new
+  note is dropped. The game only sets 0 or 15 (sound off/on: `0000:065D`, `0000:2966`; 15 at device setup `7090`), so in practice the floor is 0 and only the
+  velocity formula matters.
+
+**6.4.6 Sysex and other messages (VERIFIED).** Status F0 (`es:bx` = data after the length byte): accepted only if the payload starts `00 00 34 <00|01>`; then a
+sub-command and an argument: `00 n` sets the transpose `[191]` to signed 7-bit n; `01 c` disables channel c (`[148]` bit cleared); `02 c` enables it. All shipped
+files contain exactly `F0 07 00 00 34 01 00 0C F7` (transpose +12); one MIDISND1 file (offset 960) has `18` (+24). Everything else is ignored. The reset on every
+stop/start sets the transpose back to 0 (a loop restart goes through the reset and then reads the sysex again).
+
+**6.4.7 Rhythm mode (VERIFIED dormant, code `6CE3`).** Selected only by instrument byte 13 != 0 (0 in the whole bank) and it needs `[18C] != 9` (never set), so it
+never runs. For reference: type 1 programs voice 6 like a melodic note, then A6h = byte 0, B6h = byte 1 & DFh, BDh |= 10h; types 2..5 write only the carrier part
+(bytes 8..12, TL unscaled) to operator 14h/12h/15h/11h and A0h..C0h of voice 7/8/8/7 from bytes 0..2, then BDh |= 08h/04h/02h/01h; note off clears that BDh bit.
+Tables: `ds:1BA` = 00 00 14 12 15 11, `ds:1C0` = 00 00 07 08 08 07, `ds:1C6` = 00 10 08 04 02 01. Not needed for a faithful remake.
+
+**6.4.8 Tempo clock (VERIFIED; sequencer `0C83:8548` start, `86F8` rate, `8669` tick, `873E` events).** The PIT write at `6946` is only the driver's delay calibration.
+The music is ticked by the game's software timer manager (`8D9B`) at **240 Hz** (`ds:3278` = 00F0, never written; PIT divisor 1193181/240 = 4971, so really 240.02 Hz).
+Each timer tick adds a 16.16 increment `INC = floor(D2 * 65536 / D1)` to a phase accumulator, with `D1 = floor(256 * T / division)`, `D2 = floor(256000000 / 240)`
+= 1066666, `T` = microseconds per quarter note, `division` = ticks per quarter from the header (480; an SMPTE division is rejected). So MIDI ticks per timer tick =
+`division * 1e6 / (T * 240)`, 4.0 for 480 tpq at 500000. The integer part (with carry) is subtracted from the pending delta of every track and every due event runs in the
+same interrupt; overshoot carries into the next delta (no drift). Tempo is 500000 until a tempo event, **only track 0 tempo events count**, and the default is re-applied at every start.
+Meta events: 51 tempo (track 0), 07 cue point (first text byte stored in `[31C3]`), 2F end of track, all others skipped. Header `MThd` with format <= 1, `MTrk` chunks, running status
+supported, F0/F7 go to the driver, C0/D0 take one data byte.
+**Quirk (VERIFIED in code, audible effect INFERRED, worth checking against a DOSBox recording):** the three tempo bytes `t0 t1 t2` are fed to the rate routine as `t0, t2, t1`
+(`87CF`/`87D3` into `86F8`, which expects the layout of its little-endian default), so the effective tempo is `T = t0*65536 + t2*256 + t1`: 07A120 becomes 0720A1 (467105 us, about 7 %
+faster than the file), 061A80 becomes 06801A (about 6 % faster), 0B71B0 becomes 0BB071 (about 2 % slower), 0F4240 and 051615 hardly change. The MIDI lengths in 3.1 and 6.5 use the nominal tempo.
+End of track 0 stops the sequence (reset above, all voices silent) and runs the completion callback `72AB`: with bit 7 (loop) of the resource type byte it restarts the same buffer at once
+(`76D8`), otherwise it runs the game's callback.
+
+**6.4.9 Data summary for the remake (Rust sketch, VERIFIED formulas).**
+
+```rust
+pub const FNUM: [u16; 12] = [0x200,0x21E,0x23F,0x261,0x285,0x2AB,0x2D4,0x300,0x32E,0x35E,0x390,0x3C7];
+pub const OPS: [(u8, u8); 9] = [(0,3),(1,4),(2,5),(8,0xB),(9,0xC),(0xA,0xD),(0x10,0x13),(0x11,0x14),(0x12,0x15)]; // (mod, car)
+// bank = PRINCE.DAT resource 1 minus the checksum byte: [count, 16 * count bytes]; inst b[]: 2=C0, 3..8=mod 20,40,60,80,E0, 8..13=car, 13=rhythm (0 in all)
+fn tl_scaled(byte: u8, vel: u8, floor: u8) -> u8 {
+    let v = (((byte as u32 & 0x3F) + 64) * 225 / (vel as u32 + 161)).clamp(64, 127) - 64;
+    (byte & 0xC0) | (v as u8).max(floor)
+}
+fn key_regs(key: u8, transpose: i8) -> (u8, u8) { // (A0, B0 with key on)
+    let mut n = key as i32 - 31 + transpose as i32;
+    while n < 0 { n += 12 }
+    let (oct, idx) = (n / 12, (n % 12) as usize);
+    ((FNUM[idx] & 0xFF) as u8, 0x20 | ((oct << 2) as u8) | (FNUM[idx] >> 8) as u8)
+}
+// note on : voice = first free from `next` (round robin, free = key==0), else drop; next = (next+1)%9; prog = chan_prog[ch], drop if >= count;
+//   C0=b[2]; mod: 20=b[3], 40= if b[2]&1 {tl_scaled(b[4])} else {b[4]}, 60=b[5], 80=b[6], E0=b[7];
+//   car: 20=b[8], 40=tl_scaled(b[9]), 60=b[10], 80=b[11], E0=b[12]; then A0, B0.  floor = 0 for sound on.
+// note off: first voice with same key+channel -> B0 &= !0x20, key=0.   Ignore CC, pitch bend, pressure; sysex 00 00 34 0x 00 n = transpose.
+// clock : 240 Hz; inc16_16 = ((256_000_000/240) as u64 * 65536 / (256 * T / division) as u64), T = t0<<16 | t2<<8 | t1 (quirk) or nominal.
+// reset : init regs 01=0, BD=0, 01=0x20; programs[c]=c (<count else 0); transpose 0; all channels enabled.
+```
 
 ### 6.5 Title and story music 50..56 (VERIFIED, docs/cutscenes.md 2, 4.7, 4.8)
 
@@ -449,7 +561,22 @@ Effort: XS < 0.5 d, S ~1 d, M 2-3 d, L ~1 week. All tests headless; data tests s
 
 Critical path: 5 -> 6 (the driver tracing is the real work). 1-4 and 7 can start at once. Total for A: about 2 weeks; B adds ~3 d.
 
-**Decisions for the user**
+**Decisions (made by the user, 2026-11-18)**
+1. A+B: OPL emulation with the original bank AND SoundFont, selectable at runtime in the settings menu.
+2. Keep the MIT licence: MIT/Unlicense crates only (`oplon`, `midly`, `rustysynth`); no LGPL/GPL.
+3. Stay polyphonic: the original single-sound rules (6.2) are NOT applied to playback (WP1/WP3 shrink to "playing"/length
+   bookkeeping; WP2 stays a sim rule to re-check separately).
+4. Waits follow the length of what is actually heard in each mode.
+5. Own mixer with limiter (WP8 = M).
+6. SoundFonts are NOT shipped: the user downloads them in Settings > SoundFonts after a licence notice (changed 2026-11-18).
+   Sources (verified by HEAD / licence file, 2026-11): MuseScore_General.sf2 215 614 036 bytes from ftp.osuosl.org (MIT, notices must
+   stay with the file; saved next to it); FluidR3_GM from Debian's `fluid-soundfont-gm_3.1-6_all.deb` 119 613 032 bytes (MIT, Frank
+   Wen; unpacked with Windows tar.exe). `rustysynth` 1.3.8 rejects SF3 (Ogg samples, `soundfont_sampledata.rs`), so MuseScore's
+   38 MB .sf3 is unusable; only SF2. Program map 0..17 -> GM (`music::GM_MAP`) is an UNVERIFIED identity guess, to be set by ear.
+   The download and unpack path (`soundfont.rs`) is not yet tested against the real servers.
+7. "Modern effects and music" replacement stays out of M7.
+
+**Original option list (for reference)**
 1. Music backend: A OPL emulation with the original bank (recommended), B SoundFont, C keep synthesized/speaker only.
 2. Crate licence policy (the project has no licence yet): MIT/Unlicense only (`oplon`, `midly`, `rustysynth`) or LGPL acceptable
    (`nuked-opl3`, `opl3-rs`, `oxisynth`); GPL (`opl-emu`) excluded unless the project becomes GPL.
