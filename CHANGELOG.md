@@ -7,9 +7,14 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ### Changed
 - Cutscenes: the princess chamber uses the palace texture mapping of the levels with `tile_textures` original (palace wall
-  faces, floors, lattice arches, voxel or flat columns 295 for the arcade, bed-gap column and front pillar, torch holders
+  faces, floors, lattice arches, voxel or flat columns 295 for the arcade, torch holders
   346, voxel torch flames driven by the cutscene's torch frames), honouring `column_style` and `object_style`. Procedural
   tiles, composition, camera and timing unchanged (`docs/texture_inventory.md` 17).
+
+### Fixed
+- Cutscenes: no more gap left of the bed carpet. Checked against PV.DAT: the bed image is transparent at x 64..73 because
+  the room picture's left front column (10 px, down to the screen bottom) shows through it; both front columns are now
+  built from the original front column image PV 952 at the measured x (64, 245), in every tile/column style.
 
 ## [0.1.0] - 2026-11-18
 

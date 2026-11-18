@@ -271,6 +271,14 @@ Note: the room picture (951) shows a Moorish arcade: lattice screens above five 
 270, an arched door in the left wall (px 11..33), a dark blue night sky on the left with the stars, two torch holders under the
 flames, and a black floor area where the bed is blitted.
 
+VERIFIED (pixel dump of PV 951 / 952 / 981): the thick columns are two identical **front columns**, a 10-px shaft (palette
+950 colours 1 2 3 4 5 6 7 7 6 4, ring bands y 121..128, capital y 107..116) running down to the screen bottom (y 199) at
+**x 64..73** and **x 245..254**; the thin arcade columns behind them are 4-6 px wide. The bed 981 is fully transparent at
+exactly x 64..73 (and 233..239, its right edge), and since it is OR-blitted over 951 the left front column shows through:
+in the original that column stands in front of the bed and carpet (no gap is visible). PV 952 (16x48, opaque x 5..14) at
+x 240 is the right front column, redrawn in front of the actors. The remake builds both front columns from 952's shaft
+(section 6.2; docs/texture_inventory.md 17).
+
 ---
 
 ## 4. The scenes (VERIFIED scripts; frame numbers after the fade)
@@ -507,8 +515,10 @@ uses the cutscene player.
   - pillar piece: a front column at px 240..255 -> world x 7.0..7.5, z in front of the actors (it occludes them, as the
     foretable does).
 - Implemented look: with `tile_textures` original the set uses the palace texture mapping of the levels (walls, floors,
-  arches, columns 295 for the arcade, the bed-gap column and the front pillar piece, torch holders 346, voxel flames with
-  `object_style` voxel); the sky opening, bed, hourglass and actors keep their own look (docs/texture_inventory.md 17).
+  arches, columns 295 for the arcade, torch holders 346, voxel flames with `object_style` voxel); the two front columns
+  (951 x 64..73, seen through the bed's gap, and x 245..254 = PV 952) use PV 952's 10-px shaft (voxel revolved or a flat
+  textured box; procedural: 10-px stone boxes), the left one through the bed plane, both from the bed's bottom line up; the
+  sky opening, bed, hourglass and actors keep their own look (docs/texture_inventory.md 17).
 - Camera: the normal single-room gameplay framing, fixed (the original is a fixed full-screen view). Optional later: a slow
   dolly; keep it off by default for timing fidelity.
 - Flash: full-screen white overlay for the 5 flash frames (the existing `World::flash` overlay code), not the original flicker.

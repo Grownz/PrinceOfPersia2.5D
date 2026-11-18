@@ -112,10 +112,15 @@ impl<'a> B<'a, '_, '_> {
     fn voxel_column(&mut self, id: Option<u16>, left: f32, y0: f32, y1: f32, z: f32) -> bool {
         let Some(((items, set), id)) = self.items.zip(id) else { return false };
         let Some(c) = items.columns[set].get(&id) else { return false };
-        let s = Vec3::new(1.0 / 32.0, (y1 - y0) / c.h as f32, 1.0 / 32.0);
-        let e = self.cmds.spawn((Mesh3d(c.mesh.clone()), MeshMaterial3d(items.mat.clone()), Transform::from_translation(self.origin + Vec3::new(left, y0, z - c.az * s.z)).with_scale(s))).id();
-        self.tag(e);
+        self.column_mesh(c, &items.mat, left, y0, y1, z);
         true
+    }
+
+    /// A voxel column mesh: image left edge at `left`, rows stretched over y0..y1, axis at depth `z`.
+    fn column_mesh(&mut self, c: &crate::items::Column, mat: &Handle<StandardMaterial>, left: f32, y0: f32, y1: f32, z: f32) {
+        let s = Vec3::new(1.0 / 32.0, (y1 - y0) / c.h as f32, 1.0 / 32.0);
+        let e = self.cmds.spawn((Mesh3d(c.mesh.clone()), MeshMaterial3d(mat.clone()), Transform::from_translation(self.origin + Vec3::new(left, y0, z - c.az * s.z)).with_scale(s))).id();
+        self.tag(e);
     }
 
     /// The voxel objects of this room's set (None: flat objects, procedural tiles or the chamber).
@@ -224,14 +229,17 @@ pub fn chamber_box(cmds: &mut Commands, p: &Palette, mat: &str, lo: Vec3, hi: Ve
     chamber_builder(cmds, 0, Vec3::ZERO, p).put(&m, lo, hi);
 }
 
-/// A palace pillar (image 295, as LatticePillar) in the chamber set, one row tall: axis at `base.x` / `base.z`, standing on
-/// `base.y` (world). Voxel or flat column as in the levels; false with procedural tiles (the caller keeps its box).
-pub fn chamber_column(cmds: &mut Commands, p: &Palette, base: Vec3) -> bool {
+/// A front column of the chamber set from the cutscene's own column image (PV 952; the palace set has no 10 px column),
+/// `at` (world) = image left edge, bottom, axis depth; up to `top` (world y). `vox` with voxel columns (as the levels'
+/// voxel columns), else the flat image `tex`; false with procedural tiles (the caller keeps its box).
+pub fn chamber_column(cmds: &mut Commands, p: &Palette, vox: &crate::items::Column, tex: &Tex, at: Vec3, top: f32) -> bool {
     let mut b = chamber_builder(cmds, 0, Vec3::ZERO, p);
-    let Some(c) = b.tiles.and_then(|s| s.extra(Tile::Pillar, 0)).cloned() else { return false };
-    let w = px_w(c.w);
-    if !b.voxel_column(b.tiles.and_then(|s| s.extra_id(Tile::Pillar, 0)), base.x - w / 2.0, base.y, base.y + TILE_H, base.z) {
-        b.put(&c.mat, base - Vec3::new(w / 2.0, 0.0, w / 2.0), base + Vec3::new(w / 2.0, TILE_H, w / 2.0));
+    let Some((items, set)) = b.items.filter(|_| b.tiles.is_some()) else { return false };
+    if !items.columns[set].is_empty() {
+        b.column_mesh(vox, &items.mat, at.x, at.y, top, at.z);
+    } else {
+        let w = px_w(tex.w);
+        b.put(&tex.mat, at - Vec3::new(0.0, 0.0, w / 2.0), Vec3::new(at.x + w, top, at.z + w / 2.0));
     }
     true
 }

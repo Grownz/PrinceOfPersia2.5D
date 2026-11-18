@@ -791,7 +791,7 @@ All cutscenes (intro / attract, levels 2, 4, 6, 8, 9, 12, time out, ending) shar
 (docs/cutscenes.md 6.2). It now uses the same mapping and builders as a **palace** level room (VPALACE, set index 1),
 honouring `tile_textures`, `column_style` and `object_style`; lighting is the set's own torch lights in both render modes.
 Code: `room.rs` `chamber_builder` (the room builder with the palace `TileSet` and voxel items, entities tagged `Chamber`),
-`chamber_column`, `chamber_holder`, `chamber_flames`; placement in `cutscene.rs` `setup` / `render`. Composition, camera
+`chamber_column` (the front columns), `chamber_holder`, `chamber_flames`; placement in `cutscene.rs` `setup` / `render`. Composition, camera
 and timing are unchanged; every added piece keeps the old box when its image is missing.
 
 | element | was | now (original tiles) |
@@ -800,13 +800,21 @@ and timing are unchanged; every added piece keeps the old box when its image is 
 | floors (row 2) | stone slabs | palace floor texture 241 / 242 / 243 |
 | lattice row (row 0) | metal plates | arches 1203 / 1204 / 1205 on the back wall (LatticeRight has no image: procedural plate, as in the levels) |
 | arcade columns (LatticePillar, cols 3 / 8) | stone boxes | column 295, voxel (round) or flat as `column_style` |
-| column in the bed gap (px 68..77) | 10-px stone box z 0.25..0.5 | column 295 at px 72.5, axis z 0.25 (front behind the bed at 0.52) |
-| front pillar piece (PV 952 at px 240, in front of the actors) | stone box z 0.8..1.2 | column 295 (16 px, as wide as PV 952) at px 248, axis z 1.0 |
+| left front column (PV 951 x 64..73, seen through the bed gap) | 10-px stone box x 68..78 z 0.25..0.5 | PV 952's 10-px shaft (palette 950): voxel revolved about its centre, or a solid textured box, x 64..74, axis z 0.52 (through the bed plane), from the bed's bottom line 183 to the row top; procedural: 10-px stone box at the same place |
+| right front column (PV 951 x 245..254, redrawn by PV 952 at x 240 in front of the actors) | stone box x 240..256 z 0.8..1.2 | the same PV 952 shaft at x 245..255, axis z 1.0, same height; procedural: 10-px stone box there |
 | torch holders (px 101 / 219) | dark boxes | holder 346: voxel (object_style voxel, no shadow) or the flat image on the back wall, cup at the flame's bottom line 116 |
 | torch flames | PRINCE.DAT 151..159 sprites | object_style voxel: the levels' voxel flame meshes, frame = the cutscene's own `torch[i]` (get_torch_frame), stem on the holder axis; flat: the sprites as before |
 
 Not mapped (current look kept): the night-sky opening and its stars (an arched door in PV 951, no tile piece; a balcony
 1210 / 1212 would need a layout change), the back wall slab, the hourglass, sand stream, bed (PV sprites), actors, fade and
-flash. `tile_textures=procedural`: identical to before (pixel diff 0 for intro, 2, 8, end, timeout in classic and enhanced).
-Known look: the voxel column in the bed gap is narrower than the 10-px gap, so the palace floor shows through it (the old box
-filled it). Test: `cutscene::tests::chamber_pieces_use_the_palace_mapping`.
+flash. `tile_textures=procedural`: as before except the two front columns (below).
+
+The bed gap (checked against the original data): PV 951 has two identical front columns, a 10-px shaft (colours
+1 2 3 4 5 6 7 7 6 4 of palette 950, ring bands at y 121..128) from the capital at y 107 down to the screen bottom (y 199), at
+x 64..73 and 245..254. PV 981 (the bed, OR-blitted at (0, 142)) is fully transparent at exactly x 64..73 (and at its right
+edge 233..239), so in the original the left column shows through the bed from y 142 to 183: the column stands in front of
+the bed, not a bed post or background strip. PV 952 (16x48, opaque x 5..14) drawn at x 240 is the right column again, in
+front of the actors. Cause of the gap: column 295 has a 4-px shaft (palace lattice pillar), placed at px 72.5 behind the
+bed and ending at the floor line, so 6 px of floor showed through (the old box was 10 px but 4 px too far right). The palace
+set has no 10-px column, so both front columns use PV 952's shaft. Tests: `cutscene::tests::chamber_pieces_use_the_palace_mapping`,
+`cutscene::tests::bed_gap_is_the_left_front_column`.

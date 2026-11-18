@@ -4,8 +4,9 @@
 //! the camera moves there for the cutscenes and the title/story screens.
 //! Per element: room, arcade, front pillar, window = tile geometry; actors, flames, hourglass, sand, bed = decoded original
 //! sprites as textured quads (the bed is a flat painted carpet in PV 981, so it stays a sprite). With tile_textures original
-//! the set uses the palace texture mapping of the levels (walls, floors, arches, columns 295, holders 346 and, with voxel
-//! objects, the voxel flames; docs/texture_inventory.md 17); the sky opening and procedural tiles keep the plain boxes. With character_style voxel
+//! the set uses the palace texture mapping of the levels (walls, floors, arches, arcade columns 295, holders 346 and, with
+//! voxel objects, the voxel flames; docs/texture_inventory.md 17) and the two front columns from the cutscene's own PV 952;
+//! the sky opening and procedural tiles keep the plain boxes. With character_style voxel
 //! the actors (princess, Jaffar, kid, mouse) are voxel meshes built like the level characters (voxel.rs), anchored the same
 //! way; flames, hourglass, sand and the bed stay sprites (set dressing, not characters).
 use crate::room::{self, Chamber, Palette, TILE_H};
@@ -100,6 +101,15 @@ fn wy(line: f32) -> f32 {
 /// Torch x (ds:0E08/0E0C) and flame bottom line.
 const TORCH_X: [f32; 2] = [93.0, 211.0];
 const TORCH_BOTTOM: f32 = 116.0;
+/// The front columns of PV 951 (a 10 px shaft from y 107 to the screen bottom, x 64..73 and 245..254): shaft left edge
+/// and axis depth. The left one stands in the hole PV 981 leaves for it
+/// (bed transparent at x 64..73, the column shows through: axis in the bed plane z 0.52); the right one is in front of the
+/// actors (952, foretable).
+const FRONT_COLUMNS: [(f32, f32); 2] = [(64.0, 0.52), (245.0, 1.0)];
+/// Bottom line of the bed picture (PV 981, 41 rows from y 142).
+const BED_BOTTOM: f32 = 183.0;
+/// Opaque shaft columns of PV 952 (first, last; 952 is drawn at x 240, so its shaft is 951's right column).
+const FRONT_SHAFT: (usize, usize) = (5, 14);
 const STARS: [(f32, f32); 6] = [(20.0, 97.0), (16.0, 104.0), (23.0, 110.0), (17.0, 116.0), (24.0, 120.0), (18.0, 128.0)];
 
 /// Synthetic room for the set: a palace arcade (lattice screens above lattice pillars, as level 14 rooms 2 and 3).
@@ -120,7 +130,7 @@ fn chamber_level(base: &pop_core::level::Level) -> pop_core::level::Level {
     l
 }
 
-pub fn setup(mut cmds: Commands, g: Res<Game>, p: Res<Palette>, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>, mut cut: ResMut<Cut>) {
+pub fn setup(mut cmds: Commands, g: Res<Game>, p: Res<Palette>, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>, mut imgs: ResMut<Assets<Image>>, mut cut: ResMut<Cut>) {
     let level = chamber_level(&g.levels[g.levels.len() - 1]);
     room::spawn_chamber(&mut cmds, &level, 1, ORIGIN, &p);
     let o = ORIGIN;
@@ -136,13 +146,30 @@ pub fn setup(mut cmds: Commands, g: Res<Game>, p: Res<Palette>, mut meshes: ResM
         cmds.spawn((Mesh3d(cube.clone()), MeshMaterial3d(star_mats[2].clone()), Transform::from_translation(o + c).with_scale(Vec3::splat(0.05)), StarDot(i), Chamber));
     }
     cmds.insert_resource(StarMats(star_mats));
-    // the column the bed picture leaves a gap for (PV 981 is transparent at px 68..77); its front stays behind the bed (z 0.52)
-    if !room::chamber_column(&mut cmds, &p, o + Vec3::new(wx(72.5), 0.0, 0.25)) {
-        room::chamber_box(&mut cmds, &p, "stone", o + Vec3::new(wx(68.0), 0.0, 0.25), o + Vec3::new(wx(78.0), TILE_H, 0.5));
-    }
-    // the front pillar piece (PV 952 at x 240, 16 px, drawn in front of the actors) as a palace column
-    if !room::chamber_column(&mut cmds, &p, o + Vec3::new(wx(248.0), 0.0, 1.0)) {
-        room::chamber_box(&mut cmds, &p, "stone", o + Vec3::new(wx(240.0), 0.0, 0.8), o + Vec3::new(wx(256.0), TILE_H, 1.2));
+    // the two front columns of PV 951 (PV 952 is the right one), built from PV 952: voxel (revolved like the level columns) or flat
+    // (only its 10 px shaft, every row opaque: revolved about its centre, or a solid textured box)
+    let front = cut.pv.as_ref().and_then(|d| Some((image::decode(d.get(952)?)?, image::palette(d.get(950)?)?))).map(|(im, pal)| {
+        let rgb = |p: u8| pal.get(p as usize).copied().unwrap_or([255, 0, 255]);
+        let w = FRONT_SHAFT.1 + 1 - FRONT_SHAFT.0;
+        let px: Vec<u8> = im.pixels.chunks(im.width).flat_map(|r| r[FRONT_SHAFT.0..=FRONT_SHAFT.1].to_vec()).collect();
+        let v = crate::voxel::VoxelModel::revolve(w, im.height, &px, w as f32 / 2.0);
+        let mesh = meshes.add(v.mesh(|p| {
+            let [r, g, b] = rgb(p);
+            Color::srgb_u8(r, g, b).to_linear().to_f32_array()
+        }));
+        let rgba: Vec<u8> = px.iter().flat_map(|&p| rgb(p).into_iter().chain([255])).collect();
+        let mut img = Image::new(Extent3d { width: w as u32, height: im.height as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default());
+        img.sampler = ImageSampler::nearest();
+        let mat = mats.add(StandardMaterial { base_color_texture: Some(imgs.add(img)), perceptual_roughness: 0.9, ..default() });
+        (crate::items::Column { mesh, h: v.h, az: v.axis_z() }, crate::tiles::Tex { mat, w: w as f32, h: im.height as f32 })
+    });
+    // from the bed's bottom line (951 runs them to the screen bottom; the gap is open down to there) to the top of the row
+    let (y0, y1) = (o.y + wy(BED_BOTTOM), o.y + TILE_H);
+    for (x, z) in FRONT_COLUMNS {
+        if !front.as_ref().is_some_and(|(v, t)| room::chamber_column(&mut cmds, &p, v, t, Vec3::new(o.x + wx(x), y0, o.z + z), y1)) {
+            let r = 5.0 / 32.0;
+            room::chamber_box(&mut cmds, &p, "stone", Vec3::new(o.x + wx(x), y0, o.z + z - r), Vec3::new(o.x + wx(x + 10.0), y1, o.z + z + r));
+        }
     }
     let quad = meshes.add(Rectangle::new(1.0, 1.0));
     cut.quad = quad.clone();
@@ -376,7 +403,7 @@ pub fn render(
     }
     for (mut t, mut vis, mut mat) in &mut q.p4() {
         let shown = on_set.then(|| material(c, &mut imgs, &mut mats, 0, 981, 980)).flatten().map(|(m, w, h)| {
-            place(&mut t, wx(0.0), wy(183.0), 0.52, w, h, false);
+            place(&mut t, wx(0.0), wy(BED_BOTTOM), 0.52, w, h, false);
             m
         });
         set_vis(&mut vis, &mut mat, shown);
@@ -443,5 +470,30 @@ mod tests {
         assert_eq!(tile_images(Tile::Pillar, 0, palace).1, Some(295));
         assert_eq!(pieces(Tile::Torch, 0, true, palace), vec![(Role::TorchStub, 346)]);
         assert!(tile_images(Tile::Floor, 0, palace).0.is_some());
+    }
+
+    /// The gap left of the bed carpet: PV 981 is fully transparent exactly where PV 951 has its left front column (x 64..73,
+    /// the same 10 px shaft as the right one at 245..254, which PV 952 redraws at x 240); FRONT_COLUMNS puts 952's shaft on
+    /// both (skips without Original_data).
+    #[test]
+    fn bed_gap_is_the_left_front_column() {
+        use pop_core::{dat::Dat, image};
+        let Ok(pv) = Dat::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Original_data/PV.DAT")) else { return };
+        let im = |id| image::decode(pv.get(id).unwrap()).unwrap();
+        let (room, bed, piece) = (im(951), im(981), im(952));
+        let shaft = &piece.pixels[30 * 16..][super::FRONT_SHAFT.0..=super::FRONT_SHAFT.1];
+        assert_eq!(shaft, [1, 2, 3, 4, 5, 6, 7, 7, 6, 4]);
+        let lefts: Vec<usize> = super::FRONT_COLUMNS.iter().map(|c| c.0 as usize).collect();
+        assert_eq!(lefts[1], 240 + super::FRONT_SHAFT.0);
+        assert!((0..48).all(|y| piece.pixels[y * 16..][super::FRONT_SHAFT.0..=super::FRONT_SHAFT.1].iter().all(|&p| p != 0)), "952 shaft opaque");
+        // below the ring bands (rows 121..128) the plain shaft runs to the screen bottom
+        for y in 129..200 {
+            let row = &room.pixels[y * 320..][..320];
+            let runs: Vec<usize> = (0..311).filter(|&x| row[x..x + 10] == *shaft).collect();
+            assert_eq!(runs, lefts, "951 row {y}");
+        }
+        // fully transparent bed columns (233..239 is the right edge of the 240 px image)
+        let clear: Vec<usize> = (0..233).filter(|&x| (0..bed.height).all(|y| bed.pixels[y * bed.width + x] == 0)).collect();
+        assert_eq!(clear, (64..=73).collect::<Vec<_>>());
     }
 }
