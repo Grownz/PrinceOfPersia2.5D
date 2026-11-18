@@ -32,6 +32,12 @@ pub fn shadow_budget(quality: &str) -> (usize, usize, usize) {
     }
 }
 
+/// Shadow-casting torches: the `shadow_quality` budget, unless POP_FX overrides it.
+fn torch_count(set: &Settings) -> usize {
+    let fx = crate::perf::fx();
+    if fx.torch_shadows { fx.lights.unwrap_or(shadow_budget(&set.shadow_quality).0) } else { 0 }
+}
+
 /// Indices of the `n` lights nearest to `focus` (xy distance: the camera looks straight down -z).
 pub fn nearest(lights: &[Vec2], focus: Vec2, n: usize) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..lights.len()).collect();
@@ -78,7 +84,7 @@ pub fn apply(
     *last = Some(*mode);
     let mut c = cmds.entity(cam_e);
     if *mode == RenderMode::Classic {
-        c.remove::<(Hdr, Bloom, ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass, Smaa)>().insert((Msaa::default(), ShadowFilteringMethod::default()));
+        c.remove::<(Hdr, Bloom, ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass, Smaa, bevy::render::view::NoIndirectDrawing)>().insert((Msaa::default(), ShadowFilteringMethod::default()));
         *amb = classic_ambient();
         for (_, mut l) in &mut sun {
             (l.shadow_maps_enabled, l.illuminance, l.shadow_normal_bias) = (false, CLASSIC_SUN, DirectionalLight::default().shadow_normal_bias);
@@ -87,24 +93,50 @@ pub fn apply(
         info!("render mode classic");
         return;
     }
-    let (torches, point_size, dir_size) = shadow_budget(&set.shadow_quality);
+    let (shadows, point_size, dir_size) = shadow_budget(&set.shadow_quality);
+    // POP_FX (perf.rs) overrides, for cost measurements only; all default to the values above
+    let fx = crate::perf::fx();
+    let torches = torch_count(&set);
+    let (point_size, dir_size) = (fx.point_map.unwrap_or(point_size), fx.dir_map.unwrap_or(dir_size));
     // SSAO needs 5 storage textures per stage (bevy_pbr skips its plugin below that) and MSAA off
     let ssao_ok = device.is_some_and(|d| d.limits().max_storage_textures_per_shader_stage >= 5);
-    let ssao = set.ssao && ssao_ok;
+    let ssao = set.ssao && ssao_ok && fx.ssao;
     // flames (emissive 8, 3, 0.5) are the only values far above 1, so the threshold-free natural bloom only glows there
-    c.insert((Hdr, Bloom { intensity: 0.12, ..Bloom::NATURAL }));
-    if ssao {
-        c.insert((Msaa::Off, Smaa::default(), ScreenSpaceAmbientOcclusion { quality_level: ScreenSpaceAmbientOcclusionQualityLevel::Medium, ..default() }));
+    match (fx.hdr, fx.bloom) {
+        (true, true) => {
+            c.insert((Hdr, Bloom { intensity: 0.12, ..Bloom::NATURAL }));
+        }
+        (true, false) => {
+            c.insert(Hdr);
+        }
+        _ => {}
     }
-    c.insert(if set.shadow_quality == "low" { ShadowFilteringMethod::Hardware2x2 } else { ShadowFilteringMethod::Gaussian });
-    *amb = enhanced_ambient();
+    if ssao {
+        use ScreenSpaceAmbientOcclusionQualityLevel as Q;
+        let quality_level = match fx.ssao_quality.as_deref() { Some("low") => Q::Low, Some("high") => Q::High, Some("ultra") => Q::Ultra, _ => Q::Medium };
+        c.insert((Msaa::Off, ScreenSpaceAmbientOcclusion { quality_level, ..default() }));
+        if fx.smaa {
+            c.insert(Smaa::default());
+        }
+    }
+    c.insert(match fx.filter.as_deref() {
+        Some("hw") => ShadowFilteringMethod::Hardware2x2,
+        Some("gauss") => ShadowFilteringMethod::Gaussian,
+        Some(_) => ShadowFilteringMethod::Temporal,
+        None if set.shadow_quality == "low" => ShadowFilteringMethod::Hardware2x2,
+        None => ShadowFilteringMethod::Gaussian,
+    });
+    if !fx.indirect {
+        c.insert(bevy::render::view::NoIndirectDrawing);
+    }
+    *amb = if fx.ambient { enhanced_ambient() } else { classic_ambient() };
     for (e, mut l) in &mut sun {
         // a little more normal bias than the default 1.8: the stacked wall boxes showed blotches on faces facing the sun
-        (l.shadow_maps_enabled, l.illuminance, l.shadow_normal_bias) = (torches > 0, ENHANCED_SUN, 2.5);
+        (l.shadow_maps_enabled, l.illuminance, l.shadow_normal_bias) = (shadows > 0 && fx.sun_shadow, ENHANCED_SUN, 2.5);
         // one cascade over the visible rooms (camera ~9 units away), so the sun's shadow texels stay small
         cmds.entity(e).insert(CascadeShadowConfigBuilder { num_cascades: 1, minimum_distance: 1.0, maximum_distance: 30.0, ..default() }.build());
     }
-    if torches > 0 {
+    if shadows > 0 {
         (point_map.size, dir_map.size) = (point_size, dir_size);
     }
     info!(
@@ -126,7 +158,7 @@ const ENHANCED_TORCH_Z: f32 = -0.6;
 /// shadow is 6 cube faces); in classic every light is back to `room::torch_light`'s values and its classic position.
 pub fn torch_shadows(mut cmds: Commands, mode: Res<RenderMode>, set: Res<Settings>, cam: Query<&GlobalTransform, With<Camera3d>>, mut lights: Query<(Entity, &mut Transform, &mut PointLight, Option<&ClassicZ>)>) {
     let enhanced = *mode == RenderMode::Enhanced;
-    let n = if enhanced { shadow_budget(&set.shadow_quality).0 } else { 0 };
+    let n = if enhanced { torch_count(&set) } else { 0 };
     let focus = cam.single().map_or(Vec2::ZERO, |t| t.translation().truncate());
     let pos: Vec<Vec2> = lights.iter().map(|(_, t, _, _)| t.translation.truncate()).collect();
     let on = nearest(&pos, focus, n);
