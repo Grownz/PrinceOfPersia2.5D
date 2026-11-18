@@ -95,8 +95,10 @@ fn setup(mut cmds: Commands, mut mixers: ResMut<Assets<Mixer>>, mut a: ResMut<Au
     let orig = adlib || sf.is_some() || mode == "original";
     let dir = crate::data_dir();
     let dats: Vec<Dat> = if orig { ["DIGISND1", "DIGISND2", "DIGISND3", "IBM_SND1", "IBM_SND2"].iter().filter_map(|f| Dat::open(format!("{dir}/{f}.DAT")).ok()).collect() } else { vec![] };
-    let midi: Vec<Dat> = if adlib || sf.is_some() { ["MIDISND1", "MIDISND2"].iter().filter_map(|f| Dat::open(format!("{dir}/{f}.DAT")).ok()).collect() } else { vec![] };
-    let bank = adlib.then(|| Dat::open(format!("{dir}/PRINCE.DAT")).ok().and_then(|d| pop_core::adlib::Bank::parse(d.get(1)?))).flatten();
+    // every set but `original` plays the real melodies from the MIDI files (the synth set's own phrases were invented, docs/audio.md 6.7)
+    let opl_music = sf.is_none() && mode != "original";
+    let midi: Vec<Dat> = if opl_music || sf.is_some() { ["MIDISND1", "MIDISND2"].iter().filter_map(|f| Dat::open(format!("{dir}/{f}.DAT")).ok()).collect() } else { vec![] };
+    let bank = opl_music.then(|| Dat::open(format!("{dir}/PRINCE.DAT")).ok().and_then(|d| pop_core::adlib::Bank::parse(d.get(1)?))).flatten();
     let t0 = std::time::Instant::now();
     let clips = (0..IDS)
         .map(|id| {

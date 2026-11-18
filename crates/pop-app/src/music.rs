@@ -32,9 +32,13 @@ pub fn render_opl(smf: &Smf, bank: &adlib::Bank) -> Vec<f32> {
     out
 }
 
-/// The AdLib bank has 18 instruments of unknown timbre (docs/audio.md 6.4.2); this maps program 0..17 to General MIDI.
-/// UNVERIFIED guess, to be corrected by ear: it is the identity for now.
-pub const GM_MAP: [u8; 18] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+/// The AdLib bank has 18 instruments without names; no document names them (docs/audio.md 6.6). This maps program 0..17 to
+/// General MIDI by what the OPL patches and the track roles say (INFERRED, to be corrected by ear): 0 soft reed lead -> Oboe,
+/// 1 bell -> Glockenspiel, 2 bass (every cue) -> Fingered Bass, 3 slow pad -> Choir Aahs, 4 thump -> Timpani, 5 long bell ->
+/// Tubular Bells, 6 mellow mid voice -> Strings, 7 shimmering organ chords -> Church Organ, 8 bright sustained -> Brass
+/// Section, 9 vibrato lead -> Flute, 10 (unused), 11 plucked bass pad -> Acoustic Bass, 12 reed -> Clarinet, 13 glassy pad ->
+/// Warm Pad, 14 bright pluck -> Harp, 15 heartbeat -> Melodic Tom, 16 buzzy -> Synth Brass, 17 reedy -> Accordion.
+pub const GM_MAP: [u8; 18] = [68, 9, 33, 52, 47, 14, 48, 19, 61, 73, 0, 32, 71, 89, 46, 117, 62, 21];
 pub const SF_RATE: u32 = 32000;
 
 /// Render `smf` with a SoundFont (rustysynth). Same rules as the original driver where they matter for the sound: controllers,

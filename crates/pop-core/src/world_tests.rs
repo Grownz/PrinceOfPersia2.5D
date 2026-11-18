@@ -791,3 +791,47 @@ fn start_position_from_the_level_tail() {
         assert_eq!((w.kid.room, w.kid.row, w.kid.facing_left, w.kid.x as i32), (room, row, left, x), "level {n}");
     }
 }
+
+/// Level-1 start music (0000:6153, docs/audio.md 10): cue 25 once, when the kid first crouches (frame 109) and no sound
+/// plays; a playing sound delays it; other levels never play it.
+#[test]
+fn level1_start_music() {
+    if crate::no_game_data() { return; }
+    // (first tick with cue 25, number of cues) over 300 ticks
+    let run = |level: usize, busy_until: usize| {
+        let mut w = World::new(data(), synth(1, 1..3, 2, 1, &[], &[]), level);
+        let (mut first, mut n) = (0, 0);
+        for i in 0..300 {
+            w.hold_death_counter = i < busy_until;
+            tick(&mut w, NONE, 1);
+            if w.sounds.contains(&25) {
+                n += 1;
+                first = if first == 0 { i + 1 } else { first };
+            }
+            w.sounds.clear();
+        }
+        (first, n)
+    };
+    let (first, n) = run(1, 0);
+    assert!(first > 0 && n == 1, "level 1 plays cue 25 at the start");
+    let (delayed, _) = run(1, first + 10);
+    assert!(delayed > first + 9, "a playing sound delays it ({delayed} vs {first})");
+    assert_eq!(run(2, 0).0, 0, "only level 1");
+}
+
+/// United with the level-12 shadow: cue 41 once, when ds:4FCE reaches 2 (0000:BDFF).
+#[test]
+fn united_with_shadow_cue_41() {
+    if crate::no_game_data() { return; }
+    let mut w = world(3, &[], &[]);
+    w.shadow.united = 5;
+    let mut at = vec![];
+    for i in 0..6 {
+        tick(&mut w, NONE, 1);
+        if w.sounds.contains(&41) {
+            at.push(i);
+        }
+        w.sounds.clear();
+    }
+    assert_eq!(at, [2], "5 -> 4 -> 3 -> 2 on the third tick");
+}

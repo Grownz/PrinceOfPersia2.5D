@@ -976,6 +976,17 @@ impl Kid {
     }
 
     fn control_crouched(&mut self, env: &Env, c: &mut Ctrl) {
+        // 0000:6153: the level-1 start music, once the kid crouches and no sound plays; that frame has no other control
+        if self.sh.level1_music != 0 && self.sh.level == 1 {
+            if !self.sh.sound_busy {
+                if self.sh.level1_music == 1 {
+                    self.events.push(Event::Sound(25));
+                }
+                self.sh.level1_music = if self.sh.level1_music == 1 { 2 } else { 0 };
+            }
+            return;
+        }
+        self.sh.level1_music = 0;
         // pick up a sword or drink a potion under the kid (get_item, 0000:65AA): Shift while crouching
         if c.shift2 == -1 {
             let (col, row) = (self.col(env), self.row);

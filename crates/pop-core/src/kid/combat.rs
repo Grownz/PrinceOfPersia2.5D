@@ -47,6 +47,10 @@ pub struct Shared {
     pub feather: u8,
     /// leveldoor_open (ds:40DC) != 0: the exit door can be entered
     pub leveldoor_open: bool,
+    /// need_level1_music (ds:4CE8): 1 on a level-1 start, 2 after cue 25 was queued, then 0 (docs/audio.md 10)
+    pub level1_music: u8,
+    /// a sound plays now (the app's `hold_death_counter`; pop-core itself treats sounds as finished at once)
+    pub sound_busy: bool,
 }
 
 /// prandom (0C83:0412): the original's linear congruential generator.

@@ -509,6 +509,252 @@ the title waits for 52 before the credits), 56 ending music (end_sequence `2F2F`
 Other cues (speaker / MIDI): 24 2.97 / 3.60, 28 6.45 / 7.20, 32 4.92 / 7.25 (death-counter waits), 41 11.31 / 12.75 (stairs
 exit wait), 39 18.61 / 18.67 (feather), 26 11.69 / 14.00, 27 10.73 / 12.00, 35 9.75 / 13.64, 36 12.72 / 15.73, 40 5.18 / 6.86.
 
+### 6.6 MIDI channels and instruments (INFERRED where marked)
+
+**Correction (melody check, 2026-11-18):** the key columns below are file key + transpose, but the driver sounds file key + transpose - 12 in GM numbering (6.4.3: +12 = GM pitch, so a +24 file sounds one octave up), i.e. 12 lower than listed when the transpose is +12 (cue 24 ch 1 sounds G#2-B2, not G#3-B3).
+
+Source: `crates/pop-core/examples/midi_channels.rs` (throwaway analysis, `cargo run -p pop-core --example midi_channels --release`; reads `Original_data`, prints text only) over the 22 music resources of MIDISND1/2.DAT and PRINCE.DAT resource 1. Keys are **sounding GM-numbered keys = file key + the file's transpose** (6.4.3, C4 = 60). "prog" is the channel's starting program (a channel without a program change plays the instrument with its own channel number, 6.4.1 reset) followed by each program change as `>n@time`; the first change is at 0.0 s in every file that has any. Role is a heuristic (INFERRED) from register, polyphony and pitch variety (`rhythm` = at most 2 distinct pitches in 6+ notes, `chords` = 3+ simultaneous notes or over 35 % overlap, else `bass` below mean key 55, else `melody`); the track name in the file is the better hint.
+
+**6.6.1 File layout and text events (VERIFIED).** Every file is SMF format 1, 480 ticks per quarter. Track 0 is an unnamed conductor track (tempo 51, SMPTE offset 54, time signature 58, End of Track 2F) with no notes. Every other track holds exactly **one channel** and exactly one text event: a **track name (meta 03)**. No other text/meta string exists (types 01, 02, 04..07 and 7F do not occur: no instrument names, lyrics, copyright or cue points). Channels are 0-based and contiguous from 0 (exceptions: cue 35 uses only ch 1 and 2; cue 39 skips ch 3). All channels are melodic (the driver has no drum channel).
+
+The names do **not** name instruments; they name the musical part: `melody`, `harmony`, `mid`, `bass`, `lo bass`, `hi / mid / lo voice` (three-part writing, cues 30, 33, 37, 43), `heart`, `heart/tymp`, `tympani`, `tymp/gliss` (rhythmic hits), `comp`, `comp1/2` (accompaniment), `Bass chord`, `Bass build`. Suffix **`dbl`** = the same line doubled on a second channel with another instrument (the original layers two OPL voices per line, the only way to get a richer timbre from a chip with no controllers); **`-v`** / **`^`** = doubled lower / higher (measured: `-v` = -12, `^` = +12 or +24 against the parent line; the digits in `^8`, `^15` UNVERIFIED), `/gliss` = glissando figure, `+harm` / `/harm` = with a harmony note. Because the doublings use different programs, the 7-8 channels of a file typically carry only 3 to 4 distinct lines.
+
+| cue | file | transpose | tracks | seconds | max simultaneous notes (all channels) |
+|---|---|---|---|---|---|
+| 24 | MIDISND1 | +12 | 8 | 3.60 | 7 |
+| 25 | MIDISND1 | +0 | 8 | 2.47 | 6 |
+| 26 | MIDISND1 | +24 | 9 | 14.00 | 9 |
+| 27 | MIDISND1 | +12 | 8 | 12.00 | 7 |
+| 28 | MIDISND1 | +12 | 9 | 7.20 | 8 |
+| 29 | MIDISND1 | +0 | 8 | 5.29 | 8 |
+| 30 | MIDISND1 | +12 | 10 | 3.54 | 9 |
+| 32 | MIDISND1 | +12 | 8 | 7.25 | 7 |
+| 33 | MIDISND1 | +12 | 10 | 2.34 | 9 |
+| 35 | MIDISND1 | +0 | 3 | 13.64 | 2 |
+| 36 | MIDISND1 | +12 | 9 | 15.73 | 9 |
+| 37 | MIDISND1 | +0 | 10 | 4.12 | 9 |
+| 39 | MIDISND1 | +12 | 7 | 18.67 | 6 |
+| 40 | MIDISND1 | +12 | 5 | 6.86 | 4 |
+| 41 | MIDISND1 | +12 | 8 | 12.75 | 8 |
+| 43 | MIDISND1 | +0 | 10 | 3.83 | 9 |
+| 50 | MIDISND2 | +12 | 7 | 14.50 | 6 |
+| 52 | MIDISND2 | +12 | 8 | 28.89 | 8 |
+| 53 | MIDISND2 | +0 | 8 | 17.26 | 8 |
+| 54 | MIDISND2 | +12 | 8 | 24.29 | 8 |
+| 55 | MIDISND2 | +12 | 8 | 15.75 | 8 |
+| 56 | MIDISND2 | +12 | 9 | 124.70 | 8 |
+
+The maximum is 9, reached in 26, 30, 33, 36, 37 and 43, exactly the OPL2 voice count, so the no-stealing allocation (6.4.4) never has to drop a note on count alone. Cues 37 and 43 have no program change and use the default channel-n-plays-instrument-n mapping; cue 35 plays channel 2 with instrument 2 and changes (to the same 2) only at 13.6 s.
+
+**6.6.2 The 18 bank instruments decoded (VERIFIED decode, timbre guess INFERRED).** Cells: `xMULT TLtl AR/DR/SL/RR` then flags AM (tremolo), VIB (vibrato), EGT (sustaining: the envelope holds at SL until key off; absent = it decays on through RR, a plucked/struck sound), KSR (key-scale rate), KSL (level scaling 1..3). `fb` = modulator feedback 0..7. All 36 operators use **waveform 0 (sine)**, and all 18 use **FM connection (none additive)**, so velocity (6.4.5) only ever scales the carrier. Instruments 0..17 are the GM-independent bank; 10 is never used.
+
+| # | fb | modulator | carrier | timbre guess (INFERRED) | where used |
+|---|---|---|---|---|---|
+| 0 | 2 | x2 TL8 4/1/2/1 VIB KSR KSL2 | x3 TL6 7/1/1/4 VIB EGT KSR KSL2 | soft sustained lead, reed/organ-like (carrier x3, attack 7; the modulator does not sustain, so the tone mellows) | melody (main theme 54, 56; 37, 43 ch 0) |
+| 1 | 2 | x3 TL4 14/2/3/3 VIB EGT KSR KSL2 | x4 TL4 14/2/1/4 VIB KSR KSL2 | bright bell/glockenspiel-like (x3/x4, fast attack, carrier decays slowly) | melody/harmony, short notes |
+| 2 | 5 | x2 TL14 9/7/2/4 KSL1 | x2 TL10 15/8/0/4 EGT KSR | bass: instant attack, sustained, feedback 5, modulator decays so the tone mellows; brass-like when played high | "bass" tracks in every cue |
+| 3 | 2 | x2 TL13 2/2/2/2 VIB EGT KSR KSL2 | x0 TL11 3/1/4/4 VIB EGT KSR KSL2 | slow-swell pad: carrier x0 (sub-octave), attack 3, vibrato; string/choir-like | melody doubling in 56, 54, 37, 43 |
+| 4 | 2 | x2 TL8 8/6/9/1 KSR KSL2 | x1 TL0 15/3/4/5 KSR | percussive thump: carrier x1, TL 0, EGT off, decay 3; timpani-like | "tymp"/"tympani" tracks |
+| 5 | 2 | x3 TL4 14/2/3/1 VIB EGT KSR KSL2 | x4 TL3 14/2/1/1 VIB KSR KSL2 | bell/chime like 1 but with a long release (RR1) | melody, short notes |
+| 6 | 1 | x4 TL19 1/1/1/1 VIB KSR KSL1 | x1 TL8 5/1/1/3 VIB EGT KSR KSL2 | mellow sustained mid voice: modulator x4 with very slow attack, carrier x1; flute/string-like | "mid", "mel dbl", harmony |
+| 7 | 5 | x2 TL18 4/1/2/1 VIB KSR KSL2 | x6 TL8 7/1/1/4 AM VIB EGT KSR KSL2 | shimmering sustained organ-like: carrier x6 with tremolo+vibrato, feedback 5, slow attack | "Bass chord" (4-note chords) |
+| 8 | 4 | x3 TL5 3/3/2/1 VIB EGT KSR KSL2 | x4 TL11 1/1/4/2 VIB EGT KSR KSL2 | bright sustained brass/string-like (strong modulator TL5, x3/x4, slow attack, long release) | melody doubling |
+| 9 | 2 | x0 TL22 3/1/3/1 VIB KSR KSL2 | x3 TL8 6/2/1/4 VIB EGT KSR KSL2 | soft vibrato lead: modulator x0 and weak (TL22), carrier x3; flute/reed-like | melody (41, 52, 54, 55, 56) |
+| 10 | 5 | x2 TL11 3/3/2/1 VIB EGT KSR KSL2 | x3 TL11 3/1/4/2 VIB EGT KSR KSL2 | similar to 6/8 (x2/x3, feedback 5, slow attack); **never used by any cue** | - |
+| 11 | 2 | x0 TL6 6/1/14/1 KSL2 | x3 TL8 12/1/10/6 EGT KSR KSL2 | bass pad: fast attack then ducks to a plateau (SL10), modulator x0; plucked/string-bass-like | "Bass build dbl", "bass-v" |
+| 12 | 0 | x3 TL15 7/3/2/1 VIB KSR KSL1 | x5 TL8 11/8/1/5 VIB EGT KSR KSL1 | clarinet/reed-like: no feedback, carrier x5 decaying (DR8) to a sustain | melody (26, 27, 50, 52) |
+| 13 | 1 | x4 TL20 2/1/5/2 AM VIB EGT KSL2 | x6 TL4 5/2/5/8 AM VIB EGT KSL2 | glassy sustained: AM+VIB on both operators, x4/x6, slow attack; choir/ethereal | "hi voice" (30, 33), melody in 56 |
+| 14 | 4 | x7 TL15 15/2/6/1 KSL1 | x2 TL23 15/2/7/1 KSR | bright pluck, harp- or marimba-like: modulator x7, fast attack, both operators decay (EGT off) | "hi voice" (26, 30, 33, 50) |
+| 15 | 0 | x0 TL13 15/8/14/11 | x0 TL0 13/5/3/13 | pure percussion: both x0, EGT off, fast decay (DR8/DR5), RR11/13; heartbeat/tom thud | "heart" tracks (27, 35, 36, 40, 52) |
+| 16 | 7 | x1 TL22 7/1/10/14 EGT | x1 TL0 8/1/9/14 EGT | harsh buzzy sustained: feedback 7, x1/x1, RR14 (cuts off at once); saw-like brass/string-section | "melody-^", "comp-^" (36 only) |
+| 17 | 5 | x1 TL22 6/1/10/6 EGT | x1 TL9 11/1/9/5 AM VIB EGT | reedy/organ-like sustained: feedback 5, x1/x1, carrier AM+VIB, instant attack, ducks to SL9; accordion/brass-like | high "-^" doublings (24, 28; 26, 32, 36) |
+
+The guesses follow the usual OPL patch reading (multiple 0/1 carrier with TL 0 and non-sustaining envelope = drum thud; modulator at low TL with multiples 3..7 = bright, bell- or pluck-like; sustained carrier with slow attack = pad/string; feedback 5..7 = buzzy) and are consistent with the track names that use them: 15 and 4 are the `heart`/`tymp` instruments, 2 is `bass`, 7 is `Bass chord`.
+
+**6.6.3 Instrument by role and cue.** Notes counted per program in force at note on; roles are the heuristic of 6.6.4; "names" are the three most frequent track names (with notes).
+
+| inst | notes | chans | roles (notes) | main track names (notes) | cues |
+|---|---|---|---|---|---|
+| 0 | 330 | 6 | melody 330 | melody 266, mid 50, hi 8 | 37, 43, 54, 56 |
+| 1 | 303 | 15 | bass 3, chords 4, melody 296 | melody^ dbl 250, melody 16, melody dbl 16 | 24, 25, 29, 37, 40, 43, 52, 53, 55, 56 |
+| 2 | 1345 | 39 | bass 612, melody 709, rhythm 24 | bass 554, bass dbl-v 473, bass^ dbl 168 | 24, 25, 26, 28, 29, 32, 35, 36, 37, 40, 41, 43, 52, 53, 54, 55, 56 |
+| 3 | 273 | 4 | melody 273 | mel dbl 251, melody dbl 14, hi 8 | 37, 43, 54, 56 |
+| 4 | 99 | 10 | bass 34, melody 42, rhythm 23 | tympani 40, comp/tympani 17, heart/tymp 17 | 25, 29, 32, 37, 41, 43, 52, 53, 54, 55 |
+| 5 | 88 | 12 | bass 15, melody 73 | melody 56, melody/gliss 13, tymp/gliss 10 | 25, 29, 32, 37, 41, 43, 52, 53, 54, 55 |
+| 6 | 137 | 34 | bass 16, chords 2, melody 119 | harmony 17, bass 15, mel dbl/harm 14 | 24, 26, 27, 30, 32, 33, 37, 39, 41, 43, 50, 52, 54 |
+| 7 | 30 | 7 | bass 2, chords 18, melody 10 | Bass chord 18, mid 4, mid-^ 4 | 29, 37, 43, 53, 55 |
+| 8 | 34 | 5 | bass 4, melody 30 | melody dbl 26, lo 4, lo-v 4 | 27, 37, 40, 43, 52 |
+| 9 | 75 | 8 | chords 4, melody 71 | melody dbl 50, melody 15, mid 10 | 41, 52, 54, 55, 56 |
+| 11 | 18 | 5 | bass 18 | Bass build dbl 10, bass-v 8 | 25, 29, 36, 53, 55 |
+| 12 | 32 | 4 | melody 32 | melody 21, bass 11 | 26, 27, 50, 52 |
+| 13 | 37 | 7 | melody 37 | mid^ dbl 19, hi voice 11, mid voice 4 | 30, 33, 56 |
+| 14 | 49 | 9 | melody 49 | melody 12, mid 12, hi voice 11 | 26, 30, 33, 50 |
+| 15 | 118 | 6 | melody 58, rhythm 60 | heart/tymp 66, heart 36, heart/comp1 8 | 27, 35, 36, 40, 52 |
+| 16 | 18 | 2 | chords 9, melody 9 | comp-^ 9, melody-^ 9 | 36 |
+| 17 | 69 | 13 | chords 17, melody 52 | melody 13, mid dbl+harm 13, melody-^ 9 | 24, 26, 28, 32, 36 |
+
+**Findings.** (1) **Bass = instrument 2** in every file ("bass" and its `dbl-v` octave double, 612 bass-register notes in 17 cues; in 56 and 54 the same instrument also plays inner parts); **11** is the alternate soft bass pad (25, 29, 36, 53, 55) and 6 the "lo bass"/low voice. (2) **Melody**: 0 (main theme, 54/56), 1 and 5 (bell-like, the short-note melodies of 24, 25, 29, 53, 55), 9 (soft lead, 41/52/54/55/56), doubled by 3, 8, 12, 14, 13, 17, 16 (high-register `^` copies). (3) **Chords**: the only genuine chord channels (4 simultaneous notes) are the "Bass chord" tracks, instrument 7, in 29, 53, 55; every other channel is monophonic (a few overlap to 2, e.g. 26 ch 4, 32 ch 6, 36 ch 6, 41/54 ch 5). (4) **Rhythm/percussion-like**: 15 (heart: repeated D4/G2/G4/A2, cues 27, 35, 36, 40, 52) and 4 (tympani, one or two pitches, 17 hits in 52/54), plus cue 35 whose two channels both repeat G2 (the heartbeat). (5) The `hi/mid/lo voice` cues 30 and 33 and the default-program cues 37 and 43 are three-voice chorale blocks, each copied three times at different octaves with programs 14/6/13 (30, 33) or 0..8 (37, 43). (6) Surprise: a file has up to 8 notated lines but only 3-4 musical ones; names are the only text and they describe parts, not instruments. Instrument 10 and every non-sine waveform are unused; there is no volume or pitch-bend controller anywhere (consistent with the driver ignoring them).
+
+**6.6.4 Channel tables, every music cue.** Columns: channel, file track name, program history, note count, sounding key range, mean velocity, max simultaneous notes on the channel, total sounding seconds (union of notes), median note length in seconds, role guess. The notes of the channels of one cue are the cross-tab of 6.6.3 per cue.
+
+| cue | ch | track | prog | notes | keys | vel | poly | snd s | med s | role |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 24 | 0 | harmony | 0>1@0.0s | 4 | 61-64 (C#4-E4) | 36 | 1 | 1.3 | 0.05 | melody |
+| 24 | 1 | melody | 1>1@0.0s | 5 | 56-59 (G#3-B3) | 38 | 1 | 3.0 | 0.05 | melody |
+| 24 | 2 | bass | 2>2@0.0s | 3 | 52-55 (E3-G3) | 64 | 1 | 2.8 | 1.20 | bass |
+| 24 | 3 | bass-v | 3>2@0.0s | 3 | 40-43 (E2-G2) | 64 | 1 | 2.8 | 1.20 | bass |
+| 24 | 4 | bass-v | 4>6@0.0s | 3 | 40-43 (E2-G2) | 64 | 1 | 2.8 | 1.20 | bass |
+| 24 | 5 | harmony-^ | 5>17@0.0s | 4 | 85-88 (C#6-E6) | 64 | 1 | 1.3 | 0.05 | melody |
+| 24 | 6 | melody-^ | 6>17@0.0s | 5 | 80-83 (G#5-B5) | 64 | 1 | 2.9 | 0.05 | melody |
+| 25 | 0 | melody/gliss | 0>1@0.0s>5@0.3s | 4 | 54-56 (F#3-G#3) | 64 | 1 | 1.6 | 0.09 | melody |
+| 25 | 1 | tymp/gliss | 1>4@0.0s | 1 | 38-38 (D2-D2) | 127 | 1 | 1.4 | 1.41 | bass |
+| 25 | 2 | Bass | 2>2@0.0s | 1 | 43-43 (G2-G2) | 94 | 1 | 1.4 | 1.41 | bass |
+| 25 | 3 | Bass dbl-v | 3>2@0.0s | 1 | 31-31 (G1-G1) | 94 | 1 | 1.4 | 1.41 | bass |
+| 25 | 4 | melody dbl | 4>1@0.0s | 4 | 66-68 (F#4-G#4) | 64 | 1 | 1.7 | 0.09 | melody |
+| 25 | 5 | Bass build dbl | 5>11@0.0s | 1 | 43-43 (G2-G2) | 64 | 1 | 1.4 | 1.41 | bass |
+| 26 | 0 | melody | 0>14@0.0s | 12 | 85-102 (C#6-F#7) | 87 | 1 | 12.2 | 0.50 | melody |
+| 26 | 1 | mid | 1>14@0.0s | 12 | 77-97 (F5-C#7) | 71 | 1 | 12.7 | 0.55 | melody |
+| 26 | 2 | bass | 2>2@0.0s | 11 | 61-86 (C#4-D6) | 79 | 1 | 13.2 | 0.50 | melody |
+| 26 | 3 | bass dbl-v | 3>6@0.0s>2@5.5s | 11 | 49-74 (C#3-D5) | 80 | 1 | 13.2 | 0.50 | melody |
+| 26 | 4 | mid dbl+harm | 4>17@0.0s>6@9.5s | 15 | 49-97 (C#3-C#7) | 82 | 2 | 12.7 | 0.50 | chords |
+| 26 | 5 | melody dbl | 5>6@0.0s | 12 | 85-102 (C#6-F#7) | 75 | 1 | 12.2 | 0.50 | melody |
+| 26 | 6 | bass dbl | 6>6@0.0s>2@5.5s | 11 | 61-86 (C#4-D6) | 79 | 1 | 13.2 | 0.50 | melody |
+| 26 | 7 | bass | 7>12@0.0s | 11 | 49-74 (C#3-D5) | 79 | 1 | 13.2 | 0.50 | melody |
+| 27 | 0 | melody | 0>12@0.0s | 7 | 62-78 (D4-F#5) | 78 | 1 | 7.9 | 1.20 | melody |
+| 27 | 1 | heart | 1>15@0.0s | 28 | 62-62 (D4-D4) | 64 | 1 | 8.4 | 0.40 | rhythm |
+| 27 | 2 | bass | 2>6@0.0s | 4 | 62-72 (D4-C5) | 40 | 1 | 6.4 | 1.60 | melody |
+| 27 | 3 | melody dbl | 3>8@0.0s | 7 | 74-90 (D5-F#6) | 62 | 1 | 5.9 | 1.20 | melody |
+| 27 | 4 | bass dbl | 4>6@0.0s | 4 | 74-84 (D5-C6) | 28 | 1 | 5.6 | 1.20 | melody |
+| 27 | 5 | mel dbl | 5>6@0.0s | 7 | 74-90 (D5-F#6) | 62 | 1 | 5.9 | 1.20 | melody |
+| 27 | 6 | lo bass | 6>6@0.0s | 2 | 50-55 (D3-G3) | 40 | 1 | 4.8 | 3.20 | bass |
+| 28 | 0 | harmony | 0>17@0.0s | 4 | 64-64 (E4-E4) | 64 | 1 | 4.7 | 1.57 | melody |
+| 28 | 1 | melody | 1>17@0.0s | 4 | 59-60 (B3-C4) | 64 | 1 | 6.4 | 1.60 | melody |
+| 28 | 2 | bass | 2>2@0.0s | 5 | 52-55 (E3-G3) | 64 | 1 | 6.4 | 1.60 | bass |
+| 28 | 3 | bass dbl -v | 3>2@0.0s | 5 | 40-43 (E2-G2) | 74 | 1 | 6.4 | 1.60 | bass |
+| 28 | 4 | harmony-^ | 4>17@0.0s | 4 | 76-76 (E5-E5) | 64 | 1 | 4.7 | 1.57 | melody |
+| 28 | 5 | melody-^ | 5>17@0.0s | 4 | 71-72 (B4-C5) | 64 | 1 | 6.4 | 1.60 | melody |
+| 28 | 6 | harmony -^15 | 6>17@0.0s | 4 | 88-88 (E6-E6) | 48 | 1 | 4.7 | 1.57 | melody |
+| 28 | 7 | melody -^15 | 7>17@0.0s | 4 | 83-84 (B5-C6) | 48 | 1 | 6.4 | 1.60 | melody |
+| 29 | 0 | melody/gliss | 0>1@0.0s>5@0.3s>2@2.4s | 6 | 42-56 (F#2-G#3) | 85 | 1 | 5.0 | 0.09 | bass |
+| 29 | 1 | tymp/gliss | 1>4@0.0s | 2 | 38-38 (D2-D2) | 88 | 1 | 0.7 | 0.35 | bass |
+| 29 | 2 | Bass | 2>2@0.0s | 5 | 38-43 (D2-G2) | 114 | 1 | 4.8 | 0.71 | bass |
+| 29 | 3 | Bass dbl-v | 3>2@0.0s | 5 | 26-34 (D1-A#1) | 114 | 1 | 4.9 | 0.71 | bass |
+| 29 | 4 | melody dbl | 4>1@0.0s | 4 | 66-68 (F#4-G#4) | 64 | 1 | 2.4 | 0.09 | melody |
+| 29 | 5 | Bass build dbl | 5>11@0.0s | 1 | 43-43 (G2-G2) | 64 | 1 | 2.1 | 2.12 | bass |
+| 29 | 6 | Bass chord | 6>7@0.0s | 6 | 26-54 (D1-F#3) | 56 | 4 | 2.5 | 2.47 | chords |
+| 30 | 0 | hi voice | 0>14@0.0s | 7 | 78-84 (F#5-C6) | 80 | 1 | 2.6 | 0.12 | melody |
+| 30 | 1 | mid voice | 1>14@0.0s | 3 | 74-78 (D5-F#5) | 80 | 1 | 2.9 | 1.17 | melody |
+| 30 | 2 | lo voice | 2>14@0.0s | 2 | 67-71 (G4-B4) | 80 | 1 | 3.1 | 1.87 | melody |
+| 30 | 3 | hi voice | 3>6@0.0s | 7 | 66-72 (F#4-C5) | 32 | 1 | 2.6 | 0.12 | melody |
+| 30 | 4 | mid voice | 4>6@0.0s | 3 | 62-66 (D4-F#4) | 48 | 1 | 2.9 | 1.17 | melody |
+| 30 | 5 | lo voice | 5>6@0.0s | 2 | 55-59 (G3-B3) | 64 | 1 | 3.1 | 1.87 | melody |
+| 30 | 6 | hi voice | 6>13@0.0s | 7 | 90-96 (F#6-C7) | 32 | 1 | 2.6 | 0.12 | melody |
+| 30 | 7 | mid voice | 7>13@0.0s | 3 | 86-90 (D6-F#6) | 32 | 1 | 2.9 | 1.17 | melody |
+| 30 | 8 | lo voice | 8>13@0.0s | 2 | 79-83 (G5-B5) | 32 | 1 | 3.1 | 1.87 | melody |
+| 32 | 0 | melody | 0>5@0.0s | 9 | 71-95 (B4-B6) | 78 | 1 | 6.5 | 0.08 | melody |
+| 32 | 1 | tympani | 1>4@0.0s | 8 | 55-59 (G3-B3) | 114 | 1 | 1.9 | 0.19 | rhythm |
+| 32 | 2 | bass | 2>2@0.0s>5@3.8s | 9 | 54-91 (F#3-G6) | 78 | 1 | 6.5 | 0.08 | melody |
+| 32 | 3 | bass dbl-v | 3>2@0.0s | 3 | 42-43 (F#2-G2) | 80 | 1 | 3.9 | 0.88 | bass |
+| 32 | 4 | harmony | 4>6@0.0s | 3 | 71-75 (B4-D#5) | 80 | 1 | 3.5 | 0.75 | melody |
+| 32 | 5 | bass harmony | 5>2@0.0s | 2 | 62-63 (D4-D#4) | 72 | 1 | 3.9 | 2.25 | melody |
+| 32 | 6 | melody dbl | 6>17@0.0s | 4 | 71-95 (B4-B6) | 64 | 2 | 6.0 | 3.00 | chords |
+| 33 | 0 | hi voice | 0>14@0.0s | 4 | 78-83 (F#5-B5) | 80 | 1 | 1.9 | 0.09 | melody |
+| 33 | 1 | mid voice | 1>14@0.0s | 1 | 74-74 (D5-D5) | 80 | 1 | 2.0 | 1.97 | melody |
+| 33 | 2 | lo voice | 2>14@0.0s | 1 | 67-67 (G4-G4) | 80 | 1 | 2.1 | 2.06 | melody |
+| 33 | 3 | hi voice | 3>6@0.0s | 4 | 66-71 (F#4-B4) | 32 | 1 | 1.8 | 0.09 | melody |
+| 33 | 4 | mid voice | 4>6@0.0s | 1 | 62-62 (D4-D4) | 48 | 1 | 1.8 | 1.78 | melody |
+| 33 | 5 | lo voice | 5>6@0.0s | 1 | 55-55 (G3-G3) | 64 | 1 | 1.9 | 1.88 | melody |
+| 33 | 6 | hi voice | 6>13@0.0s | 4 | 90-95 (F#6-B6) | 32 | 1 | 1.7 | 0.09 | melody |
+| 33 | 7 | mid voice | 7>13@0.0s | 1 | 86-86 (D6-D6) | 32 | 1 | 1.8 | 1.78 | melody |
+| 33 | 8 | lo voice | 8>13@0.0s | 1 | 79-79 (G5-G5) | 32 | 1 | 1.9 | 1.88 | melody |
+| 35 | 1 | heart/tymp | 1>15@0.0s | 24 | 43-43 (G2-G2) | 64 | 1 | 7.7 | 0.43 | rhythm |
+| 35 | 2 | bass | 2>2@0.0s>2@13.6s | 24 | 43-43 (G2-G2) | 64 | 1 | 7.7 | 0.43 | rhythm |
+| 36 | 0 | melody | 0>15@0.0s>17@4.2s | 17 | 53-73 (F3-C#5) | 63 | 1 | 13.4 | 0.46 | melody |
+| 36 | 1 | heart/comp1 | 1>15@0.0s>17@4.0s | 14 | 53-68 (F3-G#4) | 66 | 1 | 13.4 | 0.67 | melody |
+| 36 | 2 | bass | 2>2@0.0s | 16 | 48-63 (C3-D#4) | 61 | 1 | 13.4 | 0.67 | bass |
+| 36 | 3 | bass-v | 3>2@4.3s | 8 | 36-51 (C2-D#3) | 64 | 1 | 10.2 | 1.00 | bass |
+| 36 | 4 | comp2 | 4>17@4.3s | 4 | 56-65 (G#3-F4) | 64 | 1 | 8.6 | 2.00 | melody |
+| 36 | 5 | melody-^ | 5>16@4.3s | 9 | 77-85 (F5-C#6) | 32 | 1 | 10.2 | 0.67 | melody |
+| 36 | 6 | comp-^ | 6>16@4.3s | 9 | 68-80 (G#4-G#5) | 16 | 2 | 11.4 | 1.60 | chords |
+| 36 | 7 | bass-v | 7>11@4.3s | 8 | 48-63 (C3-D#4) | 62 | 1 | 10.2 | 1.00 | bass |
+| 37 | 0 | hi | 0 | 4 | 64-69 (E4-A4) | 48 | 1 | 1.9 | 0.38 | melody |
+| 37 | 1 | mid | 1 | 4 | 57-62 (A3-D4) | 48 | 1 | 1.9 | 0.38 | melody |
+| 37 | 2 | lo | 2 | 4 | 50-55 (D3-G3) | 48 | 1 | 1.9 | 0.38 | bass |
+| 37 | 3 | hi | 3 | 4 | 76-81 (E5-A5) | 40 | 1 | 1.9 | 0.38 | melody |
+| 37 | 4 | mid | 4 | 4 | 69-74 (A4-D5) | 40 | 1 | 1.9 | 0.38 | melody |
+| 37 | 5 | lo | 5 | 4 | 62-67 (D4-G4) | 40 | 1 | 1.9 | 0.38 | melody |
+| 37 | 6 | hi | 6 | 4 | 76-81 (E5-A5) | 64 | 1 | 1.9 | 0.38 | melody |
+| 37 | 7 | mid | 7 | 4 | 69-74 (A4-D5) | 64 | 1 | 1.9 | 0.38 | melody |
+| 37 | 8 | lo | 8 | 4 | 62-67 (D4-G4) | 64 | 1 | 1.9 | 0.38 | melody |
+| 39 | 0 | hi 1 | 0>6@0.0s | 3 | 77-77 (F5-F5) | 48 | 1 | 13.3 | 5.33 | melody |
+| 39 | 1 | hi 2 | 1>6@0.0s | 3 | 73-73 (C#5-C#5) | 48 | 1 | 16.0 | 5.33 | melody |
+| 39 | 2 | bass | 2>6@0.0s | 3 | 45-45 (A2-A2) | 48 | 1 | 16.0 | 5.33 | bass |
+| 39 | 4 | hi 1 | 4>6@0.0s | 1 | 77-77 (F5-F5) | 48 | 1 | 5.3 | 5.33 | melody |
+| 39 | 5 | hi 2 | 5>6@0.0s | 3 | 73-73 (C#5-C#5) | 48 | 1 | 11.3 | 4.00 | melody |
+| 39 | 6 | bass-^ | 6>6@0.0s | 2 | 57-57 (A3-A3) | 48 | 1 | 10.0 | 5.33 | melody |
+| 40 | 0 | melody | 0>1@0.0s | 4 | 61-63 (C#4-D#4) | 94 | 1 | 3.7 | 0.11 | melody |
+| 40 | 1 | heart | 1>15@0.0s | 8 | 67-67 (G4-G4) | 64 | 1 | 2.6 | 0.43 | rhythm |
+| 40 | 2 | bass | 2>2@0.0s | 4 | 49-51 (C#3-D#3) | 94 | 1 | 3.6 | 0.11 | bass |
+| 40 | 3 | melody dbl | 3>8@0.0s | 4 | 61-63 (C#4-D#4) | 94 | 1 | 1.2 | 0.11 | melody |
+| 41 | 0 | melody | 0>5@0.0s>9@8.2s | 21 | 69-85 (A4-C#6) | 72 | 1 | 11.2 | 0.19 | melody |
+| 41 | 1 | tympani | 1>4@0.0s | 17 | 45-59 (A2-B3) | 112 | 1 | 3.9 | 0.19 | bass |
+| 41 | 2 | bass | 2>2@0.0s | 14 | 45-55 (A2-G3) | 70 | 1 | 10.8 | 0.69 | bass |
+| 41 | 3 | bass dbl-v | 3>2@0.0s | 14 | 33-43 (A1-G2) | 57 | 1 | 10.8 | 0.69 | bass |
+| 41 | 4 | harmony | 4>6@0.0s | 7 | 71-76 (B4-E5) | 89 | 1 | 8.2 | 0.75 | melody |
+| 41 | 5 | bass harmony | 5>2@0.0s | 15 | 57-64 (A3-E4) | 69 | 2 | 10.8 | 0.69 | melody |
+| 41 | 6 | melody dbl | 6>9@0.0s | 16 | 71-85 (B4-C#6) | 46 | 1 | 8.2 | 0.19 | melody |
+| 43 | 0 | hi | 0 | 4 | 64-69 (E4-A4) | 80 | 1 | 2.5 | 0.50 | melody |
+| 43 | 1 | mid | 1 | 4 | 57-62 (A3-D4) | 80 | 1 | 2.5 | 0.50 | melody |
+| 43 | 2 | lo | 2 | 4 | 50-55 (D3-G3) | 80 | 1 | 2.5 | 0.50 | bass |
+| 43 | 3 | hi | 3 | 4 | 64-69 (E4-A4) | 80 | 1 | 2.5 | 0.50 | melody |
+| 43 | 4 | mid | 4 | 4 | 57-62 (A3-D4) | 80 | 1 | 2.5 | 0.50 | melody |
+| 43 | 5 | lo | 5 | 4 | 50-55 (D3-G3) | 80 | 1 | 2.5 | 0.50 | bass |
+| 43 | 6 | hi-^ | 6 | 4 | 76-81 (E5-A5) | 48 | 1 | 2.5 | 0.50 | melody |
+| 43 | 7 | mid-^ | 7 | 4 | 69-74 (A4-D5) | 48 | 1 | 2.5 | 0.50 | melody |
+| 43 | 8 | lo-v | 8 | 4 | 26-31 (D1-G1) | 96 | 1 | 2.5 | 0.50 | bass |
+| 50 | 0 | melody | 0>12@0.0s | 7 | 62-90 (D4-F#6) | 41 | 1 | 13.0 | 1.25 | melody |
+| 50 | 1 | lo bass at end | 1>6@0.0s | 2 | 50-55 (D3-G3) | 40 | 1 | 8.2 | 4.50 | bass |
+| 50 | 2 | bass | 2>6@0.0s | 4 | 62-72 (D4-C5) | 40 | 1 | 13.0 | 4.50 | melody |
+| 50 | 3 | melody dbl-^8 | 3>14@0.0s | 7 | 74-90 (D5-F#6) | 30 | 1 | 13.0 | 1.25 | melody |
+| 50 | 4 | bass dbl-^8 | 4>6@0.0s | 4 | 74-84 (D5-C6) | 28 | 1 | 11.5 | 3.00 | melody |
+| 50 | 5 | melody dbl-^8 | 5>6@0.0s | 7 | 74-90 (D5-F#6) | 30 | 1 | 13.0 | 1.25 | melody |
+| 52 | 0 | melody | 0>1@0.0s>12@6.8s>5@16.1s>9@24.4s | 32 | 61-85 (C#4-C#6) | 76 | 1 | 23.4 | 0.19 | melody |
+| 52 | 1 | heart/tymp | 1>15@0.0s>4@16.1s | 59 | 57-71 (A3-B4) | 78 | 1 | 16.3 | 0.21 | melody |
+| 52 | 2 | bass | 2>2@0.0s>6@6.8s>2@16.1s | 26 | 45-72 (A2-C5) | 69 | 1 | 21.7 | 0.69 | bass |
+| 52 | 3 | melody dbl | 3>8@0.0s>9@16.1s | 31 | 49-90 (C#3-F#6) | 59 | 1 | 17.2 | 0.19 | melody |
+| 52 | 4 | bass dbl/harm | 4>6@6.8s>2@13.1s | 25 | 57-84 (A3-C6) | 61 | 2 | 17.7 | 0.69 | melody |
+| 52 | 5 | mel dbl/harm | 5>6@6.8s | 14 | 71-90 (B4-F#6) | 76 | 1 | 14.0 | 1.14 | melody |
+| 52 | 6 | lo bass | 6>6@6.8s>2@15.4s | 16 | 33-55 (A1-G3) | 55 | 1 | 15.4 | 0.69 | bass |
+| 53 | 0 | melody/gliss | 0>1@0.0s>5@0.3s>2@2.4s>5@14.3s | 16 | 42-98 (F#2-D7) | 70 | 1 | 8.0 | 0.06 | melody |
+| 53 | 1 | tymp/gliss | 1>4@0.0s>5@14.3s | 24 | 38-93 (D2-A6) | 56 | 1 | 5.8 | 0.09 | bass |
+| 53 | 2 | Bass | 2>2@0.0s | 8 | 38-43 (D2-G2) | 98 | 1 | 9.1 | 1.41 | bass |
+| 53 | 3 | Bass dbl-v | 3>2@0.0s | 8 | 26-34 (D1-A#1) | 94 | 1 | 9.2 | 1.41 | bass |
+| 53 | 4 | melody dbl | 4>1@0.0s | 4 | 66-68 (F#4-G#4) | 64 | 1 | 2.4 | 0.09 | melody |
+| 53 | 5 | Bass build dbl | 5>11@0.0s | 4 | 38-43 (D2-G2) | 40 | 1 | 6.4 | 1.41 | bass |
+| 53 | 6 | Bass chord | 6>7@0.0s | 6 | 26-54 (D1-F#3) | 56 | 4 | 2.5 | 2.47 | chords |
+| 54 | 0 | melody | 0>0@0.0s>5@14.5s>9@19.8s | 33 | 69-85 (A4-C#6) | 69 | 1 | 19.3 | 0.19 | melody |
+| 54 | 1 | comp/tympani | 1>0@0.0s>4@11.1s | 23 | 45-75 (A2-D#5) | 97 | 1 | 11.0 | 0.19 | melody |
+| 54 | 2 | bass | 2>2@0.0s | 47 | 45-67 (A2-G4) | 52 | 1 | 22.4 | 0.55 | melody |
+| 54 | 3 | bass dbl-v | 3>2@0.0s | 47 | 33-55 (A1-G3) | 52 | 1 | 22.4 | 0.55 | bass |
+| 54 | 4 | harmony | 4>6@0.0s | 7 | 71-76 (B4-E5) | 89 | 1 | 8.2 | 0.75 | melody |
+| 54 | 5 | bass harmony | 5>2@0.0s | 15 | 57-64 (A3-E4) | 69 | 2 | 10.8 | 0.69 | melody |
+| 54 | 6 | melody dbl | 6>3@0.0s>9@14.5s | 28 | 71-85 (B4-C#6) | 49 | 1 | 16.3 | 0.19 | melody |
+| 55 | 0 | melody | 0>1@0.0s>5@6.7s>2@8.9s>7@11.9s | 8 | 49-65 (C#3-F4) | 76 | 1 | 8.4 | 0.09 | melody |
+| 55 | 1 | tympani | 1>4@0.0s | 15 | 45-45 (A2-A2) | 113 | 1 | 3.2 | 0.19 | rhythm |
+| 55 | 2 | Bass | 2>2@0.0s>7@11.9s | 10 | 45-69 (A2-A4) | 88 | 1 | 12.7 | 1.50 | bass |
+| 55 | 3 | Bass dbl-v | 3>2@0.0s | 8 | 33-41 (A1-F2) | 94 | 1 | 9.8 | 1.50 | bass |
+| 55 | 4 | melody dbl | 4>1@0.0s>9@11.9s | 8 | 69-81 (A4-A5) | 56 | 2 | 5.6 | 0.09 | chords |
+| 55 | 5 | Bass build dbl | 5>11@0.0s | 4 | 45-50 (A2-D3) | 40 | 1 | 6.8 | 1.50 | bass |
+| 55 | 6 | Bass chord | 6>7@0.0s | 6 | 33-61 (A1-C#4) | 56 | 4 | 2.7 | 2.62 | chords |
+| 56 | 0 | melody | 0>0@0.0s | 252 | 57-87 (A3-D#6) | 75 | 1 | 112.0 | 0.17 | melody |
+| 56 | 1 | mid | 1>0@0.0s>9@9.8s>0@20.0s>9@37.8s>0@48.0s | 60 | 64-79 (E4-G5) | 68 | 1 | 94.0 | 1.50 | melody |
+| 56 | 2 | bass | 2>2@0.0s | 400 | 45-71 (A2-B4) | 64 | 1 | 121.7 | 0.17 | melody |
+| 56 | 3 | bass dbl-v | 3>2@0.0s | 400 | 33-59 (A1-B3) | 64 | 1 | 121.7 | 0.17 | bass |
+| 56 | 4 | mel dbl | 4>3@0.0s | 251 | 57-87 (A3-D#6) | 75 | 1 | 110.5 | 0.17 | melody |
+| 56 | 5 | melody^ dbl | 5>1@0.0s | 250 | 69-99 (A4-D#7) | 53 | 1 | 107.5 | 0.17 | melody |
+| 56 | 6 | mid^ dbl | 6>13@0.0s | 19 | 76-90 (E5-F#6) | 51 | 1 | 39.0 | 2.00 | melody |
+| 56 | 7 | bass^ dbl | 7>2@0.0s | 168 | 57-73 (A3-C#5) | 74 | 1 | 52.5 | 0.17 | melody |
+
 ## 7. Playing the MIDI music: options
 
 **What has to be built either way**: an SMF sequencer (tempo map, 16 channels, note on/off, program change, controllers 7/10/
@@ -572,7 +818,7 @@ Critical path: 5 -> 6 (the driver tracing is the real work). 1-4 and 7 can start
    Sources (verified by HEAD / licence file, 2026-11): MuseScore_General.sf2 215 614 036 bytes from ftp.osuosl.org (MIT, notices must
    stay with the file; saved next to it); FluidR3_GM from Debian's `fluid-soundfont-gm_3.1-6_all.deb` 119 613 032 bytes (MIT, Frank
    Wen; unpacked with Windows tar.exe). `rustysynth` 1.3.8 rejects SF3 (Ogg samples, `soundfont_sampledata.rs`), so MuseScore's
-   38 MB .sf3 is unusable; only SF2. Program map 0..17 -> GM (`music::GM_MAP`) is an UNVERIFIED identity guess, to be set by ear.
+   38 MB .sf3 is unusable; only SF2. Program map 0..17 -> GM (`music::GM_MAP`) is an INFERRED guess from the analysis in 6.6 (no source names the instruments; the MT-32 patch order does not fit), to be corrected by ear.
    The download and unpack path (`soundfont.rs`) is not yet tested against the real servers.
 7. "Modern effects and music" replacement stays out of M7.
 
@@ -605,3 +851,38 @@ sound 15.
 - The remake still plays polyphonically and restarts the same id; the original rules of 6.2 are not implemented yet (M7 plan).
 - Audio output itself was not listened to during development (verified by unit tests and debug logging: `RUST_LOG=pop_app=debug`
   prints every played id).
+
+### 6.7 Melody check (2026-11-18)
+
+Throwaway tool `crates/pop-core/examples/melody_check.rs`. (C) `adlib` / `soundfont`: every OPL key-on of cues 24, 26, 28, 32, 36, 39, 41, 52, 54, 56 matches an SMF note-on in pitch (file key + transpose - 12) and start time, no notes dropped or added (cue 56: 1800 of 1800), note-offs within 1 ms; the FNUM table is ~15 cents flat; the tempo-byte quirk (6.4.8) is not applied (+-7 % timing). (B) `original`: the speaker tunes decode correctly and are the MIDI melodies as one voice with the bass interleaved (cues 24, 25, 30, 35, 37, 40, 43 agree exactly with a MIDI line); the speaker versions of cues 26 and 56 are a whole tone below the MIDI ones (data difference, not verified by ear); cue 39's speaker version is an arpeggio, the MIDI holds long notes. (A) the old `synth` set used invented phrases (e.g. cue 41: C E G C B C D E instead of B B E F G# F E A A# C# A# A); since 0.4.1 every set except `original` plays the melodies from the MIDI files (OPL), `synth` keeps only its procedural effects.
+
+## 10. Every play_sound call site of PRINCE.EXE v1.1 (audit 2026-11-18)
+
+All 51 `call 0000:12F0` (tools/disasm `callers 0000:12F0`) with the id pushed (hex in the code, decimal here). CS offset = file offset minus 0x890. VERIFIED = read in the disassembly; INFERRED = condition or purpose guessed. "Remake" = where `pop-core` / the app emits it.
+Ids 50..56 (and the title music) are queued by the cutscene scripts, `pop_core::cutscene` (docs/cutscenes.md). Ids 20..22 and the
+death cue are variables (`94A7`: shake sound; `8335`: 24/28/32); `9CC4` is the shared "play if the room is visible" wrapper
+(ids 4, 5, 7, 14, 47 at its callers).
+
+| id | situation | condition | CS offset | remake |
+|---|---|---|---|---|
+| **25** | **level 1 start music** (need_level1_music `ds:4CE8`, set to 1 by play_level when level == 1, `48B2`) | kid control, frame 109 (crouch), level 1, state 1, no sound playing -> play, state 2; next such frame state 0. Skipped when sound is off (`ds:31C2`) | `6175` in `6153` (VERIFIED) | **was MISSING**; now `kid.rs control_crouched` + `Shared::level1_music` (test `level1_start_music`) |
+| **41** | united with the level-12 shadow | draw of tile kind 0/1 while `ds:4FCE` == 2 (42 ticks after the union) | `BDFF` in `BD92` (VERIFIED code; INFERRED: it fires once, as a tile of the room is drawn) | **was MISSING**; now `sim.rs` timers (test `united_with_shadow_cue_41`) |
+| 25 | level 6: shadow appears in room 1 | level 6, room `[40DE]` == 1, `[40DC]` != 0x4D, once | `37BF` (VERIFIED) | `sim/combat.rs:264` |
+| 25 | level 4: mirror music | leaving room 11 to the left on row 0, door open != 0 / 0x4D | `3DEA` (VERIFIED) | `sim.rs:433` |
+| 29 | meet Jaffar | level 13, door closed, room 3 | `3DB7` (VERIFIED) | `sim.rs:437` |
+| 24/28/32 | death music | death counter step 6 (not levels 0, 15): shadow -> 32, sword drawn -> 28, else 24 | `832B`..`8335` (VERIFIED) | `sim.rs play_kid_counter` |
+| 37, 43 | guard killed, Jaffar killed | `on_guard_killed` | `837E`, `8372` (VERIFIED) | `sim/combat.rs:498-500` |
+| 37, 33, 30, 39, 13 | sword pick-up, heal, life, feather, hurt potion | proc_get_object | `81CC`, `8223`, `8249`, `162B`, `8297` | `sim.rs get_object` |
+| 41 / 32 / none | level-end music | seq op F2 4 (and `ds:31C2` != 0): level 4 -> 32, 13 and 15 none, else 41 | `7097`, `70B0` (VERIFIED) | `sim.rs:472`; F2 1/2/3: 23, 8, 18 (`706E`, `707F`, `7084`) |
+| 33, 30 | cheat keys heal / life | key handler | `088B`, `08A8` (INFERRED debug keys) | not modelled (docs/edge_cases.md) |
+| 26, 27, 35, 36, 40, 50..53 and 4 | ending, princess, mouse, time up, intro scenes | cutscene scripts (`2897`..`2CE5`; id 4 = `2BA4`, the door in the intro scene) | `2897`..`2CE5` (VERIFIED) | `cutscene.rs` scripts |
+| 0, 1, 16, 17 | land, scream, hard/soft landing | fall code | `6002`, `5EAC`, `5FE4`, `5FB1` | kid events (docs section 2) |
+| 8, 9, 10, 11, 12, 13, 19, 44..49, 2..7, 14, 15, 3, 20..22 | bumps, grab, swords, hurt, draw, skeleton, mirror, chomper, spikes, loose floor, gates, exit door, button | see section 2 | see section 2 | yes |
+
+Sounds 31, 34, 42, 38 and the story music 54..56 have no call through `12F0` (54..56 are started by the title / end code in
+the runtime segment; 38 is not called from PRINCE.EXE game code). Table-driven (per level) ids do not exist: every site pushes an immediate or
+one of the variables named above, so there is no "level start jingle" other than 25 on level 1. Levels 2..14 start silent in the
+game (the cutscenes before 2, 4, 6, 8, 9, 12 play their own cues).
+
+The level-1 cue relies on the app's `hold_death_counter` (= a sound plays, section 5) as the "sound playing" test (`0C83:720D`), so
+the cue waits for the start sounds (door button) to end, as in the original.

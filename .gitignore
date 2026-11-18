@@ -4,3 +4,6 @@ dist/
 
 .claude/worktrees/
 .~lock.*
+
+# downloaded SoundFonts (licensed by their sources, never committed)
+soundfonts/

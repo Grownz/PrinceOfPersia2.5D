@@ -3,6 +3,20 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.4.1] - 2026-11-18
+
+### Fixed
+- Two music cues were missing (all 51 play_sound call sites of PRINCE.EXE checked, docs/audio.md 10): the level 1 start music
+  (cue 25, played from the crouch frame after the opening fall, only when no sound is playing) and cue 41 on uniting with
+  the level 12 shadow.
+- The default `synth` sound set played invented melodies (a melody check against the speaker tunes and the MIDI files showed
+  none of them matched the game). Every set except `original` now plays the real melodies from the MIDI files through the
+  AdLib driver / OPL2 emulation; `synth` keeps only its procedural effects. Waits then follow the MIDI length.
+
+### Changed
+- SoundFont music: the 18 AdLib programs are mapped to General MIDI from an analysis of the original files (docs/audio.md 6.6:
+  channels, track roles, decoded OPL patches) instead of the identity guess. Still unverified by ear.
+
 ## [0.4.0] - 2026-11-18
 
 ### Added

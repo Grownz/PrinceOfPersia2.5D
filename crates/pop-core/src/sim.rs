@@ -239,7 +239,7 @@ impl World {
             level.set_tile(7, 4, Tile::Empty); // do_startpos clears tile (room 7, col 4, row 0)
         }
         let slots = World::init_guard_slots(&level, level_no);
-        let shared = Shared { level: level_no, drawn_room: kid.room, ..Shared::default() };
+        let shared = Shared { level: level_no, drawn_room: kid.room, level1_music: (level_no == 1) as u8, ..Shared::default() };
         let mut w = World {
             tick: 0,
             progress: Progress { carry_hp: None, ..progress },
@@ -362,6 +362,9 @@ impl World {
         self.shared.notice_timer = self.shared.notice_timer.saturating_sub(1);
         if self.shadow.united > 0 {
             self.shadow.united -= 1;
+            if self.shadow.united == 2 {
+                self.sounds.push(41); // 0000:BDFF: drawn with ds:4FCE == 2 (INFERRED: a tile of the room is drawn that frame)
+            }
             if self.shadow.united == 0 {
                 self.shadow.united = -1; // the hidden floor trick of level 12 is enabled from here
             }
@@ -373,6 +376,7 @@ impl World {
         self.play_kid_counter();
         self.kid.opp = self.guard.as_ref().map_or_else(Default::default, crate::kid::Opp::of);
         self.shared.leveldoor_open = self.leveldoor_open != 0;
+        self.shared.sound_busy = self.hold_death_counter;
         self.kid.sh = self.shared;
         let input = if self.demo { Input::Moves(self.demo_control()) } else { Input::Keys(keys) };
         {
