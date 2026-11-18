@@ -32,9 +32,12 @@ pub struct KidAssets {
     cache: HashMap<(u8, u8, bool, bool, u8), (Handle<StandardMaterial>, f32, f32)>,
     /// voxel meshes: the material key plus mirrored -> mesh (None = image did not decode)
     vcache: HashMap<(u8, u8, bool, bool, u8, bool), Option<Handle<Mesh>>>,
-    /// the unit quad of the sprites and the shared lit material of the voxel meshes (vertex colours), set in `setup`
+    /// the unit quad of the sprites, the shared material of the voxel meshes (vertex colours) and its hit flash variant,
+    /// and whether the voxel meshes get smooth normals; set in `setup`
     quad: Handle<Mesh>,
     voxel_mat: Handle<StandardMaterial>,
+    voxel_flash: Handle<StandardMaterial>,
+    smooth: bool,
 }
 
 #[derive(Component)]
@@ -71,14 +74,17 @@ impl KidAssets {
         let pdat = open("PRINCE.DAT");
         let sword_pal = image::palette(pdat.get(700).unwrap()).unwrap();
         let sword_table = data.exe.sword_table();
-        KidAssets { data, dat, pal, gdats, gpals, colours, pdat, sword_pal, sword_table, cache: HashMap::new(), vcache: HashMap::new(), quad: default(), voxel_mat: default() }
+        KidAssets { data, dat, pal, gdats, gpals, colours, pdat, sword_pal, sword_table, cache: HashMap::new(), vcache: HashMap::new(), quad: default(), voxel_mat: default(), voxel_flash: default(), smooth: true }
     }
 }
 
-pub fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>, mut a: ResMut<KidAssets>) {
+pub fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>, mut a: ResMut<KidAssets>, set: Res<crate::settings::Settings>) {
     let quad = meshes.add(Rectangle::new(1.0, 1.0));
     a.quad = quad.clone();
-    a.voxel_mat = mats.add(StandardMaterial { perceptual_roughness: 0.9, ..default() });
+    let unlit = set.unlit_voxels();
+    a.voxel_mat = mats.add(crate::voxel::character_material(unlit, false));
+    a.voxel_flash = mats.add(crate::voxel::character_material(unlit, true));
+    a.smooth = set.smooth_normals();
     cmds.spawn((Mesh3d(quad.clone()), MeshMaterial3d::<StandardMaterial>::default(), Transform::default(), Visibility::Hidden, KidSprite));
     cmds.spawn((Mesh3d(quad.clone()), MeshMaterial3d::<StandardMaterial>::default(), Transform::default(), Visibility::Hidden, GuardSprite));
     for guard in [false, true] {
@@ -169,11 +175,15 @@ fn voxel_for(a: &mut KidAssets, meshes: &mut Assets<Mesh>, kind: u8, n: u8, shad
     }
     let m = decoded(a, kind, n, pal_palace, colour).map(|(im, pal)| {
         // the profile's colour regions come from the untinted palette (the shadow's dark tint would merge them)
-        let model = crate::voxel::VoxelModel::from_image(im.width, im.height, &im.pixels, mirrored, |p| rgb(&pal, p, false));
-        meshes.add(model.mesh(|p| {
-            let [r, g, b] = rgb(&pal, p, shadow);
-            Color::srgb_u8(r, g, b).to_linear().to_f32_array()
-        }))
+        let model = crate::voxel::VoxelModel::character(im.width, im.height, &im.pixels, mirrored, |p| rgb(&pal, p, false));
+        let smooth = a.smooth;
+        meshes.add(model.mesh_with(
+            |p| {
+                let [r, g, b] = rgb(&pal, p, shadow);
+                Color::srgb_u8(r, g, b).to_linear().to_f32_array()
+            },
+            smooth,
+        ))
     });
     a.vcache.insert(key, m.clone());
     m
@@ -333,6 +343,10 @@ fn draw_char(
     // facing left: p.x is the left edge, image as stored; facing right: p.x is the right edge and the image is mirrored
     let (cx, flip) = if k.facing_left { (p.x + sw / 2.0, 1.0) } else { (p.x - sw / 2.0, -1.0) };
     show(a, vx, key, !k.facing_left, m, Vec3::new(cx, p.y + sh / 2.0, 0.6), Vec2::new(flip * sw, sh), VOXEL_Z, t, mat, mesh);
+    // hit flash (voxel only): hp_delta stays negative until the next logic tick clears it
+    if k.hp_delta < 0 && mat.0 == a.voxel_mat {
+        mat.0 = a.voxel_flash.clone();
+    }
     Some(p)
 }
 

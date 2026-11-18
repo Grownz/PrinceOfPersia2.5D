@@ -1,5 +1,5 @@
 //! settings.json next to the exe: window mode and size, volume, mute, sound mode, kid key bindings, data path, render mode,
-//! character style, tile textures, column style.
+//! character style and the voxel characters' normals / shading, tile textures, column style.
 //! Unknown keys are ignored and missing ones take their defaults, so older and newer files both load.
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,12 @@ pub struct Settings {
     /// "voxel" (doors, spikes, chompers, torch flames and debris built as voxel objects from their images) or "flat" (the
     /// images on quads and the procedural boxes); only with tile_textures = original; POP_OBJECTS overrides
     pub object_style: String,
+    /// voxel characters: "smooth" (normals from the voxel surface's gradient, rounded shading) or "flat" (per cube face);
+    /// POP_VOXEL_NORMALS overrides
+    pub voxel_normals: String,
+    /// voxel characters: "lit" (shaded by torches, sun and ambient) or "unlit" (the palette colours with the baked occlusion
+    /// only, closest to the sprites); POP_VOXEL_SHADING overrides
+    pub voxel_shading: String,
 }
 
 pub const RENDER_MODES: [&str; 3] = ["classic", "enhanced", "rt_experimental"];
@@ -45,6 +51,8 @@ pub const SHADOW_QUALITIES: [&str; 3] = ["off", "low", "high"];
 pub const TILE_TEXTURES: [&str; 2] = ["original", "procedural"];
 pub const COLUMN_STYLES: [&str; 2] = ["voxel", "flat"];
 pub const OBJECT_STYLES: [&str; 2] = ["voxel", "flat"];
+pub const VOXEL_NORMALS: [&str; 2] = ["smooth", "flat"];
+pub const VOXEL_SHADINGS: [&str; 2] = ["lit", "unlit"];
 
 /// The renderer actually used; `rt_experimental` falls back to `Classic` unless built with the `solari` feature.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,7 +130,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into() }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into() }
     }
 }
 
@@ -162,6 +170,8 @@ impl Settings {
             tile_textures: field(&o, "tile_textures", d.tile_textures, |s| TILE_TEXTURES.contains(&s.as_str())),
             column_style: field(&o, "column_style", d.column_style, |s| COLUMN_STYLES.contains(&s.as_str())),
             object_style: field(&o, "object_style", d.object_style, |s| OBJECT_STYLES.contains(&s.as_str())),
+            voxel_normals: field(&o, "voxel_normals", d.voxel_normals, |s| VOXEL_NORMALS.contains(&s.as_str())),
+            voxel_shading: field(&o, "voxel_shading", d.voxel_shading, |s| VOXEL_SHADINGS.contains(&s.as_str())),
         }
     }
 
@@ -184,6 +194,16 @@ impl Settings {
     /// Voxel objects (settings plus POP_OBJECTS; anything but "flat" means voxel).
     pub fn voxel_objects(&self) -> bool {
         voxel_columns(&self.object_style, std::env::var("POP_OBJECTS").ok().as_deref())
+    }
+
+    /// Smooth normals on the voxel characters (settings plus POP_VOXEL_NORMALS; anything but "flat" means smooth).
+    pub fn smooth_normals(&self) -> bool {
+        voxel_columns(&self.voxel_normals, std::env::var("POP_VOXEL_NORMALS").ok().as_deref())
+    }
+
+    /// Unlit voxel characters (settings plus POP_VOXEL_SHADING; only "unlit" means unlit).
+    pub fn unlit_voxels(&self) -> bool {
+        unlit(&self.voxel_shading, std::env::var("POP_VOXEL_SHADING").ok().as_deref())
     }
 
     pub fn to_json(&self) -> String {
@@ -244,6 +264,10 @@ impl Settings {
 
 pub fn voxel_columns(setting: &str, env: Option<&str>) -> bool {
     env.unwrap_or(setting) != "flat"
+}
+
+pub fn unlit(setting: &str, env: Option<&str>) -> bool {
+    env.unwrap_or(setting) == "unlit"
 }
 
 /// One field of a settings object: its value if present, well-typed and `ok`, else the default.
@@ -386,6 +410,21 @@ mod tests {
         assert!(Settings::parse(&Settings::default().to_json()).object_style == "voxel");
         // POP_OBJECTS=flat wins over the setting (same rule as the columns)
         assert!(!voxel_columns("voxel", Some("flat")) && voxel_columns("flat", Some("voxel")));
+    }
+
+    #[test]
+    fn voxel_look_parse_env_and_fall_back() {
+        let d = Settings::default();
+        assert_eq!((d.voxel_normals.as_str(), d.voxel_shading.as_str()), ("smooth", "lit"));
+        let s = Settings::parse(r#"{"voxel_normals": "flat", "voxel_shading": "unlit"}"#);
+        assert_eq!((s.voxel_normals.as_str(), s.voxel_shading.as_str()), ("flat", "unlit"));
+        assert_eq!(Settings::parse(&s.to_json()), s);
+        // bad values fall back per field, the rest still loads
+        let s = Settings::parse(r#"{"voxel_normals": "phong", "voxel_shading": 1, "volume": 0.5}"#);
+        assert_eq!((s.voxel_normals, s.voxel_shading, s.volume), (d.voxel_normals, d.voxel_shading, 0.5));
+        // env wins over the file
+        assert!(voxel_columns("smooth", None) && !voxel_columns("smooth", Some("flat")) && voxel_columns("flat", Some("smooth")));
+        assert!(!unlit("lit", None) && unlit("lit", Some("unlit")) && !unlit("unlit", Some("lit")));
     }
 
     #[test]

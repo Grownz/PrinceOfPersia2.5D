@@ -8,12 +8,26 @@
 //! Every voxel of a column has the pixel's palette index, so the front projection is exactly the sprite.
 //! Mesh: per-face culling, flat normals, vertex colours with baked ambient occlusion, rear layers darker and desaturated,
 //! and a small per-voxel brightness jitter so the cubes read as cubes.
+//! V3 (characters only, `character` / `mesh_with`): the profile is soft-clamped instead of capped (domed torso), and smooth
+//! normals from the occupancy gradient are optional (setting voxel_normals).
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
-/// Ball radius cap (sprite pixels): the torso's half thickness in front of the sprite plane.
+/// Ball radius cap (sprite pixels): the torso's half thickness in front of the sprite plane (V2 profile, items).
 const CAP: f32 = 4.0;
+/// V3 character profile: balls are not capped, the union's height h is soft-clamped to SOFT * tanh(h / SOFT), so limbs and
+/// heads keep their round cross-section (tanh is ~linear there) while the torso domes up to ~5 px instead of a flat 4 px slab.
+const SOFT: f32 = 6.0;
+/// Uncapped ball radius limit (only bounds the loop; no sprite has edge distances this large).
+const RADIUS_MAX: f32 = 12.0;
+/// Smooth normals: Gaussian sigma (voxels) of the occupancy gradient taken over the 4 x 4 x 4 cells around a vertex, and the
+/// least cosine to the face normal (keeps a face from turning away from its own direction on thin parts).
+const NORMAL_SIGMA: f32 = 1.2;
+const NORMAL_MIN_DOT: f32 = 0.3;
+/// Smooth normals lean this much up and towards the camera: side and recessed faces turned away from the torches catch
+/// some sun instead of sinking into the (classic: blue) ambient. Front faces barely change.
+const SKY: Vec3 = Vec3::new(0.0, 0.2, 0.3);
 /// Colour-region bump: radius cap (sprite px) and weight.
 const REGION_CAP: f32 = 1.5;
 const REGION_BUMP: f32 = 0.6;
@@ -27,6 +41,24 @@ const BACK_CAP: f32 = 2.0;
 const AO: [f32; 4] = [1.0, 0.8, 0.66, 0.54];
 const JITTER: f32 = 0.06;
 const COLUMN_JITTER: f32 = 0.02;
+
+/// Hit flash (V3, voxel characters only): the hurt figure's vertex colours are tinted red for the logic tick in which it
+/// lost hit points; lit materials also glow a little, so the flash reads in dark rooms. The original only flashes the
+/// background black (red for the kid, docs/edge_cases.md 3.6), which main.rs shows for every style.
+const FLASH_TINT: Color = Color::linear_rgb(1.6, 0.55, 0.5);
+const FLASH_GLOW: LinearRgba = LinearRgba::rgb(0.5, 0.06, 0.04);
+
+/// The voxel characters' material (colours come from the vertices): lit, or `unlit` for the sprite-like look; `flash` =
+/// the hit flash variant.
+pub fn character_material(unlit: bool, flash: bool) -> StandardMaterial {
+    StandardMaterial {
+        perceptual_roughness: 0.9,
+        unlit,
+        base_color: if flash { FLASH_TINT } else { Color::WHITE },
+        emissive: if flash && !unlit { FLASH_GLOW } else { LinearRgba::BLACK },
+        ..default()
+    }
+}
 
 /// First and last opaque pixel of a row that is one opaque run (None: empty row).
 fn run_of(row: &[u8]) -> Option<(usize, usize)> {
@@ -112,6 +144,15 @@ impl VoxelModel {
     /// Extrude a w x h image of palette indices (row-major, 0 = transparent). `mirrored` flips it left-right (the engine
     /// mirrors a character facing right); `rgb` gives a palette index's colour for the colour-aware part of the profile.
     pub fn from_image(w: usize, h: usize, pixels: &[u8], mirrored: bool, rgb: impl Fn(u8) -> [u8; 3]) -> Self {
+        Self::profiled(w, h, pixels, mirrored, rgb, false)
+    }
+
+    /// The characters' model (V3): like `from_image`, but with the rounder soft-clamped profile (see SOFT). Front view unchanged.
+    pub fn character(w: usize, h: usize, pixels: &[u8], mirrored: bool, rgb: impl Fn(u8) -> [u8; 3]) -> Self {
+        Self::profiled(w, h, pixels, mirrored, rgb, true)
+    }
+
+    fn profiled(w: usize, h: usize, pixels: &[u8], mirrored: bool, rgb: impl Fn(u8) -> [u8; 3], round: bool) -> Self {
         let px: Vec<u8> = (0..w * h).map(|i| pixels[i / w * w + if mirrored { w - 1 - i % w } else { i % w }]).collect();
         let (mut cls, mut lum) = ([0u8; 256], [0f32; 256]);
         for p in 1..=255u8 {
@@ -129,7 +170,11 @@ impl VoxelModel {
             })
         };
         let dr = chamfer((0..w * h).map(|i| if !filled(i) { 0.0 } else if edge(i) { 1.0 } else { f32::MAX }).collect(), w, h);
-        let hs = balls(&dt, w, h, CAP, filled, |_, _| true);
+        let hs = if round {
+            balls(&dt, w, h, RADIUS_MAX, filled, |_, _| true).into_iter().map(|v| SOFT * (v / SOFT).tanh()).collect()
+        } else {
+            balls(&dt, w, h, CAP, filled, |_, _| true)
+        };
         let hr = balls(&dr, w, h, REGION_CAP, filled, |p, q| cl(p) == cl(q));
         let mut brightest = [0f32; 256];
         for &p in px.iter().filter(|&&p| p != 0) {
@@ -313,11 +358,50 @@ impl VoxelModel {
     /// RGBA) with ambient occlusion, rear-layer darkening and jitter. Units: one voxel = 1; x 0..w, y 0..h with the image's
     /// bottom line at y = 0, z = 0 the centre of the sprite-plane voxel.
     pub fn mesh(&self, colour: impl Fn(u8) -> [f32; 4]) -> Mesh {
+        self.mesh_with(colour, false)
+    }
+
+    /// `mesh`, optionally with smooth normals: each vertex gets the outward occupancy gradient around its lattice point
+    /// (Gaussian-weighted over the 4 x 4 x 4 cells touching it), so the stepped surface shades like the round body it
+    /// approximates. Positions and vertex colours are the same as with flat normals.
+    pub fn mesh_with(&self, colour: impl Fn(u8) -> [f32; 4], smooth: bool) -> Mesh {
         const DIRS: [[isize; 3]; 6] = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
         let (mut pos, mut nrm, mut col, mut idx) = (vec![], vec![], vec![], vec![]);
         let h = self.h as isize;
         // mesh-space lookup (y up)
         let filled = |x: isize, y: isize, z: isize| self.get(x, h - 1 - y, z) != 0;
+        // smooth normal per lattice point (mesh space, y up), computed on first use from a padded occupancy grid and a
+        // precomputed kernel: cell offset (-2..2 per axis) -> weighted vector from the cell centre to the lattice point
+        let (lw, lh) = (self.w + 1, self.h + 1);
+        let (pw, ph) = (self.w + 4, self.h + 4);
+        let mut lattice: Vec<Option<Vec3>> = vec![];
+        let mut occ = vec![];
+        let mut kernel = vec![];
+        if smooth {
+            lattice = vec![None; lw * lh * (self.d + 1)];
+            occ = vec![false; pw * ph * (self.d + 4)];
+            for z in 0..self.d {
+                for y in 0..self.h {
+                    for x in 0..self.w {
+                        occ[x + 2 + pw * (y + 2 + ph * (z + 2))] = filled(x as isize, y as isize, z as isize);
+                    }
+                }
+            }
+            for dz in -2..2 {
+                for dy in -2..2 {
+                    for dx in -2..2 {
+                        let off = -Vec3::new(dx as f32 + 0.5, dy as f32 + 0.5, dz as f32 + 0.5);
+                        kernel.push(((dx + 2 + pw as isize * (dy + 2 + ph as isize * (dz + 2))) as usize, off * (-off.length_squared() / (2.0 * NORMAL_SIGMA * NORMAL_SIGMA)).exp()));
+                    }
+                }
+            }
+        }
+        let mut gradient = |l: [isize; 3]| -> Vec3 {
+            let slot = &mut lattice[l[0] as usize + lw * (l[1] as usize + lh * l[2] as usize)];
+            // padded index of cell (l - 2): kernel entries add their offset
+            let base = l[0] as usize + pw * (l[1] as usize + ph * l[2] as usize);
+            *slot.get_or_insert_with(|| kernel.iter().filter(|(k, _)| occ[base + k]).map(|(_, v)| *v).sum())
+        };
         let front: Vec<isize> = (0..self.w * self.h).map(|i| (0..self.d as isize).rev().find(|&z| self.voxels[i + self.w * self.h * z as usize] != 0).unwrap_or(0)).collect();
         for z in 0..self.d as isize {
             for gy in 0..h {
@@ -356,7 +440,16 @@ impl VoxelModel {
                             ao[c] = if s1 && s2 { 3 } else { s1 as usize + s2 as usize + cell(su, sw) as usize };
                             let p = corner + uf * (su > 0) as u8 as f32 + wf * (sw > 0) as u8 as f32;
                             pos.push(p.to_array());
-                            nrm.push(n.to_array());
+                            let sn = if smooth {
+                                let g = gradient([0, 1, 2].map(|i| o[i] + (dir[i] > 0) as isize + u[i] * (su > 0) as isize + w[i] * (sw > 0) as isize)).normalize_or_zero();
+                                let g = if g == Vec3::ZERO { g } else { (g + SKY).normalize_or_zero() };
+                                let c = g.dot(n);
+                                // nearly flat or thin parts: lean back towards the face normal
+                                if g == Vec3::ZERO { n } else if c < NORMAL_MIN_DOT { (g + n * (NORMAL_MIN_DOT - c) * 2.0).normalize() } else { g }
+                            } else {
+                                n
+                            };
+                            nrm.push(sn.to_array());
                             let f = AO[ao[c]];
                             col.push([base[0] * f, base[1] * f, base[2] * f, a]);
                         }
@@ -447,7 +540,59 @@ mod tests {
         assert!(best(1.0) > best(-1.0) * 1.15, "front {} back {}", best(1.0), best(-1.0));
     }
 
-    /// Acceptance (V1/V2): the front projection equals the original image (silhouette and palette indices), as stored and
+    #[test]
+    fn character_profile_domes_the_torso_and_keeps_limbs_round() {
+        // a 21 x 21 block (torso) with a 3-px wide arm on the right
+        let (w, h) = (27, 21);
+        let mut px = vec![0u8; w * h];
+        for y in 0..21 {
+            for x in 0..21 {
+                px[y * w + x] = 6;
+            }
+        }
+        for y in 9..12 {
+            for x in 21..27 {
+                px[y * w + x] = 6;
+            }
+        }
+        let (v2, v3) = (VoxelModel::from_image(w, h, &px, false, grey), VoxelModel::character(w, h, &px, false, grey));
+        assert_eq!(v3.front(), px, "depth never changes the front view");
+        let (c2, c3, mid3) = (extent(&v2, 10, 10), extent(&v3, 10, 10), extent(&v3, 2, 10));
+        assert!(c3.0 > c2.0, "torso centre deeper than the capped V2 slab: {c3:?} vs {c2:?}");
+        assert!(c3.0 > mid3.0, "domed, not flat: centre {c3:?} near the edge {mid3:?}");
+        assert!(c3.0 as f32 <= SOFT + REGION_BUMP * REGION_CAP, "soft clamp holds: {c3:?}");
+        assert_eq!(extent(&v3, 25, 10).0, extent(&v2, 25, 10).0, "thin arm as round as before");
+    }
+
+    #[test]
+    fn smooth_normals_change_only_the_normals_and_round_the_edges() {
+        // a disc of radius 6
+        let (w, h) = (13, 13);
+        let px: Vec<u8> = (0..w * h).map(|i| (((i % w) as f32 - 6.0).powi(2) + ((i / w) as f32 - 6.0).powi(2) <= 36.0) as u8 * 3).collect();
+        let m = VoxelModel::character(w, h, &px, false, grey);
+        let (flat, smooth) = (m.mesh_with(|_| [1.0; 4], false), m.mesh_with(|_| [1.0; 4], true));
+        let attr = |mesh: &Mesh, a| match mesh.attribute(a) {
+            Some(VertexAttributeValues::Float32x3(v)) => v.clone(),
+            _ => panic!(),
+        };
+        assert_eq!(attr(&flat, Mesh::ATTRIBUTE_POSITION), attr(&smooth, Mesh::ATTRIBUTE_POSITION));
+        assert_eq!(flat.attribute(Mesh::ATTRIBUTE_COLOR).map(|c| c.get_bytes().to_vec()), smooth.attribute(Mesh::ATTRIBUTE_COLOR).map(|c| c.get_bytes().to_vec()));
+        let (p, nf, ns) = (attr(&flat, Mesh::ATTRIBUTE_POSITION), attr(&flat, Mesh::ATTRIBUTE_NORMAL), attr(&smooth, Mesh::ATTRIBUTE_NORMAL));
+        let mut tilted = 0;
+        for i in 0..p.len() {
+            let (f, s) = (Vec3::from(nf[i]), Vec3::from(ns[i]));
+            assert!((s.length() - 1.0).abs() < 1e-4, "unit normal");
+            assert!(s.dot(f) >= NORMAL_MIN_DOT - 0.05, "smooth normal {s} turned away from its face {f}");
+            // front faces near the disc's left / right rim lean outwards
+            let x = p[i][0] - 6.5;
+            if f.z == 1.0 && x.abs() > 4.0 && s.x * x.signum() > 0.1 {
+                tilted += 1;
+            }
+        }
+        assert!(tilted > 8, "rim normals lean outwards ({tilted})");
+    }
+
+    /// Acceptance (V1/V2/V3): the front projection of the characters' model equals the original image (silhouette and palette indices), as stored and
     /// mirrored, for every kid image and every guard-type image that decodes, plus the swords and the cutscene actors.
     /// Skips without Original_data.
     #[test]
@@ -460,22 +605,22 @@ mod tests {
         for id in 401..=620u16 {
             let Some(im) = kid.get(id).and_then(image::decode) else { continue };
             for mirrored in [false, true] {
-                let m = VoxelModel::from_image(im.width, im.height, &im.pixels, mirrored, rgb);
+                let m = VoxelModel::character(im.width, im.height, &im.pixels, mirrored, rgb);
                 let want = if mirrored { mirror(im.width, &im.pixels) } else { im.pixels.clone() };
                 assert_eq!(m.front(), want, "kid image {id} mirrored {mirrored}");
-                faces += m.mesh(|_| [1.0; 4]).count_vertices() / 4;
+                faces += m.mesh_with(|_| [1.0; 4], true).count_vertices() / 4;
             }
             n += 1;
         }
         let ms = t.elapsed().as_secs_f64() * 1000.0;
-        println!("voxelised and meshed {n} kid images (both facings) in {ms:.1} ms, {} faces per image", faces / (2 * n));
+        println!("voxelised (V3 profile) and meshed (smooth normals) {n} kid images (both facings) in {ms:.1} ms, {} faces per image", faces / (2 * n));
         assert!(n >= 200, "only {n} kid images decoded");
         let mut g = 0;
         for f in ["GUARD.DAT", "FAT.DAT", "SKEL.DAT", "VIZIER.DAT", "SHADOW.DAT"] {
             let Some(dat) = data(f) else { continue };
             for id in 751..791u16 {
                 let Some(im) = dat.get(id).and_then(image::decode) else { continue };
-                let m = VoxelModel::from_image(im.width, im.height, &im.pixels, true, rgb);
+                let m = VoxelModel::character(im.width, im.height, &im.pixels, true, rgb);
                 assert_eq!(m.front(), mirror(im.width, &im.pixels), "{f} image {id}");
                 g += 1;
             }
@@ -484,7 +629,7 @@ mod tests {
         if let Some(p) = data("PRINCE.DAT") {
             for id in 701..751u16 {
                 if let Some(im) = p.get(id).and_then(image::decode) {
-                    assert_eq!(VoxelModel::from_image(im.width, im.height, &im.pixels, false, rgb).front(), im.pixels, "sword {id}");
+                    assert_eq!(VoxelModel::character(im.width, im.height, &im.pixels, false, rgb).front(), im.pixels, "sword {id}");
                 }
             }
         }
@@ -492,7 +637,7 @@ mod tests {
             let mut c = 0;
             for id in 800..980u16 {
                 if let Some(im) = pv.get(id).and_then(image::decode) {
-                    assert_eq!(VoxelModel::from_image(im.width, im.height, &im.pixels, true, rgb).front(), mirror(im.width, &im.pixels), "PV {id}");
+                    assert_eq!(VoxelModel::character(im.width, im.height, &im.pixels, true, rgb).front(), mirror(im.width, &im.pixels), "PV {id}");
                     c += 1;
                 }
             }

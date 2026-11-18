@@ -73,7 +73,9 @@ Created next to the exe on the first run; unknown keys are ignored, missing ones
   "render_mode": "classic",
   "character_style": "sprite",
   "shadow_quality": "high",
-  "ssao": true
+  "ssao": true,
+  "voxel_normals": "smooth",
+  "voxel_shading": "lit"
 }
 ```
 
@@ -85,5 +87,8 @@ light, screen-space ambient occlusion, bloom on the flames, a brighter fill ligh
 `shadow_quality` `off`, `low` (2 torch shadows, small maps) or `high` (default, 4 torch shadows), `ssao` `true` (default;
 turns MSAA off and uses SMAA) or `false`. If enhanced averages too slow a frame time after its warm-up (over 12 ms, at
 least 1.25 refresh periods, window focused), it falls back to classic for the session with a log line (not saved). `character_style`: `sprite` (default) or `voxel` (F6 toggles
-and saves it, `POP_CHARS` overrides). Unknown values fall back to the default; the log names the GPU, the backend and
+and saves it, `POP_CHARS` overrides). Voxel characters only: `voxel_normals` `smooth` (default: normals from the voxel
+surface, rounded shading) or `flat` (one normal per cube face, the blocky look), env `POP_VOXEL_NORMALS`; `voxel_shading`
+`lit` (default: torches, sun and ambient shade the figures, they cast shadows in enhanced) or `unlit` (the palette colours
+with the baked occlusion only, closest to the sprites), env `POP_VOXEL_SHADING`; both are read at startup. Unknown values fall back to the default; the log names the GPU, the backend and
 whether the adapter offers ray queries.

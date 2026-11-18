@@ -12,6 +12,10 @@ The original game data is never part of the repository or a release; see `docs/P
   F5 cycles classic / enhanced / rt; falls back to enhanced on GPUs without ray queries). No denoiser (DLSS-RR needs the
   NVIDIA SDK), so the image is noisy; go/no-go in `docs/r3_solari.md` (no-go for a shipped RT mode for now). Without the
   feature `rt_experimental` still runs classic.
+- Voxel characters (V3): rounder bodies (the depth profile is soft-clamped instead of capped, so the torso domes while
+  limbs stay round), smooth normals (`voxel_normals` `smooth` default / `flat`, env `POP_VOXEL_NORMALS`), an unlit option
+  (`voxel_shading` `lit` default / `unlit`, env `POP_VOXEL_SHADING`), and a short red hit flash on the figure that lost
+  hit points. The front view still matches the sprites exactly; sprite style is unchanged (pixel diff 0).
 
 ### Changed
 - Cutscenes: the princess chamber uses the palace texture mapping of the levels with `tile_textures` original (palace wall
@@ -20,6 +24,7 @@ The original game data is never part of the repository or a release; see `docs/P
   tiles, composition, camera and timing unchanged (`docs/texture_inventory.md` 17).
 
 ### Fixed
+- Voxel characters: the step faces turned away from the torches no longer show as dark stripes (smooth normals).
 - Cutscenes: no more gap left of the bed carpet. Checked against PV.DAT: the bed image is transparent at x 64..73 because
   the room picture's left front column (10 px, down to the screen bottom) shows through it; both front columns are now
   built from the original front column image PV 952 at the measured x (64, 245), in every tile/column style.

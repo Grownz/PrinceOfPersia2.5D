@@ -226,18 +226,21 @@ fn material(c: &mut Cut, imgs: &mut Assets<Image>, mats: &mut Assets<StandardMat
 }
 
 /// Voxel mesh of an actor image (see `material`), mirrored when the actor faces right.
-fn voxel(c: &mut Cut, meshes: &mut Assets<Mesh>, file: u8, id: u16, pal_id: u16, mirrored: bool) -> Option<Handle<Mesh>> {
+fn voxel(c: &mut Cut, meshes: &mut Assets<Mesh>, file: u8, id: u16, pal_id: u16, mirrored: bool, smooth: bool) -> Option<Handle<Mesh>> {
     if let Some(m) = c.vox.get(&(file, id, mirrored)) {
         return m.clone();
     }
     let dat = match file { 0 => c.pv.as_ref(), 1 => c.kid.as_ref(), _ => c.prince.as_ref() };
     let m = dat.and_then(|dat| Some((image::palette(dat.get(pal_id)?)?, image::decode(dat.get(id)?)?))).map(|(pal, im)| {
         let rgb = |p: u8| pal.get(p as usize).copied().unwrap_or([255, 0, 255]);
-        let model = crate::voxel::VoxelModel::from_image(im.width, im.height, &im.pixels, mirrored, rgb);
-        meshes.add(model.mesh(|p| {
-            let [r, g, b] = rgb(p);
-            Color::srgb_u8(r, g, b).to_linear().to_f32_array()
-        }))
+        let model = crate::voxel::VoxelModel::character(im.width, im.height, &im.pixels, mirrored, rgb);
+        meshes.add(model.mesh_with(
+            |p| {
+                let [r, g, b] = rgb(p);
+                Color::srgb_u8(r, g, b).to_linear().to_f32_array()
+            },
+            smooth,
+        ))
     });
     c.vox.insert((file, id, mirrored), m.clone());
     m
@@ -310,6 +313,7 @@ pub fn render(
     mut meshes: ResMut<Assets<Mesh>>,
     pal: Res<Palette>,
     mode: Res<crate::settings::RenderMode>,
+    set: Res<crate::settings::Settings>,
     mut q: ParamSet<(
         Query<(&ActorSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d)>,
         Query<(&GlassSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>)>,
@@ -338,7 +342,7 @@ pub fn render(
     // actors: kid slot behind the princess (INFERRED draw order, docs/cutscenes.md 1.4)
     let voxels = *style == crate::settings::CharacterStyle::Voxel;
     if voxels && c.voxel_mat == Handle::default() {
-        c.voxel_mat = mats.add(StandardMaterial { perceptual_roughness: 0.9, ..default() }); // made on first use: sprite style keeps its assets
+        c.voxel_mat = mats.add(crate::voxel::character_material(set.unlit_voxels(), false)); // made on first use: sprite style keeps its assets
     }
     for (ActorSprite(slot), mut t, mut vis, mut mat, mut mesh) in &mut q.p0() {
         let a = cs.and_then(|cs| if *slot == Slot::Kid { cs.kid.as_ref() } else { cs.princess.as_ref() }).filter(|_| !cs.unwrap().blank);
@@ -349,7 +353,7 @@ pub fn render(
             let (m, w, h) = material(c, &mut imgs, &mut mats, file, id, pal)?;
             actor(cs, a, w, h, if *slot == Slot::Kid { 0.6 } else { 0.62 }, &mut t);
             // voxel style: the same rectangle, mesh origin at its bottom-left corner, one voxel = one pixel (kid.rs `show`)
-            if let Some(v) = voxels.then(|| voxel(c, &mut meshes, file, id, pal, t.scale.x < 0.0)).flatten() {
+            if let Some(v) = voxels.then(|| voxel(c, &mut meshes, file, id, pal, t.scale.x < 0.0, set.smooth_normals())).flatten() {
                 let half = Vec3::new(t.scale.x.abs(), t.scale.y, 0.0) / 2.0;
                 t.translation = t.translation - half + Vec3::Z * VOXEL_DZ;
                 t.scale = Vec3::new(1.0 / 32.0, TILE_H / pop_core::level::TILE_H_PX as f32, 1.0 / 32.0);

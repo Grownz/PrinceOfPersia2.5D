@@ -1,6 +1,6 @@
 # Render roadmap: ray-tracing mode (A) and voxel characters (B)
 
-Status: R1, R2, V1 and V2 implemented (see section 9); the rest is plan. Written 2026-11-15 against Bevy 0.20.1 (released 2026-10-08) and wgpu 30.
+Status: R1, R2, V1, V2 and V3 implemented, R3 trialled (see section 9); the rest is plan. Written 2026-11-15 against Bevy 0.20.1 (released 2026-10-08) and wgpu 30.
 Effort sizes assume one developer who knows this codebase and Bevy: S = up to 1 person-week (pw), M = 2-4 pw, L = 4-8 pw,
 XL = more than 8 pw. Risk = chance that the estimate or the result is badly off.
 
@@ -240,7 +240,7 @@ Where sources were thin: DX12 ray-query support in wgpu, Solari's handling of al
 like ours. These are left as spike questions (R3) rather than stated as facts. The 0.20.1 API docs on docs.rs did not build,
 so crate details come from the tagged source.
 
-## 9. Status of R1, R2, V1 and V2 (2026-11-15)
+## 9. Status of R1, R2, V1, V2, R3 and V3 (2026-11-18)
 
 **R1 done (minus the `rt` Cargo feature, which waits for the R3 spike).** `settings.json` keys `render_mode`
 (`classic` default, `enhanced` / `rt_experimental` accepted and run as classic with a log line) and `character_style`
@@ -371,5 +371,50 @@ are a real gain, but without a denoiser the image is very noisy (fine grain with
 ambient in Solari), alpha-masked sprites cannot be traced; DLSS-RR could not be built (no DLSS SDK / libclang here).
 Re-check when DLSS-RR can be tested or Bevy ships a non-DLSS denoiser. R5 is not needed for the shadow look (enhanced).
 
-Open for V3: hit flash, an unlit option, smoothed normals, softer side lighting on the back terraces (the -x/+x step faces
-away from the torches go very dark under the blue ambient), a turned camera for cutscenes, a 30-degree review of key poses.
+**V3 done (2026-11-18): depth heuristics + lighting for the voxel characters** (kid, shadow, all guard types, swords,
+cutscene actors; the voxel items, columns and objects keep the V2 code paths, so classic/sprite output is unchanged).
+
+- *Rounder profile* (`VoxelModel::character`): the union of balls is no longer capped at 4 px; its height h is
+  soft-clamped to `SOFT * tanh(h / SOFT)` with SOFT = 6. tanh is close to linear for small h, so limbs, hands and heads
+  keep the round cross-section V2 gave them, while the torso domes up to ~5 px at its centre instead of being a flat 4 px
+  slab. Colour-region bumps, cloth-fold recess and the flatter back stay as in V2. Front projection unchanged by
+  construction (test over all kid, guard-type, sword and PV images now uses this constructor). `from_image` (V2) is kept
+  for the items.
+- *Smooth normals* (`mesh_with(.., smooth)`, setting `voxel_normals` `smooth` default / `flat`, env `POP_VOXEL_NORMALS`):
+  each vertex gets the Gaussian-weighted (sigma 1.2) outward occupancy gradient of the 4 x 4 x 4 cells around its
+  lattice point, leaned slightly up and towards the camera (+0.2 y, +0.3 z) and kept within cos 0.3 of its face normal.
+  Positions and vertex colours (palette, baked AO, rear darkening, jitter) are identical to the flat mesh (unit test), so
+  only the shading changes; unlit, the front view is the sprite.
+- *Side terraces*: the dark stripes on the -x/+x step faces (no direct light, AO 0.54, blue classic ambient) are gone with
+  smooth normals: the step corners share the slope's normal, and the up/front lean lets faces turned away from the torches
+  catch the sun. Flat mode keeps the V2 look (stripes included) for the blocky style.
+- *Material*: `voxel::character_material`, lit `StandardMaterial` (roughness 0.9) as before; setting `voxel_shading`
+  `lit` default / `unlit` (env `POP_VOXEL_SHADING`): unlit shows the palette colours with the baked occlusion only, the
+  look closest to the sprites (no shading, still casts shadows in enhanced). No other tuning was needed: at the default
+  camera the enhanced look did not change visibly; reflectance stays default.
+- *Shadows* (A0): characters cast sun and torch shadows (walls, floor at the feet) and receive self-shadows; with the
+  existing biases (sun normal 2.5, torch depth 0.2 / normal 2.5) no acne or hatching was visible on the smooth figures at
+  30 degrees. One soft dark patch appears on the fat guard's turban (self-shadow of the torch behind him).
+- *Hit flash*: a voxel figure that lost hit points in the last logic tick (`hp_delta < 0`, kid or guard, one tick
+  ~83 ms) is drawn with a red-tinted variant of its material (base colour x (1.6, 0.55, 0.5), lit also a small red
+  emissive). The original only flashes the background (red for the kid), which main.rs still does for every style.
+
+Review (scratchpad screenshots, enhanced, before/after at the default camera and `POP_DEBUG_CAM=1 POP_CAM_ANGLE=30,3`;
+guards reached with a temporary start-position hook, removed): kid (level 1), dungeon guard fight (level 2), fat guard
+(level 6), skeleton (level 3), Jaffar (level 13). At the default camera the figures look as before (they are ~40 px tall;
+the dome adds depth that is barely visible from the front). At 30 degrees they read clearly rounder: torso and robe shade
+as one curved surface, the black step stripes on robes and legs are gone, arms/legs read as cylinders. Lost: some of the
+crisp per-cube faceting (the figures look more "sculpted" than "voxel"; `voxel_normals = flat` brings it back). Classic +
+smooth: recessed parts (legs behind the robe) are still somewhat darker blue, much less than before.
+
+Build cost: 219 kid images in both facings, V3 model + smooth mesh: ~200-250 ms (release, with the projection checks),
+~0.5 ms per mesh vs ~0.27 ms in V2 (model ~0.05 ms, flat mesh ~0.25 ms, smooth normals ~0.23 ms); still lazy, one mesh
+per new frame. Faces per kid image 1360 (V2 1393). Perf (`POP_BENCH=1000`, 1080p, enhanced, voxel, two runs each):
+level 1 room 13 3.45/3.47 -> 3.47/3.47 ms, demo level fight 3.40/3.40 -> 3.40/3.42 ms (noise). Sprite style, classic
+and enhanced: `POP_SHOT` diff 0 pixels against the build before V3 on level 1 start, level 1 room 13, level 2 room 1 and
+cutscene 2.
+
+Open after V3: Solari compatibility (A1) dropped while RT is parked (docs/r3_solari.md); a turned camera for cutscenes (not done, the set is built for the front camera); the voxel items/columns
+still use flat normals (changing them would change classic/sprite output); the smooth-normal cost could be cut by
+caching per image across facings; the skeleton's rise and other rare poses were only seen in the projection test;
+mid-range GPU not measured.
