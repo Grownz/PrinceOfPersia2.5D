@@ -5,6 +5,14 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## Unreleased
 
+### Added
+- R3 ray-tracing trial (experimental, not in the default build): `cargo build --features solari` makes
+  `render_mode = "rt_experimental"` / `POP_RENDER=rt_experimental` render with Bevy Solari (ray-traced sun and torch light,
+  bounce light; torches as emissive proxies, sprites and other alpha-masked images not traced; `POP_RESTIR=1` for ReSTIR;
+  F5 cycles classic / enhanced / rt; falls back to enhanced on GPUs without ray queries). No denoiser (DLSS-RR needs the
+  NVIDIA SDK), so the image is noisy; go/no-go in `docs/r3_solari.md` (no-go for a shipped RT mode for now). Without the
+  feature `rt_experimental` still runs classic.
+
 ### Changed
 - Cutscenes: the princess chamber uses the palace texture mapping of the levels with `tile_textures` original (palace wall
   faces, floors, lattice arches, voxel or flat columns 295 for the arcade, torch holders

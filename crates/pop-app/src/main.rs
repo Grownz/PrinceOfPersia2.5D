@@ -8,7 +8,8 @@
 //! back into the normal flow); POP_SOUND=original uses the game's own sounds; POP_DATA = game data folder;
 //! POP_PERF=1 logs the average frame time (vsync off) and room rebuilds every 300 frames. F9 / POP_FPS=1 frame-time overlay,
 //! POP_BENCH=<frames> benchmark run (POP_RES, POP_FX: perf.rs, docs/enhanced_perf.md).
-//! POP_RENDER / POP_CHARS / POP_TILES / POP_COLUMNS / POP_OBJECTS override settings.json "render_mode" / "character_style" / "tile_textures" / "column_style" / "object_style"; F5 toggles classic / enhanced rendering,
+//! POP_RENDER / POP_CHARS / POP_TILES / POP_COLUMNS / POP_OBJECTS override settings.json "render_mode" / "character_style" / "tile_textures" / "column_style" / "object_style"; F5 toggles classic / enhanced rendering
+//! (plus rt_experimental in a `--features solari` build started in that mode, docs/r3_solari.md),
 //! F6 sprite / voxel characters,
 //! F7 (debug text on, or POP_DEBUG_CAM=1) a closer, turned camera on the kid (POP_CAM_ANGLE="degrees[,distance]").
 mod audio;
@@ -20,6 +21,8 @@ mod kid;
 mod perf;
 mod room;
 mod settings;
+#[cfg(feature = "solari")]
+mod solari;
 mod synth;
 mod tiles;
 mod voxel;
@@ -157,6 +160,11 @@ fn main() {
     // per-pass GPU times (wgpu timestamp queries; the device already has TIMESTAMP_QUERY when the adapter offers it)
     if perf::gpu_timing() {
         app.add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin);
+    }
+    // R3 trial: Solari only when starting in rt_experimental (it moves every material to the deferred path)
+    #[cfg(feature = "solari")]
+    if render_mode == settings::RenderMode::Rt {
+        app.add_plugins(solari::plugin);
     }
     app
         .insert_resource(set.key_map())

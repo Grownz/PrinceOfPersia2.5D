@@ -18,8 +18,9 @@ pub struct Settings {
     pub keys: Bindings,
     /// folder with the user's own game files (LEVELS.DAT, PRINCE.EXE, ...); tried after POP_DATA, exe dir and cwd
     pub data_path: Option<String>,
-    /// "classic" (the original look), "enhanced" (shadows, SSAO, bloom) or "rt_experimental" (reserved: accepted, run as
-    /// classic with a log line until implemented); POP_RENDER overrides, F5 toggles classic / enhanced
+    /// "classic" (the original look), "enhanced" (shadows, SSAO, bloom) or "rt_experimental" (Bevy Solari, only in builds
+    /// with the `solari` feature, else run as classic with a log line); POP_RENDER overrides, F5 cycles classic / enhanced
+    /// (/ rt_experimental when the game started in it)
     pub render_mode: String,
     /// "sprite" (the original images on quads) or "voxel" (built from them at runtime); POP_CHARS overrides, F6 toggles
     pub character_style: String,
@@ -45,11 +46,26 @@ pub const TILE_TEXTURES: [&str; 2] = ["original", "procedural"];
 pub const COLUMN_STYLES: [&str; 2] = ["voxel", "flat"];
 pub const OBJECT_STYLES: [&str; 2] = ["voxel", "flat"];
 
-/// The renderer actually used; `rt_experimental` falls back to `Classic`.
+/// The renderer actually used; `rt_experimental` falls back to `Classic` unless built with the `solari` feature.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderMode {
     Classic,
     Enhanced,
+    /// R3 trial: Bevy Solari (solari.rs)
+    #[cfg(feature = "solari")]
+    Rt,
+}
+
+impl RenderMode {
+    /// The settings.json value.
+    pub fn key(self) -> &'static str {
+        match self {
+            RenderMode::Classic => "classic",
+            RenderMode::Enhanced => "enhanced",
+            #[cfg(feature = "solari")]
+            RenderMode::Rt => "rt_experimental",
+        }
+    }
 }
 
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +80,8 @@ pub fn resolve_render(mode: &str, style: &str, env_mode: Option<&str>, env_style
     let mode = match env_mode.unwrap_or(mode) {
         "classic" => RenderMode::Classic,
         "enhanced" => RenderMode::Enhanced,
+        #[cfg(feature = "solari")]
+        "rt_experimental" => RenderMode::Rt,
         m if RENDER_MODES.contains(&m) => {
             info!("render mode {m:?} is not implemented yet; using classic");
             RenderMode::Classic
@@ -308,10 +326,17 @@ mod tests {
         assert_eq!(resolve_render("classic", "sprite", None, None), (Classic, Sprite));
         assert_eq!(resolve_render("classic", "voxel", None, None), (Classic, Voxel));
         assert_eq!(resolve_render("enhanced", "sprite", None, None).0, Enhanced);
-        // the reserved RT mode is accepted but runs classic until implemented
+        // the RT mode runs classic unless built with the solari feature
+        #[cfg(not(feature = "solari"))]
         assert_eq!(resolve_render("rt_experimental", "sprite", None, None).0, Classic);
+        #[cfg(feature = "solari")]
+        assert_eq!(resolve_render("rt_experimental", "sprite", None, None).0, Rt);
         // env wins over the file; bad env values fall back instead of failing
+        #[cfg(not(feature = "solari"))]
         assert_eq!(resolve_render("classic", "sprite", Some("rt_experimental"), Some("voxel")), (Classic, Voxel));
+        #[cfg(feature = "solari")]
+        assert_eq!(resolve_render("classic", "sprite", Some("rt_experimental"), Some("voxel")), (Rt, Voxel));
+        assert_eq!(resolve_render("classic", "sprite", Some("enhanced"), Some("voxel")), (Enhanced, Voxel));
         assert_eq!(resolve_render("classic", "sprite", Some("enhanced"), None), (Enhanced, Sprite));
         assert_eq!(resolve_render("enhanced", "voxel", Some("nonsense"), Some("cubes")), (Classic, Sprite));
     }

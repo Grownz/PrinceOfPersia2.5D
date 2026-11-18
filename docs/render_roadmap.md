@@ -361,5 +361,15 @@ level-12 shadows, the sword-raised pickup pose (covered by the projection test o
 against the previous build on level 1 start (4 runs), level 2 room 1 and level 3 start, and the intro cutscene. Perf
 (release, RTX 3090, demo level, `POP_PERF=1`): sprite 1.41-1.57 ms/frame, voxel 1.35-1.41 ms/frame.
 
+**R3 done (2026-11-18): Solari trial, verdict no-go for R4 for now** (`docs/r3_solari.md`). Prototype behind the
+`solari` cargo feature (`solari.rs`): started with `render_mode = rt_experimental` it adds `SolariPlugins`, traces opaque
+lit meshes (rooms, voxel columns/objects/characters) via Solari-layout mesh copies, replaces each torch point light with a
+ray-traced-only emissive box, scales unlit/emissive materials for Solari's exposure, F5 cycles classic / enhanced / rt;
+falls back to enhanced when the adapter lacks the features. Default build unchanged. Level 1 room 13 at 1080p on the RTX
+3090: Solari 1.7 ms (ReSTIR off) / 2.8 ms (ReSTIR on) vs enhanced 2.95 ms and classic 1.24 ms. Shadows and bounce light
+are a real gain, but without a denoiser the image is very noisy (fine grain with ReSTIR), unlit corners go black (no
+ambient in Solari), alpha-masked sprites cannot be traced; DLSS-RR could not be built (no DLSS SDK / libclang here).
+Re-check when DLSS-RR can be tested or Bevy ships a non-DLSS denoiser. R5 is not needed for the shadow look (enhanced).
+
 Open for V3: hit flash, an unlit option, smoothed normals, softer side lighting on the back terraces (the -x/+x step faces
 away from the torches go very dark under the blue ambient), a turned camera for cutscenes, a 30-degree review of key poses.

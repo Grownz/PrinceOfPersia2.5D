@@ -82,6 +82,11 @@ pub fn apply(
     }
     let Ok((cam_e, mut amb)) = cam.single_mut() else { return };
     *last = Some(*mode);
+    // the RT trial sets up its own camera (solari.rs); leaving it comes back through here
+    #[cfg(feature = "solari")]
+    if *mode == RenderMode::Rt {
+        return;
+    }
     let mut c = cmds.entity(cam_e);
     if *mode == RenderMode::Classic {
         c.remove::<(Hdr, Bloom, ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass, Smaa, bevy::render::view::NoIndirectDrawing)>().insert((Msaa::default(), ShadowFilteringMethod::default()));
@@ -326,13 +331,18 @@ fn light_shadow_views(
     }
 }
 
-/// F5: classic <-> enhanced, saved in settings.json.
-pub fn mode_key(k: Res<ButtonInput<KeyCode>>, mut mode: ResMut<RenderMode>, mut set: ResMut<Settings>) {
+/// F5: classic -> enhanced (-> rt_experimental when Solari is running) -> classic, saved in settings.json.
+pub fn mode_key(k: Res<ButtonInput<KeyCode>>, mut mode: ResMut<RenderMode>, mut set: ResMut<Settings>, #[cfg(feature = "solari")] rt: Option<Res<crate::solari::RtAvailable>>) {
     if !k.just_pressed(KeyCode::F5) {
         return;
     }
-    *mode = if *mode == RenderMode::Classic { RenderMode::Enhanced } else { RenderMode::Classic };
-    set.render_mode = if *mode == RenderMode::Enhanced { "enhanced" } else { "classic" }.into();
+    *mode = match *mode {
+        RenderMode::Classic => RenderMode::Enhanced,
+        #[cfg(feature = "solari")]
+        RenderMode::Enhanced if rt.is_some() => RenderMode::Rt,
+        _ => RenderMode::Classic,
+    };
+    set.render_mode = mode.key().into();
     set.save();
 }
 
