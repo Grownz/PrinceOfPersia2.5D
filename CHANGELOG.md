@@ -3,7 +3,7 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
-## Unreleased
+## [0.3.0] - 2026-11-18
 
 ### Added
 - Hall of fame as in the original (PRINCE.EXE read: load_hof 34D0, save_hof 347B, show_hof 33F8, end_sequence 2F2F;
@@ -146,6 +146,7 @@ reads the user's own game files at run time.
 - Analyses: mechanics, collisions, tiles, combat, edge cases, audio, cutscenes, controls, texture inventory,
   render roadmap (ray tracing, voxel characters), enhanced-mode performance.
 
+[0.3.0]: https://github.com/Grownz/PrinceOfPersia2.5D/releases/tag/v0.3.0
 [0.2.1]: https://github.com/Grownz/PrinceOfPersia2.5D/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Grownz/PrinceOfPersia2.5D/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Grownz/PrinceOfPersia2.5D/releases/tag/v0.1.0
