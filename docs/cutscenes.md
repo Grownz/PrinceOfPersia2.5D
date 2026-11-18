@@ -519,6 +519,13 @@ uses the cutscene player.
   (951 x 64..73, seen through the bed's gap, and x 245..254 = PV 952) use PV 952's 10-px shaft (voxel revolved or a flat
   textured box; procedural: 10-px stone boxes), the left one through the bed plane, both from the bed's bottom line up; the
   sky opening, bed, hourglass and actors keep their own look (docs/texture_inventory.md 17).
+- Shadows (enhanced): the sprites are unlit (classic look), and an unlit material receives no shadows, so the bed carpet
+  (PV 981) showed none of the actors'. In enhanced mode the carpet uses a lit, matte copy of its sprite material
+  (`cutscene::lit_carpet`, roughness 0.9, reflectance 0.2; about 8 % darker than unlit where no shadow falls); classic keeps
+  the unlit one. Only the sun (from the front, upper left) can shadow it: the torches stand behind the carpet plane (z -0.6
+  vs 0.52) and light its back, so their shadows of the actors fall forward, off the set. The actors (z 0.6 / 0.62) stand
+  just in front of the carpet, so the sun's shadow is a short offset to the lower right. Sprite actors cast through their
+  alpha mask, voxel actors as meshes; the hourglass and sand stay unlit (they receive no shadow).
 - Camera: the normal single-room gameplay framing, fixed (the original is a fixed full-screen view). Optional later: a slow
   dolly; keep it off by default for timing fidelity.
 - Flash: full-screen white overlay for the 5 flash frames (the existing `World::flash` overlay code), not the original flicker.

@@ -15,6 +15,9 @@ The original game data is never part of the repository or a release; see `docs/P
 - Cutscenes: no more gap left of the bed carpet. Checked against PV.DAT: the bed image is transparent at x 64..73 because
   the room picture's left front column (10 px, down to the screen bottom) shows through it; both front columns are now
   built from the original front column image PV 952 at the measured x (64, 245), in every tile/column style.
+- Cutscenes (enhanced): the actors' and the hourglass's shadows now fall on the bed carpet. The carpet (PV 981) was drawn
+  unlit, and unlit materials receive no shadows; enhanced mode now draws it with a lit, matte copy of its material
+  (classic unchanged, pixel diff 0).
 
 ## [0.1.0] - 2026-11-18
 

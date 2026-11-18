@@ -55,6 +55,8 @@ pub struct Cut {
     /// voxel actors: (file, resource, mirrored) -> mesh (None = did not decode); their shared lit material and the sprite quad
     vox: HashMap<(u8, u16, bool), Option<Handle<Mesh>>>,
     voxel_mat: Handle<StandardMaterial>,
+    /// enhanced mode: the bed's lit copy (made on first use), so the actors' shadows fall on the carpet
+    bed_lit: Handle<StandardMaterial>,
     quad: Handle<Mesh>,
     /// title/story screens: torch animation without a scene
     idle: u32,
@@ -307,6 +309,7 @@ pub fn render(
     style: Res<crate::settings::CharacterStyle>,
     mut meshes: ResMut<Assets<Mesh>>,
     pal: Res<Palette>,
+    mode: Res<crate::settings::RenderMode>,
     mut q: ParamSet<(
         Query<(&ActorSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d)>,
         Query<(&GlassSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>)>,
@@ -404,7 +407,15 @@ pub fn render(
     for (mut t, mut vis, mut mat) in &mut q.p4() {
         let shown = on_set.then(|| material(c, &mut imgs, &mut mats, 0, 981, 980)).flatten().map(|(m, w, h)| {
             place(&mut t, wx(0.0), wy(BED_BOTTOM), 0.52, w, h, false);
-            m
+            if *mode != crate::settings::RenderMode::Enhanced {
+                return m;
+            }
+            // an unlit material receives no shadows: enhanced draws the carpet lit (the sun's shadows of the actors in front)
+            if c.bed_lit == Handle::default() {
+                let lit = mats.get(&m).map(lit_carpet);
+                c.bed_lit = lit.map_or(m.clone(), |l| mats.add(l));
+            }
+            c.bed_lit.clone()
         });
         set_vis(&mut vis, &mut mat, shown);
     }
@@ -420,6 +431,12 @@ pub fn render(
         bg.set_if_neq(BackgroundColor(tint));
     }
     c.cs = scene;
+}
+
+/// The lit version of a sprite material (the bed carpet in enhanced mode): same texture and alpha mask, matte like the
+/// tile textures (roughness 0.9, low reflectance, so no sheen washes out the painted colours).
+fn lit_carpet(unlit: &StandardMaterial) -> StandardMaterial {
+    StandardMaterial { unlit: false, perceptual_roughness: 0.9, reflectance: 0.2, ..unlit.clone() }
 }
 
 fn set_vis(vis: &mut Visibility, mat: &mut MeshMaterial3d<StandardMaterial>, m: Option<Handle<StandardMaterial>>) {
@@ -449,6 +466,16 @@ mod tests {
         assert_eq!(crate::kid::screen_x(120, 0, 0x80, true), 142);
         assert!((super::wx(141.0) - (141.0 / 32.0 - 0.5)).abs() < 1e-6);
         assert_eq!(super::wy(166.0), 0.0);
+    }
+
+    /// Enhanced carpet: lit (an unlit material gets no shadows), same texture and alpha mask as the classic sprite.
+    #[test]
+    fn lit_carpet_receives_shadows() {
+        use bevy::prelude::*;
+        let u = StandardMaterial { base_color_texture: Some(Handle::default()), unlit: true, alpha_mode: AlphaMode::Mask(0.5), double_sided: true, cull_mode: None, ..default() };
+        let l = super::lit_carpet(&u);
+        assert!(!l.unlit && l.base_color_texture == u.base_color_texture && l.alpha_mode == u.alpha_mode && l.double_sided && l.cull_mode.is_none());
+        assert_eq!(l.base_color, u.base_color);
     }
 
     /// The set's pieces through the palace mapping (docs/texture_inventory.md 17): every lattice screen but LatticeRight
