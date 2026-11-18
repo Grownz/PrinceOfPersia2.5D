@@ -12,7 +12,10 @@
 //! (plus rt_experimental in a `--features solari` build started in that mode, docs/r3_solari.md),
 //! F6 sprite / voxel characters,
 //! F7 (debug text on, or POP_DEBUG_CAM=1) a closer, turned camera on the kid (POP_CAM_ANGLE="degrees[,distance]").
+//! POP_CAMERA=smooth|flip overrides settings.json "camera_scroll" (camera.rs). POP_SET="start=ROOM:TILE,door=N,upside=1"
+//! (with POP_LEVEL) changes the first world for screenshots (`debug_set`).
 mod audio;
+mod camera;
 mod cutscene;
 mod enhanced;
 mod flow;
@@ -135,7 +138,7 @@ fn main() {
     let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<usize>().ok());
     let level = env("POP_LEVEL").filter(|&l| l < levels.len()).unwrap_or(1);
     let assets = kid::KidAssets::load(&dir);
-    let world = sim::World::new(assets.data.clone(), levels[level].clone(), level);
+    let world = debug_set(&assets, &levels[level], level);
     let room = env("POP_ROOM").filter(|r| (1..=ROOMS).contains(r)).unwrap_or(world.kid.room as usize);
     let skip_title = env("POP_LEVEL").is_some() || env("POP_ROOM").is_some();
     let playing = || in_state(flow::Screen::Playing);
@@ -178,6 +181,7 @@ fn main() {
         .insert_resource(kid::Latch::default())
         .insert_resource(assets)
         .init_resource::<flow::Flow>()
+        .init_resource::<camera::View>()
         .insert_state(if skip_title { flow::Screen::Playing } else { flow::Screen::Title })
         .insert_resource(cutscene::Cut::load(&dir))
         .add_systems(Startup, ((setup, cutscene::setup, debug_cutscene).chain(), kid::setup, flow::setup, probe_gpu)) // first room is built by room::rebuild_on_change
@@ -207,8 +211,7 @@ fn main() {
                 room::animate,
                 kid::render,
                 flash,
-                cutscene::render,
-                debug_camera,
+                (camera::follow, cutscene::render, debug_camera, camera::mirror).chain(),
                 flow::overlay,
                 debug_text,
                 fullscreen,
@@ -341,6 +344,21 @@ fn debug_cutscene(mut cut: ResMut<cutscene::Cut>, a: Res<kid::KidAssets>, mut ne
     if cut.start(a.data.clone(), scene, rem, then) {
         next.set(flow::Screen::Cutscene);
     }
+}
+
+/// The first world; test hook POP_SET="start=ROOM:TILE,door=N,upside=1" (screenshots of states that take long to reach):
+/// another start position, leveldoor_open = N (level 8: the mouse comes at 150 while the kid is in room 16), upside-down on.
+fn debug_set(a: &kid::KidAssets, level: &Level, n: usize) -> sim::World {
+    let set = std::env::var("POP_SET").unwrap_or_default();
+    let val = |k: &str| set.split(',').find_map(|kv| kv.trim().strip_prefix(k)?.strip_prefix('=').map(str::to_owned));
+    let mut l = level.clone();
+    if let Some((r, t)) = val("start").as_deref().and_then(|v| v.split_once(':')).and_then(|(r, t)| Some((r.parse().ok()?, t.parse().ok()?))) {
+        (l.start_room, l.start_tile) = (r, t);
+    }
+    let mut w = sim::World::new(a.data.clone(), l, n);
+    w.leveldoor_open = val("door").and_then(|v| v.parse().ok()).unwrap_or(w.leveldoor_open);
+    w.upside |= val("upside").as_deref() == Some("1");
+    w
 }
 
 #[derive(Component)]

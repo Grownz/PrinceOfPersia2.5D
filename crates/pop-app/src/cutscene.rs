@@ -314,6 +314,7 @@ pub fn render(
     pal: Res<Palette>,
     mode: Res<crate::settings::RenderMode>,
     set: Res<crate::settings::Settings>,
+    view: Res<crate::camera::View>,
     mut q: ParamSet<(
         Query<(&ActorSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d)>,
         Query<(&GlassSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>)>,
@@ -330,7 +331,7 @@ pub fn render(
     let on_set = in_scene || s == Screen::Title;
     // camera: the set for cutscenes and the title/story screens, the level otherwise
     for mut t in &mut q.p6() {
-        let want = if on_set { camera_on_set() } else { crate::game_camera(win.width() / win.height().max(1.0)) };
+        let want = if on_set { camera_on_set() } else { crate::camera::transform(win.width() / win.height().max(1.0), &view) };
         if *t != want {
             *t = want;
         }

@@ -75,9 +75,16 @@ Created next to the exe on the first run; unknown keys are ignored, missing ones
   "shadow_quality": "high",
   "ssao": true,
   "voxel_normals": "smooth",
-  "voxel_shading": "lit"
+  "voxel_shading": "lit",
+  "camera_scroll": "smooth"
 }
 ```
+
+`camera_scroll`: `smooth` (default: on a room change the camera pans to the new room in 0.3 s, eased, frame rate
+independent, the neighbouring rooms visible at the margins) or `flip` (the original's hard cut to the new room); env
+`POP_CAMERA=smooth|flip` overrides. Level changes, restarts and jumps to a room that is not a neighbour always cut.
+Upside-down (the invert potion; in the shipped levels raw potion modifier 4 sits in level 9 rooms 7 and 10, INFERRED kind 4): the picture is mirrored top to bottom as in the original; the hit points and
+texts stay upright and the controls are not swapped (original: display only, docs/edge_cases.md 5.1).
 
 `window`: `windowed` or `borderless` (F11 saves it). `sound`: `synth` (generated effects) or `original` (the game's own
 sounds; the environment variable `POP_SOUND=original` overrides). Volume, mute and F11 are saved when changed.

@@ -145,6 +145,12 @@ fn chompers_start_staggered() {
 fn drink(kind: u8, hp: i32) -> (World, Vec<(u8, u8)>) {
     let mut w = world(3, &[], &[]);
     tick(&mut w, NONE, 10);
+    let f = drink_here(&mut w, kind, hp);
+    (w, f)
+}
+
+/// `drink` in an existing world, at the kid's place.
+fn drink_here(w: &mut World, kind: u8, hp: i32) -> Vec<(u8, u8)> {
     let col = w.kid.col(&crate::sim::mk_env(&w.data, &w.level, w.guard_type));
     w.set_tile_for_test(1, 10 + col as u8, Tile::Potion);
     w.set_mod_for_test(1, 10 + col as u8, kind << 5);
@@ -154,19 +160,45 @@ fn drink(kind: u8, hp: i32) -> (World, Vec<(u8, u8)>) {
         if w.kid.frame == 109 {
             break;
         }
-        tick(&mut w, down, 1);
+        tick(w, down, 1);
     }
-    tick(&mut w, Keys { shift: true, ..down }, 1);
+    tick(w, Keys { shift: true, ..down }, 1);
     assert_eq!(w.kid.seq, 78, "drinking");
     let mut flashes = vec![];
     for _ in 0..30 {
-        tick(&mut w, NONE, 1);
+        tick(w, NONE, 1);
         if w.flash.1 > 0 {
             flashes.push(w.flash);
         }
     }
     assert_eq!(w.level.tile_at(1, 10 + col as usize).kind, Tile::Floor);
-    (w, flashes)
+    flashes
+}
+
+/// Invert potion (toggle_upside 0000:161C): display only, so the same keys move the kid exactly as without it (no control
+/// swap); a second one turns the view back; death clears it (0000:0EE7), as does every (re)start (set_start_pos 4B17).
+#[test]
+fn upside_down_state_5_1() {
+    if crate::no_game_data() { return; }
+    let (mut up, f) = drink(4, 3);
+    let (mut plain, _) = drink(0, 3);
+    assert!(up.upside && !plain.upside && f.is_empty(), "no sound, no flash");
+    let (left, up_key) = (Keys { left: true, ..NONE }, Keys { up: true, ..NONE });
+    for keys in [RIGHT, RIGHT, RIGHT, NONE, left, left, NONE, up_key, NONE, NONE, NONE, NONE, NONE, NONE] {
+        for _ in 0..4 {
+            tick(&mut up, keys, 1);
+            tick(&mut plain, keys, 1);
+            assert_eq!((up.kid.x, up.kid.y, up.kid.seq, up.kid.facing_left), (plain.kid.x, plain.kid.y, plain.kid.seq, plain.kid.facing_left));
+        }
+    }
+    assert!(up.upside, "stays until something clears it");
+    drink_here(&mut up, 4, 3);
+    assert!(!up.upside, "a second invert potion turns it back");
+    drink_here(&mut up, 4, 3);
+    assert!(up.upside);
+    up.kid.alive = false;
+    tick(&mut up, NONE, 1);
+    assert!(!up.upside, "cleared when the kid is dead");
 }
 
 #[test]

@@ -13,8 +13,22 @@ The original game data is never part of the repository or a release; see `docs/P
 - Level 13: entering rooms 23 and 16 starts the loose floors of the room above, staggered at random (check_fall_flo).
 - Tests: the animation stream against a replayed prandom, trobs following the drawn room, level-13 falling floors, the
   exit-stairs timeline (frames 217..228, the kid gone from tick 13, level end on tick 23), level tail and used_rooms.
+- Smooth room-to-room camera (setting `camera_scroll` `smooth` default / `flip` = the original's hard cut, env
+  `POP_CAMERA`): a 0.3 s eased, frame-rate independent pan from the old room to the new one across the rebuilt
+  neighbour set (camera.rs); a change in the middle of a pan continues from where the camera is.
+- Upside-down view (invert potion): the picture is mirrored top to bottom like the original's playfield buffer flip
+  (0C83:19BD / 0000:15A0, VERIFIED), in classic and enhanced; HUD upright, controls unchanged (display only, as in the
+  original). Implemented by rendering into an image shown flipped, only while the flag is set.
+- Torches and potions in the neighbouring rooms at the margins animate (a cosmetic per-tile phase; the sim animates the
+  drawn room only, which keeps its original frames).
+- Test hook `POP_SET="start=ROOM:TILE,door=N,upside=1"` (with `POP_LEVEL`) for screenshots of the level-8 mouse and the
+  upside-down view.
+- Tests: pan easing and room steps, re-origin continuity, camera_scroll parsing, neighbour animation, the upside-down
+  state (toggle, no control swap, cleared on death).
 
 ### Fixed
+- The floor row of a missing room above now runs the full width also in the diagonal places, so the ceiling over the
+  previous room does not vanish when the room set is rebuilt around the next room.
 - Load-time modifier conversion covers rooms 1..used_rooms like the original, including its pseudo room 25 (zeroes one
   door-link byte on level 6, no gameplay effect); rooms above used_rooms keep their raw modifiers.
 

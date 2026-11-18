@@ -369,7 +369,9 @@ fn spawn_edge(b: &mut B, dx: i32, dy: i32) {
     back_wall(b);
     for idx in 0..ROWS * COLS {
         let (col, row) = (idx % COLS, idx / COLS);
-        let near = (dx >= 0 || col >= COLS - EDGE_COLS) && (dx <= 0 || col < EDGE_COLS) && (dy >= 0 || row == 0) && (dy <= 0 || row == ROWS - 1);
+        // the floor row of a missing room above runs the full width, diagonals included: it is the ceiling of the room
+        // below, which stays on screen during a sideways camera pan (camera.rs) when that room becomes a diagonal
+        let near = if dy > 0 { row == ROWS - 1 } else { (dx >= 0 || col >= COLS - EDGE_COLS) && (dx <= 0 || col < EDGE_COLS) && (dy == 0 || row == 0) };
         if near {
             let kind = if dy > 0 { Tile::Floor } else { Tile::Wall };
             tile(b, col as f32, (ROWS - 1 - row) as f32 * TILE_H, TileRef { kind, flags: 0, modifier: 0 }, 0.0, idx as u8);
@@ -408,11 +410,11 @@ pub struct Falling {
     up: f32,
 }
 
-/// A potion's bubbles (room, tile index): the frame shown is the sim's `Level::anim_frame`.
+/// A potion's bubbles (room, tile index): the frame shown is the sim's `Level::anim_frame` (`neighbour_frame` off the drawn room).
 #[derive(Component)]
 pub struct Bubbles(u8, u8);
 
-/// A voxel torch flame (room, tile index): the frame shown is the sim's `Level::anim_frame`.
+/// A voxel torch flame (room, tile index): the frame shown is the sim's `Level::anim_frame` (`neighbour_frame` off the drawn room).
 #[derive(Component)]
 pub struct TorchFlame(u8, u8);
 
@@ -464,7 +466,9 @@ pub fn animate(
     for (f, mut t) in &mut falling {
         t.translation = f.base + Vec3::Y * f.up * (1.0 - a);
     }
-    let anim = |room: u8, idx: u8| g.world.level.anim_frame(room as usize, idx as usize);
+    // the sim animates the drawn room only (is_trob_in_drawn_room): the neighbours at the margins get a cosmetic phase
+    let (level, drawn, tick) = (&g.world.level, g.world.shared.drawn_room, g.world.tick);
+    let anim = |room: u8, idx: u8| if room == drawn { level.anim_frame(room as usize, idx as usize) } else { neighbour_frame(level.tile_at(room as usize, idx as usize).kind, tick, room, idx) };
     if let Some(frames) = p.items.as_ref().map(|i| &i.bubbles).filter(|f| !f.is_empty()) {
         for (b, mut m) in &mut bubbles {
             // frames 1..7; 0 = a room never entered (not animated yet): shown as frame 1
@@ -482,6 +486,18 @@ pub fn animate(
                 m.0 = want.clone();
             }
         }
+    }
+}
+
+/// Cosmetic frame for a torch or potion in a room the sim does not animate (the original never draws those), from the logic
+/// tick and the tile: torches pick a pseudo-random flame 0..8 per tick like get_torch_frame's prandom (but stateless),
+/// potions cycle their bubbles 1..7 with a per-tile phase. App only; the drawn room keeps the sim's frame.
+pub fn neighbour_frame(kind: Tile, tick: u64, room: u8, idx: u8) -> Option<u8> {
+    let tile = room as u64 * 30 + idx as u64;
+    match kind {
+        Tile::Torch | Tile::TorchDebris => Some(((tick.wrapping_mul(31).wrapping_add(tile).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 40) % 9) as u8),
+        Tile::Potion => Some(((tick + tile) % 7) as u8 + 1),
+        _ => None,
     }
 }
 
@@ -966,6 +982,19 @@ mod tests {
         // continuous across a tick: end of tick k = start of tick k + 1
         let (a, b) = (wobble(5, 0.999), wobble(6, 0.0));
         assert!((a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3);
+    }
+
+    #[test]
+    fn neighbour_rooms_animate_cosmetically() {
+        let flames: Vec<u8> = (0..60).map(|t| neighbour_frame(Tile::Torch, t, 3, 11).unwrap()).collect();
+        assert!(flames.iter().all(|&f| f < 9));
+        assert!((0..9).filter(|f| flames.contains(f)).count() >= 7, "uses most flame frames: {flames:?}");
+        assert!(flames.windows(2).filter(|w| w[0] != w[1]).count() > 40, "changes most ticks");
+        let bubbles: Vec<u8> = (0..7).map(|t| neighbour_frame(Tile::Potion, t, 2, 4).unwrap()).collect();
+        assert_eq!({ let mut b = bubbles.clone(); b.sort(); b }, vec![1, 2, 3, 4, 5, 6, 7]);
+        assert_ne!(neighbour_frame(Tile::Potion, 0, 2, 4), neighbour_frame(Tile::Potion, 0, 2, 5));
+        assert_eq!(neighbour_frame(Tile::Floor, 1, 1, 1), None);
+        assert_eq!(neighbour_frame(Tile::Torch, 1_000_000_000_000, 24, 29).map(|f| f < 9), Some(true), "no overflow");
     }
 
     #[test]

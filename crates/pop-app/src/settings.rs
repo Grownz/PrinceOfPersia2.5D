@@ -1,5 +1,5 @@
 //! settings.json next to the exe: window mode and size, volume, mute, sound mode, kid key bindings, data path, render mode,
-//! character style and the voxel characters' normals / shading, tile textures, column style.
+//! character style and the voxel characters' normals / shading, tile textures, column style, camera scroll.
 //! Unknown keys are ignored and missing ones take their defaults, so older and newer files both load.
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -43,8 +43,12 @@ pub struct Settings {
     /// voxel characters: "lit" (shaded by torches, sun and ambient) or "unlit" (the palette colours with the baked occlusion
     /// only, closest to the sprites); POP_VOXEL_SHADING overrides
     pub voxel_shading: String,
+    /// room change: "smooth" (a short eased pan to the new room, the neighbours visible at the margins) or "flip" (the
+    /// original's hard cut); POP_CAMERA overrides
+    pub camera_scroll: String,
 }
 
+pub const CAMERA_SCROLLS: [&str; 2] = ["smooth", "flip"];
 pub const RENDER_MODES: [&str; 3] = ["classic", "enhanced", "rt_experimental"];
 pub const CHARACTER_STYLES: [&str; 2] = ["sprite", "voxel"];
 pub const SHADOW_QUALITIES: [&str; 3] = ["off", "low", "high"];
@@ -130,7 +134,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into() }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into() }
     }
 }
 
@@ -172,6 +176,7 @@ impl Settings {
             object_style: field(&o, "object_style", d.object_style, |s| OBJECT_STYLES.contains(&s.as_str())),
             voxel_normals: field(&o, "voxel_normals", d.voxel_normals, |s| VOXEL_NORMALS.contains(&s.as_str())),
             voxel_shading: field(&o, "voxel_shading", d.voxel_shading, |s| VOXEL_SHADINGS.contains(&s.as_str())),
+            camera_scroll: field(&o, "camera_scroll", d.camera_scroll, |s| CAMERA_SCROLLS.contains(&s.as_str())),
         }
     }
 
@@ -204,6 +209,11 @@ impl Settings {
     /// Unlit voxel characters (settings plus POP_VOXEL_SHADING; only "unlit" means unlit).
     pub fn unlit_voxels(&self) -> bool {
         unlit(&self.voxel_shading, std::env::var("POP_VOXEL_SHADING").ok().as_deref())
+    }
+
+    /// Smooth camera pan on a room change (settings plus POP_CAMERA; only "flip" means the hard cut).
+    pub fn smooth_scroll(&self) -> bool {
+        smooth_scroll(&self.camera_scroll, std::env::var("POP_CAMERA").ok().as_deref())
     }
 
     pub fn to_json(&self) -> String {
@@ -268,6 +278,10 @@ pub fn voxel_columns(setting: &str, env: Option<&str>) -> bool {
 
 pub fn unlit(setting: &str, env: Option<&str>) -> bool {
     env.unwrap_or(setting) == "unlit"
+}
+
+pub fn smooth_scroll(setting: &str, env: Option<&str>) -> bool {
+    env.unwrap_or(setting) != "flip"
 }
 
 /// One field of a settings object: its value if present, well-typed and `ok`, else the default.
@@ -425,6 +439,20 @@ mod tests {
         // env wins over the file
         assert!(voxel_columns("smooth", None) && !voxel_columns("smooth", Some("flat")) && voxel_columns("flat", Some("smooth")));
         assert!(!unlit("lit", None) && unlit("lit", Some("unlit")) && !unlit("unlit", Some("lit")));
+    }
+
+    #[test]
+    fn camera_scroll_parse_env_and_fall_back() {
+        assert_eq!(Settings::default().camera_scroll, "smooth");
+        let s = Settings::parse(r#"{"camera_scroll": "flip"}"#);
+        assert_eq!(s.camera_scroll, "flip");
+        assert_eq!(Settings::parse(&s.to_json()), s);
+        let s = Settings::parse(r#"{"camera_scroll": "zoom", "volume": 0.5}"#);
+        assert_eq!((s.camera_scroll.as_str(), s.volume), ("smooth", 0.5));
+        assert_eq!(Settings::parse(r#"{"camera_scroll": 2}"#).camera_scroll, "smooth");
+        // POP_CAMERA wins over the file
+        assert!(smooth_scroll("smooth", None) && !smooth_scroll("flip", None));
+        assert!(!smooth_scroll("smooth", Some("flip")) && smooth_scroll("flip", Some("smooth")));
     }
 
     #[test]

@@ -526,6 +526,11 @@ tile -> floor, seq 78; the pick-up frame runs op F3 1 -> proc_get_object `81AB` 
   Cleared by set_start_pos.
 - Upside-down is **display only**: every reader of `[4FD0]` is drawing/text code (`0A65`, `0A93`, `15A6`, `4D1F`, `4D3A`) plus the
   resets; the controls are not swapped. Cleared when the kid dies (`0EE7`) and at every (re)start.
+  What is flipped (VERIFIED): the offscreen buffer `[43BE]` is made from rect `ds:0F9A` = (0, 0, 192, 320), the playfield
+  only. Around every copy to the screen the drawing code calls `0C83:19BD([43BE])` (flip the buffer top to bottom) before
+  and after (`0A65`/`0A93`, `4D1F`/`4D3A`), and `15A0` turns the copied rect into y' = 192 - y (`15CF`..`15E8`). The
+  8-line status bar below 192 is not in that buffer, so hit points and texts stay upright. pop-app mirrors its 3D picture
+  the same way (camera.rs) and keeps the HUD upright.
 - The HP change is applied by do_delta_hp at the end of the tick with clamping (combat.md 6); a heal on the tick the kid is also hurt is
   overwritten by take_hp (both assign the delta; whichever runs last wins).
 
