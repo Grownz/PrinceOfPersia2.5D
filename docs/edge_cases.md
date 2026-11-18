@@ -308,7 +308,7 @@ Kid.alive is a counter after death (-1 = alive).
 fell_out(); control_kid()                 ; control_kid: alive < 0 and hitp_curr == 0 -> alive = 0
 if alive < 0 or !is_dead(): return
 if resurrect_time [3D76] != 0: (cheat) stop sounds, hitp_delta = hitp_max, seq 2, x += 8, set_start_pos; ...
-if sound playing (0C83:720D) and [4360] != 5: return          ; wait (INFERRED: [4360] == 5 is a no-sound mode)
+if sound playing (0C83:720D) and [4360] != 5: return          ; wait ([4360] = current sound id: gate opening 5 does not hold it, audio.md 6.2)
 is_show_time [435C] = 0
 switch alive:
   0..5: alive++

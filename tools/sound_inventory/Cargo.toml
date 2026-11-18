@@ -1,0 +1,11 @@
+[package]
+name = "pop-sound-inventory"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+pop-core = { path = "../../crates/pop-core" }
+
+# Standalone: not part of the main workspace (like tools/disasm).
+[workspace]
