@@ -1,9 +1,24 @@
-Copyright (c) the Prince of Persia x64 authors. All rights reserved.
+MIT License
 
-No open-source licence has been chosen for this code yet; until one is added here, no permission to copy, modify or
-redistribute it is granted beyond what applicable law allows.
+Copyright (c) 2026 the Prince of Persia x64 authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
 
 This licence covers only the code, documentation, synthesized sounds and procedural geometry in this repository.
-It does NOT cover Prince of Persia itself: the original game program, graphics, sounds and level data are copyrighted
-by their owners, are not part of this repository or of any release package, and must be supplied by the user from
-their own copy. See docs/PROVENANCE.md.
+It does NOT cover Prince of Persia itself: the original game program, graphics, sounds, music and level data are
+copyrighted by their owners, are not part of this repository or of any release package, and must be supplied by the
+user from their own copy. See docs/PROVENANCE.md. SoundFonts downloaded from the game's menu stay under the licences of
+their sources (MuseScore_General and FluidR3_GM: MIT, with their copyright notices).

@@ -7,3 +7,13 @@ dist/
 
 # downloaded SoundFonts (licensed by their sources, never committed)
 soundfonts/
+
+# local runtime files and tools
+settings.json
+PRINCE.HOF
+*.HOF
+pop.log
+*.exe
+tools/rt_probe/
+*.sf2
+*.sf3
