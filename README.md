@@ -29,11 +29,11 @@ cargo test --workspace               # tests needing Original_data print "skippi
 Environment variables: `POP_DATA` (data folder), `POP_LEVEL` / `POP_ROOM` (skip the title), `POP_SOUND=original`
 (the game's own sounds), `POP_PERF=1` (log frame time and room rebuilds every 300 frames, vsync off),
 `POP_SHOT=file.png` (screenshot after `POP_SHOT_FRAME`, default 400 frames, or at logic tick `POP_SHOT_TICK`, then quit), `POP_SCRIPT` (scripted keys),
-`POP_CUTSCENE=<level>|end|timeout|intro` (play that cutscene at once; `POP_REM_MIN` = minutes left for the hourglass), `POP_FPS=1` (frame-time overlay with GPU pass times; F9 toggles it), `POP_BENCH=<frames>` (benchmark: vsync off, warm-up, one `BENCH` log line, quit; with `POP_RES=WxH|full` and the `POP_FX` cost toggles; `tools/bench.ps1` runs a matrix, docs/enhanced_perf.md).
+`POP_MENU=main|settings|controls|hof|name|attract` (open a menu page or a hall-of-fame screen at once; the pause menu with `POP_LEVEL`), `POP_CUTSCENE=<level>|end|timeout|intro` (play that cutscene at once; `POP_REM_MIN` = minutes left for the hourglass), `POP_FPS=1` (frame-time overlay with GPU pass times; F9 toggles it), `POP_BENCH=<frames>` (benchmark: vsync off, warm-up, one `BENCH` log line, quit; with `POP_RES=WxH|full` and the `POP_FX` cost toggles; `tools/bench.ps1` runs a matrix, docs/enhanced_perf.md).
 
 ## Controls
 
-Arrow keys + Shift; Esc/P pause; Ctrl+A restart; Ctrl+G save; Ctrl+L load; M mute; - / = volume; F11 fullscreen;
+Arrow keys + Shift; Esc pause menu (resume, restart, save, settings, controls, quit) and title menu; P pause; Ctrl+A restart; Ctrl+G save; Ctrl+L load; M mute; - / = volume; F11 fullscreen;
 F3 debug; F5 classic / enhanced rendering; F6 sprite / voxel characters; F9 frame-time overlay. Controllers: d-pad/left stick, A = Shift, Start = pause, Back = restart. Full list and key rebinding:
 [docs/controls.md](docs/controls.md).
 

@@ -1,7 +1,7 @@
 // release builds have no console window; errors go to pop.log next to the exe
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! Prince of Persia remake: title -> game (procedural 3D rooms, original sprites) -> title.
-//! Keys: arrows + Shift = kid, Esc/P = pause, Ctrl+A = restart, Ctrl+G = save, Ctrl+L = load (title/demo), M = mute,
+//! Keys: arrows + Shift = kid, Esc = pause menu / title menu, P = pause, Ctrl+A = restart, Ctrl+G = save, Ctrl+L = load (title/demo), M = mute,
 //! - / = = volume, F11 = borderless fullscreen, F3 = debug text, controller supported (docs/controls.md)
 //! (with it on: Ctrl+arrows = neighbouring room, Ctrl+PageUp/PageDown = level, sequence viewer keys).
 //! POP_LEVEL / POP_ROOM skip the title; POP_CUTSCENE=<level>|end|timeout|intro plays that cutscene at once (then quits
@@ -13,14 +13,18 @@
 //! F6 sprite / voxel characters,
 //! F7 (debug text on, or POP_DEBUG_CAM=1) a closer, turned camera on the kid (POP_CAM_ANGLE="degrees[,distance]").
 //! POP_CAMERA=smooth|flip overrides settings.json "camera_scroll" (camera.rs). POP_SET="start=ROOM:TILE,door=N,upside=1"
-//! (with POP_LEVEL) changes the first world for screenshots (`debug_set`).
+//! (with POP_LEVEL) changes the first world for screenshots (`debug_set`). POP_MENU = main, settings, controls, hof, name
+//! or attract opens a menu page or a hall-of-fame screen at once (`flow::debug_menu`).
 mod audio;
 mod camera;
 mod cutscene;
 mod enhanced;
 mod flow;
+mod hof;
 mod items;
 mod kid;
+mod menu;
+mod menu_ui;
 mod perf;
 mod room;
 mod settings;
@@ -181,10 +185,12 @@ fn main() {
         .insert_resource(kid::Latch::default())
         .insert_resource(assets)
         .init_resource::<flow::Flow>()
+        .init_resource::<menu_ui::MenuUi>()
+        .insert_resource(hof::Hof::load())
         .init_resource::<camera::View>()
         .insert_state(if skip_title { flow::Screen::Playing } else { flow::Screen::Title })
         .insert_resource(cutscene::Cut::load(&dir))
-        .add_systems(Startup, ((setup, cutscene::setup, debug_cutscene).chain(), kid::setup, flow::setup, probe_gpu)) // first room is built by room::rebuild_on_change
+        .add_systems(Startup, ((setup, cutscene::setup, debug_cutscene).chain(), kid::setup, (flow::setup, menu_ui::setup, flow::debug_menu).chain(), probe_gpu)) // first room is built by room::rebuild_on_change
         .add_systems(OnEnter(flow::Screen::Title), audio::enter_title)
         .add_systems(OnEnter(flow::Screen::Cutscene), audio::enter_cutscene)
         .add_systems(OnEnter(flow::Screen::Paused), audio::pause)
@@ -201,10 +207,10 @@ fn main() {
         .add_systems(
             Update,
             (
-                kid::latch_keys,
-                flow::pause,
-                audio::keys,
-                flow::title.run_if(in_state(flow::Screen::Title)),
+                kid::latch_keys.run_if(not(in_state(flow::Screen::Paused))), // menu keys must not reach the kid after resume
+                (menu_ui::input, flow::menu_action).chain(),
+                audio::keys.run_if(|f: Res<flow::Flow>| !f.typing()),
+                (flow::title, flow::name_entry).chain().run_if(in_state(flow::Screen::Title)),
                 (cutscene::latch, flow::cutscene_end).run_if(in_state(flow::Screen::Cutscene)),
                 (navigate, kid::keys, flow::playing).chain().run_if(playing()),
                 room::rebuild_on_change,
@@ -212,7 +218,7 @@ fn main() {
                 kid::render,
                 flash,
                 (camera::follow, cutscene::render, debug_camera, camera::mirror).chain(),
-                flow::overlay,
+                (flow::overlay, menu_ui::draw),
                 debug_text,
                 fullscreen,
                 char_style_key,

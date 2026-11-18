@@ -57,8 +57,8 @@ pub struct AudioState {
     /// fixed steps until every started sound has ended ("a sound is playing" in the original)
     pub busy: u32,
     gen: u32,
-    volume: f32,
-    muted: bool,
+    pub volume: f32,
+    pub muted: bool,
 }
 
 /// A playing sound effect / music cue.
@@ -216,6 +216,13 @@ pub fn resume(sinks: Query<&AudioSink, With<Sfx>>) {
     sinks.iter().for_each(|s| s.play());
 }
 
+/// The volume / mute of `a` on every playing sound and on the ones spawned this frame (no sink yet).
+pub fn apply_gain(a: &AudioState, sinks: &mut Query<&mut AudioSink, With<Sfx>>, pending: &mut Query<&mut PlaybackSettings, (With<Sfx>, Without<AudioSink>)>) {
+    let v = a.gain();
+    sinks.iter_mut().for_each(|mut s| s.set_volume(v));
+    pending.iter_mut().for_each(|mut p| p.volume = v);
+}
+
 /// M = mute, - / = = master volume (10 % steps); applied to every sound (effects, music cues, card cues all carry `Sfx`),
 /// including ones spawned this frame whose sink does not exist yet.
 pub fn keys(
@@ -236,9 +243,7 @@ pub fn keys(
     if step != 0 {
         a.muted = false;
     }
-    let v = a.gain();
-    sinks.iter_mut().for_each(|mut s| s.set_volume(v));
-    pending.iter_mut().for_each(|mut p| p.volume = v);
+    apply_gain(&a, &mut sinks, &mut pending);
     (set.volume, set.muted) = (a.volume, a.muted);
     set.save();
     g.banner = (24, if a.muted { "SOUND OFF".into() } else { format!("VOLUME {}%", (a.volume * 100.0).round()) });

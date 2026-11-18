@@ -9,7 +9,8 @@
 | Home / PageUp | Same as keypad 7 / 9 (same scancode in the original) |
 | Shift | Action: grab a ledge, careful step, drink, strike with the sword; after death, hold to restart |
 | Enter | After death: restart the level |
-| Esc / P | Pause / resume |
+| Esc | Playing: pause menu (Esc again resumes); title: menu (start, load, settings, controls, hall of fame, quit) |
+| P | Pause / resume directly |
 | Ctrl+A | Restart the level |
 | Ctrl+G | Save the game (levels 3 to 13) |
 | Ctrl+L | Load the saved game (title screen and demo only) |
@@ -50,11 +51,23 @@ from both are combined.
 |---|---|
 | D-pad / left stick | Arrow keys (stick threshold: half deflection) |
 | A / Cross (South), X / Square (West) | Shift (action) |
-| Start / Options | Pause / resume |
+| Start / Options | Pause menu; title: menu |
 | Back / Select / Share | Restart the level (Ctrl+A), while playing |
 | Any button | Title: start a new game; demo: start the game; skip a cutscene |
 
-Save, load, volume, mute and fullscreen stay on the keyboard.
+Save, load, volume, mute and fullscreen stay on the keyboard (or the menus).
+
+## Menus
+
+Up / down (arrows, numpad 8 / 2, d-pad) choose, Enter / Space / numpad 5 / A select, left / right (or Enter) change a
+setting, Esc / Backspace / B go back (on the first page: close the menu, resume the game); Start also goes back. The
+game stays frozen while the pause menu is open. Settings page: `render_mode` (classic / enhanced), `character_style`,
+`camera_scroll`, `window`, `volume`, `muted` apply at once; `sound`, `tile_textures`, `column_style`, `object_style`,
+`voxel_normals`, `voxel_shading`, `shadow_quality`, `ssao` are marked "(after restart)". Every change is written to
+settings.json at once (atomic). The Controls page lists the kid's keys from settings.json and the fixed keys.
+
+Hall of fame name entry (after the ending, when the time qualifies): type up to 24 characters, Backspace deletes,
+Enter / Esc confirm; on a controller A / Start confirms and an empty name becomes "PRINCE".
 
 ## settings.json
 

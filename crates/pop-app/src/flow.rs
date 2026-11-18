@@ -1,7 +1,10 @@
 //! Game flow (M6): title and attract loop (docs/cutscenes.md 2), cutscenes (cutscene.rs), pause, HUD, save/load.
 use crate::audio::{AudioState, Sfx, Sounds};
 use crate::cutscene::{Cut, Then};
+use crate::hof::Hof;
 use crate::kid::{self, KidAssets};
+use crate::menu::Action;
+use crate::menu_ui::MenuUi;
 use crate::Game;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
@@ -33,6 +36,8 @@ pub enum Pic {
     Page(u16),
     /// the intro cutscene (pv_scene) runs here
     Intro,
+    /// hall of fame: frame 41 + logo 54, the entries drawn as text over it (show_hof 0000:33F8)
+    Hof,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -49,6 +54,8 @@ enum Fx {
 enum Len {
     Units(u32),
     Quiet,
+    /// until the hall-of-fame name is entered
+    Name,
 }
 
 type Phase = (Pic, Fx, Len, Option<u8>);
@@ -59,8 +66,9 @@ const FADE2: u32 = 128;
 const WIPE: u32 = 30;
 
 /// show_title (0000:181D, docs/cutscenes.md 2): (picture, effect, length, sound started with the phase). There is no idle
-/// timer: the loop ends in the demo, and the demo ends back on the title. The hall of fame is skipped (the remake keeps none).
-const ATTRACT: [Phase; 17] = [
+/// timer: the loop ends in the demo, and the demo ends back on the title. After the credits the hall of fame shows for 240
+/// units when it has entries (0000:1B7C `cmp [409Ch], 0`); `Flow::skipped` picks that tail or the credits' own.
+const ATTRACT: [Phase; 20] = [
     (Pic::Title(0), Fx::FadeIn, Len::Units(FADE2), None),
     (Pic::Title(0), Fx::Cut, Len::Units(130), Some(54)),
     (Pic::Title(1), Fx::Cut, Len::Units(205), None),
@@ -76,18 +84,28 @@ const ATTRACT: [Phase; 17] = [
     (Pic::Page(43), Fx::Cut, Len::Quiet, None), // sound 52 from the intro scene
     (Pic::Title(3), Fx::Wipe, Len::Units(120), None),
     (Pic::Page(45), Fx::Wipe, Len::Units(360), None),
+    (Pic::Hof, Fx::Wipe, Len::Units(240), None),
+    (Pic::Hof, Fx::Cut, Len::Quiet, None),
+    (Pic::Hof, Fx::FadeOut, Len::Units(FADE2), None),
     (Pic::Page(45), Fx::Cut, Len::Quiet, None),
     (Pic::Page(45), Fx::FadeOut, Len::Units(FADE2), None),
 ];
 
-/// end_sequence after the animation (0000:2F2F): music 56, page 44 for 900 units, the title, wait for the music (or a key).
-const ENDING: [Phase; 5] = [
+/// end_sequence after the animation (0000:2F2F): music 56, page 44 for 900 units, the title, then the hall of fame with the
+/// name entry when the time qualifies (0000:3008..31C2: insert, input, write PRINCE.HOF, pop_wait 120, back to the title),
+/// wait for the music (or a key).
+const ENDING: [Phase; 8] = [
     (Pic::Page(44), Fx::FadeIn, Len::Units(FADE2), Some(56)),
     (Pic::Page(44), Fx::Cut, Len::Units(900), None),
     (Pic::Title(0), Fx::Wipe, Len::Units(240), None),
+    (Pic::Hof, Fx::Wipe, Len::Name, None),
+    (Pic::Hof, Fx::Cut, Len::Units(120), None),
+    (Pic::Title(0), Fx::Wipe, Len::Units(WIPE), None),
     (Pic::Title(0), Fx::Cut, Len::Quiet, None),
     (Pic::Title(0), Fx::FadeOut, Len::Units(FADE2), None),
 ];
+/// the name-entry phase of ENDING
+const ENDING_HOF: usize = 3;
 
 #[derive(Resource, Default)]
 pub struct Flow {
@@ -101,9 +119,36 @@ pub struct Flow {
     pics: HashMap<Pic, Vec<u8>>,
     screen: Handle<Image>,
     drawn: Option<(Option<Pic>, Pic, u32)>,
+    /// the hall of fame has entries (the attract loop shows it)
+    has_hof: bool,
+    /// ending: the slot of the new hall-of-fame entry
+    hof_new: Option<usize>,
+    /// the name of `hof_new` is being typed
+    typing: bool,
 }
 
 impl Flow {
+    /// The title menu may open (the attract loop, not the ending pages).
+    pub fn menu_allowed(&self) -> bool {
+        !self.ending
+    }
+
+    /// The hall-of-fame name is being typed (letter keys must not mute or skip).
+    pub fn typing(&self) -> bool {
+        self.typing
+    }
+
+    /// Phases left out: the hall of fame without entries (attract) or without a new entry (ending); with entries the
+    /// attract loop uses the hall-of-fame tail instead of the credits' own.
+    fn skipped(&self, i: usize) -> bool {
+        let (pic, fx, ..) = self.slides()[i];
+        if self.ending {
+            pic == Pic::Hof && self.hof_new.is_none()
+        } else {
+            (pic == Pic::Hof && !self.has_hof) || (pic == Pic::Page(45) && fx != Fx::Wipe && self.has_hof)
+        }
+    }
+
     fn slides(&self) -> &'static [Phase] {
         if self.ending { &ENDING } else { &ATTRACT }
     }
@@ -131,13 +176,21 @@ impl Flow {
     /// Start the attract loop (false) or the ending pages from the beginning.
     fn restart(&mut self, ending: bool) {
         (self.ending, self.phase, self.t, self.entered, self.prev, self.drawn) = (ending, 0, 0.0, false, None, None);
+        if !ending {
+            (self.hof_new, self.typing) = (None, false);
+        }
     }
 
-    /// The next phase; true when the slides are over.
+    /// The next phase that is not skipped; true when the slides are over.
     fn advance(&mut self) -> bool {
         self.prev = Some(self.cur().0).filter(|&p| p != Pic::Intro).or(self.prev);
-        (self.phase, self.t, self.entered) = (self.phase + 1, 0.0, false);
-        self.phase >= self.slides().len()
+        (self.t, self.entered) = (0.0, false);
+        loop {
+            self.phase += 1;
+            if self.phase >= self.slides().len() || !self.skipped(self.phase) {
+                return self.phase >= self.slides().len();
+            }
+        }
     }
 }
 
@@ -158,6 +211,10 @@ pub enum Label {
     Centre,
 }
 
+/// (row, time column) of the hall of fame drawn over the title picture
+#[derive(Component)]
+pub struct HofCell(usize, bool);
+
 /// (guard, index) of one hit-point marker
 #[derive(Component)]
 pub struct Heart(bool, u8);
@@ -166,33 +223,36 @@ pub struct Heart(bool, u8);
 /// in colour 15, palette 40) keep colour 0 transparent so the chamber set shows through. Positions VERIFIED (docs 2).
 fn title_pics(dir: &str) -> Option<HashMap<Pic, Vec<u8>>> {
     let dat = Dat::open(format!("{dir}/TITLE.DAT")).ok()?;
-    let compose = |pal_id: u16, layers: &[(u16, usize, usize)], opaque: bool| -> Option<Vec<u8>> {
-        let pal = image::palette(dat.get(pal_id)?)?;
-        let mut px = vec![0u8; 320 * 200];
-        for &(id, x0, y0) in layers {
+    // layers: (palette, image, x, y); each image uses its own palette (the original keeps 40 and 50 in VGA rows 11 / 12)
+    let compose = |layers: &[(u16, u16, usize, usize)], opaque: bool| -> Option<Vec<u8>> {
+        let [r, g, b] = image::palette(dat.get(layers[0].0)?)?.first().copied().unwrap_or([0; 3]);
+        let mut px = vec![if opaque { [r, g, b, 255] } else { [0; 4] }; 320 * 200];
+        for &(pal_id, id, x0, y0) in layers {
+            let pal = image::palette(dat.get(pal_id)?)?;
             let im = image::decode(dat.get(id)?)?;
             for y in 0..im.height.min(200usize.saturating_sub(y0)) {
                 for x in 0..im.width.min(320usize.saturating_sub(x0)) {
                     let p = im.pixels[y * im.width + x];
                     if p != 0 {
-                        px[(y0 + y) * 320 + x0 + x] = if im.bpp == 1 { 15 } else { p }; // colour 0 is transparent
+                        // colour 0 is transparent; 1-bpp text pages draw in colour 15
+                        let [r, g, b] = pal.get(if im.bpp == 1 { 15 } else { p as usize }).copied().unwrap_or([255, 0, 255]);
+                        px[(y0 + y) * 320 + x0 + x] = [r, g, b, 255];
                     }
                 }
             }
         }
-        Some(px.iter().flat_map(|&p| {
-            let [r, g, b] = pal.get(p as usize).copied().unwrap_or([255, 0, 255]);
-            [r, g, b, if p == 0 && !opaque { 0 } else { 255 }]
-        }).collect())
+        Some(px.concat())
     };
     let mut m = HashMap::new();
-    m.insert(Pic::Title(0), compose(50, &[(51, 0, 0)], true)?);
-    m.insert(Pic::Title(1), compose(50, &[(51, 0, 0), (52, 96, 106)], true)?);
-    m.insert(Pic::Title(2), compose(50, &[(51, 0, 0), (53, 96, 122)], true)?);
-    m.insert(Pic::Title(3), compose(50, &[(51, 0, 0), (54, 24, 107), (55, 48, 184)], true)?);
+    m.insert(Pic::Title(0), compose(&[(50, 51, 0, 0)], true)?);
+    m.insert(Pic::Title(1), compose(&[(50, 51, 0, 0), (50, 52, 96, 106)], true)?);
+    m.insert(Pic::Title(2), compose(&[(50, 51, 0, 0), (50, 53, 96, 122)], true)?);
+    m.insert(Pic::Title(3), compose(&[(50, 51, 0, 0), (50, 54, 24, 107), (50, 55, 48, 184)], true)?);
     for (page, y) in [(42, 25), (43, 25), (44, 25), (45, 26)] {
-        m.insert(Pic::Page(page), compose(40, &[(41, 0, 0), (page, 24, y)], false)?);
+        m.insert(Pic::Page(page), compose(&[(40, 41, 0, 0), (40, page, 24, y)], false)?);
     }
+    // show_title 0000:1B83: frame 41 and the logo 54 at (24, 24)
+    m.insert(Pic::Hof, compose(&[(40, 41, 0, 0), (50, 54, 24, 24)], false)?);
     Some(m)
 }
 
@@ -215,7 +275,17 @@ pub fn setup(mut cmds: Commands, mut imgs: ResMut<Assets<Image>>, mut f: ResMut<
     let screen = f.screen.clone();
     cmds.spawn(full_screen(Overlay::Title)).with_children(|p| {
         if pics.is_some() {
-            p.spawn((ImageNode::new(screen), Node { height: Val::Percent(85.0), aspect_ratio: Some(320.0 / 200.0), ..default() }));
+            p.spawn((ImageNode::new(screen), Node { height: Val::Percent(85.0), aspect_ratio: Some(320.0 / 200.0), ..default() })).with_children(|p| {
+                // hall-of-fame rows (ds:0DA6: y 84 + 14 i .. +12, x 72..248; name left, time right), in 320x200 percent
+                for i in 0..crate::hof::MAX {
+                    let top = (84 + 14 * i) as f32 / 2.0;
+                    p.spawn(Node { position_type: PositionType::Absolute, top: Val::Percent(top), left: Val::Percent(72.0 / 3.2), width: Val::Percent(176.0 / 3.2), height: Val::Percent(6.0), justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, ..default() }).with_children(|p| {
+                        for time in [false, true] {
+                            p.spawn((Text::new(""), TextFont::from_font_size(bevy::text::FontSize::VMin(3.4)), TextColor(Color::WHITE), HofCell(i, time)));
+                        }
+                    });
+                }
+            });
         } else {
             p.spawn((Text::new("PRINCE OF PERSIA"), font(64.0), gold.clone())); // TITLE.DAT missing: text title
         }
@@ -265,12 +335,16 @@ pub fn exe_dir() -> std::path::PathBuf {
     std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())).unwrap_or_else(|| ".".into())
 }
 
-fn save_path() -> std::path::PathBuf {
+pub fn save_path() -> std::path::PathBuf {
     exe_dir().join("PRINCE.SAV")
 }
 
-fn write_save(text: &str) -> std::io::Result<()> {
-    write_atomic(&save_path(), text)
+/// Ctrl+G (key 7, 0000:05EA) and the pause menu: messages from ds:0AA4 / ds:0AB0. The caller checks SAVE_LEVELS.
+fn save_game(g: &Game) -> &'static str {
+    match write_atomic(&save_path(), &g.world.progress.save_text(g.world.kid.hp_max)) {
+        Ok(()) => "GAME SAVED",
+        Err(_) => "UNABLE TO SAVE GAME",
+    }
 }
 
 /// Write a file atomically: a temporary file next to it, flushed, then renamed over the old one (a crash or a full disk
@@ -337,7 +411,13 @@ pub fn title(
     mut audio: ResMut<AudioState>,
     playing: Query<(Entity, &Sfx)>,
     mut imgs: ResMut<Assets<Image>>,
+    (ui, hof): (Res<MenuUi>, Res<Hof>),
 ) {
+    f.has_hof = !hof.entries.is_empty();
+    if ui.menu.is_some() || ui.consumed {
+        draw_pic(&mut f, &mut imgs);
+        return; // the title menu is open (or just took this key): the attract loop holds
+    }
     let key = any_key(&k) || pad_any(&pads);
     if !f.ending {
         let loaded = (ctrl(&k) && k.just_pressed(KeyCode::KeyL)).then(load_game).flatten();
@@ -346,9 +426,16 @@ pub fn title(
         } else if key {
             return begin(&mut g, &a, &mut cut, &mut next, Progress::new_game(1), true, true); // new game (0000:4893)
         }
-    } else if key && f.phase + 1 < ENDING.len() {
-        (f.phase, f.t, f.entered) = (ENDING.len() - 1, 0.0, true);
-        crate::audio::stop_all(&mut cmds, &mut audio, &playing);
+    } else if key && !f.typing && f.phase + 1 < ENDING.len() {
+        // a key skips to the name entry (when the time qualifies), else to the final fade
+        let to = if f.phase < ENDING_HOF && f.hof_new.is_some() { ENDING_HOF } else { ENDING.len() - 1 };
+        if to > f.phase {
+            f.prev = Some(f.cur().0);
+            (f.phase, f.t, f.entered) = (to, 0.0, true);
+        }
+        if to == ENDING.len() - 1 {
+            crate::audio::stop_all(&mut cmds, &mut audio, &playing);
+        }
     }
     if !f.entered {
         f.entered = true;
@@ -369,6 +456,7 @@ pub fn title(
     let done = match f.cur().2 {
         Len::Units(n) => f.t >= n as f32,
         Len::Quiet => audio.busy == 0,
+        Len::Name => !f.typing,
     };
     if done && f.advance() {
         if f.ending {
@@ -401,25 +489,77 @@ fn draw_pic(f: &mut Flow, imgs: &mut Assets<Image>) -> Option<()> {
     Some(())
 }
 
-/// Esc / P toggle the pause (stepping stops because FixedUpdate only runs in Playing).
-pub fn pause(k: Res<ButtonInput<KeyCode>>, pads: Query<&Gamepad>, state: Res<State<Screen>>, mut next: ResMut<NextState<Screen>>) {
-    if k.just_pressed(KeyCode::Escape) || k.just_pressed(KeyCode::KeyP) || pads.iter().any(|p| p.just_pressed(GamepadButton::Start)) {
-        match state.get() {
-            Screen::Playing => next.set(Screen::Paused),
-            Screen::Paused => next.set(Screen::Playing),
-            _ => {}
+/// The menus' game actions (menu_ui.rs reads the keys; pausing and resuming happen there).
+#[allow(clippy::too_many_arguments)]
+pub fn menu_action(mut ui: ResMut<MenuUi>, mut g: ResMut<Game>, a: Res<KidAssets>, mut cut: ResMut<Cut>, mut next: ResMut<NextState<Screen>>, mut exit: MessageWriter<AppExit>) {
+    let Some(act) = ui.action.take() else { return };
+    match act {
+        Action::Start => {
+            ui.menu = None;
+            begin(&mut g, &a, &mut cut, &mut next, Progress::new_game(1), true, true);
         }
+        Action::Load => match load_game() {
+            Some(p) => {
+                ui.menu = None;
+                begin(&mut g, &a, &mut cut, &mut next, p, true, true);
+            }
+            None => ui.note = "NO SAVED GAME".into(),
+        },
+        Action::Save => ui.note = save_game(&g).into(),
+        // both go through the world's exit, handled by `playing` before the next tick (fixed_step waits on a pending exit)
+        Action::Restart | Action::QuitTitle => {
+            if act == Action::Restart {
+                g.world.restart_input(false, true);
+            } else {
+                g.world.exit.get_or_insert(Exit::Title);
+            }
+            ui.menu = None;
+            next.set(Screen::Playing);
+        }
+        Action::Quit => {
+            exit.write(AppExit::Success);
+        }
+        Action::Close | Action::Changed(_) => {}
+    }
+}
+
+/// Ending: type the hall-of-fame name (up to 24 characters, Backspace deletes), Enter / Esc or a controller's A / Start
+/// confirms (an empty name becomes "PRINCE"); then PRINCE.HOF is written (0000:347B).
+pub fn name_entry(mut typed: MessageReader<bevy::input::keyboard::KeyboardInput>, k: Res<ButtonInput<KeyCode>>, pads: Query<&Gamepad>, mut f: ResMut<Flow>, mut hof: ResMut<Hof>) {
+    let typed: Vec<_> = typed.read().filter(|e| e.state.is_pressed()).cloned().collect(); // always drain: no stale keys later
+    // input starts once the picture is in (the key that skipped to it must not type)
+    let (true, Some(slot), Pic::Hof) = (f.typing, f.hof_new, f.cur().0) else { return };
+    if f.t < WIPE as f32 {
+        return;
+    }
+    let Some(e) = hof.entries.get_mut(slot) else {
+        f.typing = false;
+        return;
+    };
+    for ev in &typed {
+        if ev.key_code == KeyCode::Backspace {
+            e.name.pop();
+        } else if let Some(t) = &ev.text {
+            e.name = crate::hof::clip(&format!("{}{t}", e.name));
+        }
+    }
+    let done = k.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Escape]) || pads.iter().any(|p| p.just_pressed(GamepadButton::South) || p.just_pressed(GamepadButton::Start));
+    if done {
+        if e.name.trim().is_empty() {
+            e.name = crate::hof::DEFAULT_NAME.into();
+        }
+        hof.save();
+        f.typing = false;
     }
 }
 
 /// Playing: save (Ctrl+G), the demo's keys, and the world's exit (restart, next level, title, the end).
 #[allow(clippy::too_many_arguments)]
-pub fn playing(k: Res<ButtonInput<KeyCode>>, pads: Query<&Gamepad>, mut g: ResMut<Game>, a: Res<KidAssets>, mut f: ResMut<Flow>, mut cut: ResMut<Cut>, mut next: ResMut<NextState<Screen>>, audio: Res<AudioState>) {
+pub fn playing(k: Res<ButtonInput<KeyCode>>, pads: Query<&Gamepad>, mut g: ResMut<Game>, a: Res<KidAssets>, mut f: ResMut<Flow>, mut cut: ResMut<Cut>, mut next: ResMut<NextState<Screen>>, audio: Res<AudioState>, mut hof: ResMut<Hof>) {
     if ctrl(&k) && k.just_pressed(KeyCode::KeyG) && g.world.exit.is_none() {
-        // Ctrl+G (key 7, 0000:05EA): only on levels 3..13; messages from ds:0AA4 / ds:0AB0 (display time UNVERIFIED)
+        // Ctrl+G: only on levels 3..13 (display time of the message UNVERIFIED)
         if pop_core::sim::SAVE_LEVELS.contains(&g.level) {
-            let ok = write_save(&g.world.progress.save_text(g.world.kid.hp_max)).is_ok();
-            g.banner = (24, if ok { "GAME SAVED" } else { "UNABLE TO SAVE GAME" }.into());
+            g.banner = (24, save_game(&g).into());
         }
     }
     if g.world.demo {
@@ -438,7 +578,7 @@ pub fn playing(k: Res<ButtonInput<KeyCode>>, pads: Query<&Gamepad>, mut g: ResMu
         return;
     }
     let expired = g.world.progress.rem_min == 0 && g.level != 0;
-    let rem_min = g.world.progress.rem_min;
+    let (rem_min, rem_tick) = (g.world.progress.rem_min, g.world.progress.rem_tick);
     let p = g.world.progress_after(e);
     match e {
         // expired (0000:31F4): the time-out scene 2A1B, then the title
@@ -456,6 +596,9 @@ pub fn playing(k: Res<ButtonInput<KeyCode>>, pads: Query<&Gamepad>, mut g: ResMu
         }
         // end_sequence (0000:2F2F): the ending scene 2960, then the ending pages
         Exit::End => {
+            // the hall of fame gets the time left if it qualifies; the name is typed on the ending pages
+            f.hof_new = hof.insert("", rem_min, rem_tick);
+            f.typing = f.hof_new.is_some();
             kid::start(&mut g, &a, p);
             if cut.start(a.data.clone(), Scene::Ending, rem_min, Then::EndPages) {
                 next.set(Screen::Cutscene);
@@ -492,6 +635,44 @@ pub fn cutscene_end(mut g: ResMut<Game>, a: Res<KidAssets>, mut f: ResMut<Flow>,
     }
 }
 
+/// Screenshot hook POP_MENU: `main` / `settings` / `controls` / `hof` open that menu page (the title menu, or the pause
+/// menu when POP_LEVEL skips the title); `name` jumps to the ending's name entry with a 42:25 finish; `attract` to the
+/// attract loop's hall-of-fame picture (needs entries in PRINCE.HOF).
+pub fn debug_menu(mut ui: ResMut<MenuUi>, mut f: ResMut<Flow>, mut hof: ResMut<Hof>, state: Res<State<Screen>>, mut next: ResMut<NextState<Screen>>) {
+    use crate::menu::{Ctx, Menu, Page};
+    let Ok(v) = std::env::var("POP_MENU") else { return };
+    match v.as_str() {
+        "name" => {
+            f.restart(true);
+            f.hof_new = hof.insert("", 43, 300);
+            f.typing = f.hof_new.is_some();
+            (f.phase, f.entered, f.prev) = (ENDING_HOF, true, Some(Pic::Title(0)));
+        }
+        "attract" => {
+            f.has_hof = !hof.entries.is_empty();
+            let i = ATTRACT.iter().position(|p| p.0 == Pic::Hof).unwrap_or(0);
+            (f.phase, f.entered, f.prev) = (i, true, Some(Pic::Page(45)));
+        }
+        page => {
+            let pause = *state.get() == Screen::Playing;
+            let mut m = Menu::new(if pause { Ctx::Pause } else { Ctx::Title }, pause, false);
+            m.page = match page {
+                "settings" => Page::Settings,
+                "controls" => Page::Controls,
+                "hof" => Page::Hof,
+                _ => Page::Main,
+            };
+            ui.menu = Some(m);
+            if pause {
+                next.set(Screen::Paused);
+            } else {
+                // over the title with the logo, not the first fade-in's black
+                (f.phase, f.entered) = (ATTRACT.iter().position(|p| p.0 == Pic::Title(3)).unwrap_or(0), true);
+            }
+        }
+    }
+}
+
 /// Shows the overlay of the current screen and fills the HUD.
 pub fn overlay(
     state: Res<State<Screen>>,
@@ -500,10 +681,29 @@ pub fn overlay(
     mut q: Query<(&Overlay, &mut Visibility, &mut BackgroundColor), Without<Heart>>,
     mut labels: Query<(&Label, &mut Text)>,
     mut hearts: Query<(&Heart, &mut Node, &mut BackgroundColor, &mut BorderColor)>,
+    (hof, time): (Res<Hof>, Res<Time>),
+    mut cells: Query<(&HofCell, &mut Text, &mut TextColor), Without<Label>>,
 ) {
     let s = *state.get();
-    // title pictures are opaque; the story pages are drawn over the chamber set, dimmed
-    let dim = if matches!(f.cur().0, Pic::Page(_)) { Color::srgba(0.0, 0.0, 0.0, 0.45) } else { Color::BLACK };
+    // the hall of fame over its picture once the wipe is done; the entry being named in gold with a blinking cursor
+    let show_hof = f.cur().0 == Pic::Hof && (f.cur().1 != Fx::Wipe || f.t >= WIPE as f32);
+    let cursor = if time.elapsed_secs().fract() < 0.5 { "_" } else { " " };
+    for (HofCell(i, is_time), mut t, mut c) in &mut cells {
+        let e = hof.entries.get(*i).filter(|_| show_hof);
+        let typing = f.typing && f.hof_new == Some(*i);
+        let text = match e {
+            Some(e) if *is_time => e.time_text(),
+            Some(e) if typing => format!("{}{cursor}", e.name),
+            Some(e) => e.name.clone(),
+            None => String::new(),
+        };
+        if t.0 != text {
+            t.0 = text;
+        }
+        c.set_if_neq(TextColor(if f.hof_new == Some(*i) { Color::srgb(1.0, 0.85, 0.5) } else { Color::WHITE }));
+    }
+    // title pictures are opaque; the story pages and the hall of fame are drawn over the chamber set, dimmed
+    let dim = if matches!(f.cur().0, Pic::Page(_) | Pic::Hof) { Color::srgba(0.0, 0.0, 0.0, 0.45) } else { Color::BLACK };
     for (o, mut v, mut bg) in &mut q {
         if *o == Overlay::Title {
             bg.set_if_neq(BackgroundColor(dim));
@@ -517,9 +717,10 @@ pub fn overlay(
     let w = &g.world;
     for (l, mut t) in &mut labels {
         let text = match l {
-            Label::Hint if f.cur().0 == Pic::Title(3) && !f.ending => "Press any key  -  Ctrl+L load game".into(),
+            Label::Hint if f.cur().0 == Pic::Title(3) && !f.ending => "Press any key  -  Esc menu  -  Ctrl+L load game".into(),
+            Label::Hint if f.typing && f.cur().0 == Pic::Hof => "Type your name  -  Enter".into(),
             Label::Hint => String::new(),
-            Label::Centre if s == Screen::Paused => "PAUSED  (Esc / P)".into(),
+            Label::Centre if s == Screen::Paused => "PAUSED  (P: resume)".into(),
             Label::Centre if w.continue_text() => "Press Button to Continue".into(),
             Label::Centre if g.banner.0 > 0 => g.banner.1.clone(),
             Label::Centre if w.demo => "DEMO  -  press any key".into(),
@@ -574,7 +775,30 @@ mod tests {
         assert_eq!(shown, [(Pic::Title(0), 0), (Pic::Title(1), 130), (Pic::Title(0), 335), (Pic::Title(2), 400), (Pic::Title(0), 670), (Pic::Title(3), 905)]);
         assert_eq!(ATTRACT.iter().filter(|p| p.0 == Pic::Intro).count(), 1);
         assert_eq!((clamp_dt(5.0), clamp_dt(0.016), clamp_dt(-1.0)), (MAX_DT, 0.016, 0.0));
-        assert_eq!(ATTRACT.iter().filter(|p| p.2 == Len::Quiet).count(), 4, "logo, before the intro, page 43, before the demo");
+        assert_eq!(ATTRACT.iter().filter(|p| p.2 == Len::Quiet).count(), 5, "logo, before the intro, page 43, before the demo (hall of fame or credits)");
         assert_eq!(ENDING[0].3, Some(56));
+        assert_eq!(ENDING[ENDING_HOF].2, Len::Name);
+    }
+
+    /// The hall of fame shows in the attract loop only with entries (0000:1B7C) and in the ending only with a new entry.
+    #[test]
+    fn hall_of_fame_phases_are_skipped_without_entries() {
+        use super::*;
+        let run = |ending: bool, has_hof: bool, hof_new: Option<usize>| {
+            let mut f = Flow { has_hof, hof_new, ..default() };
+            f.restart(ending);
+            f.hof_new = hof_new;
+            let mut pics = vec![f.cur().0];
+            while !f.advance() {
+                pics.push(f.cur().0);
+            }
+            pics
+        };
+        let count = |v: &[Pic], p: Pic| v.iter().filter(|&&x| x == p).count();
+        let (with, without) = (run(false, true, None), run(false, false, None));
+        assert_eq!((count(&with, Pic::Hof), count(&without, Pic::Hof)), (3, 0));
+        assert_eq!((count(&with, Pic::Page(45)), count(&without, Pic::Page(45))), (1, 3));
+        assert_eq!(count(&run(true, true, None), Pic::Hof), 0);
+        assert_eq!(count(&run(true, false, Some(2)), Pic::Hof), 2);
     }
 }

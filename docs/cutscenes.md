@@ -387,7 +387,7 @@ while check_sound_playing(): (busy wait, no idle)
 After the animation (end_sequence `2F2F`, matches SDLPoP): clear screen and sounds, load_opt_sounds(56, 56), play **56**
 (ending music, 120 s speaker), draw 41 + **44** ("The tyrant Jaffar lies dead...") at (24,25), fade_in_2, pop_wait(900);
 timer 240, draw 51, transition_ltr, wait; hall of fame (insert the time if it qualifies: rem_min/rem_tick vs `ds:59F1`, name
-entry); wait until the music ends or a key; fade_out_2(row 12); `[42F8]` = 0; start_game -> title. (edge_cases.md 4.1 called
+entry; section 4.10); wait until the music ends or a key; fade_out_2(row 12); `[42F8]` = 0; start_game -> title. (edge_cases.md 4.1 called
 `0C89` "end screen"; it is load_opt_sounds, INFERRED from the title's `0C89(50, 55)`.)
 
 ### 4.8 Intro scene: `2B38` pv_scene (in the title, which_imgs = 0)
@@ -423,6 +423,26 @@ Key positions (simulated play_seq, the sound waits taken from speaker lengths): 
 and to x 136 (second walk, net 10 units per 6 frames: dx 2, 6, 1, -1, 1, 1); the princess turns at x 120 and ends at x 128 facing
 right, then steps back to x 111 facing left (seq 99: flip, dx 11, 1, 1, 3, 1); Jaffar's exit (seq 100) flips him around
 (dx 16 + 3) and he walks right off screen from x ~157. Hourglass at px 152..170 stands between them.
+
+### 4.10 Hall of fame (VERIFIED, read 2026-11-18)
+
+The original DOS v1.1 has a hall of fame. Routines in segment 0000, data in ds:
+
+| addr | what |
+|---|---|
+| `34D0` load_hof | called once at startup (`0000:033D`): `[409C]` hof_count = 0, open `PRINCE.HOF` (string ds:0E3A) read-only, read 2 bytes into `[409C]` and 0xAE = 174 bytes (6 x 29) into ds:59D8; no file = empty list |
+| `347B` save_hof | open/create `PRINCE.HOF` (0x8101, mode 0x80), write the same 2 + 174 bytes; called only after a name is entered |
+| `33F8` show_hof | for i < hof_count: sprintf ds:0E31 `"%d:%02d"` with rem_min - 1 and rem_tick / 12, draw the name left-aligned and the time right-aligned in rect ds:0DA6 + 8 i (rows top 84 + 14 i, bottom +12, x 72..248) |
+| ds:59D8 + 29 i | entry i: name (25 bytes, NUL-terminated), word rem_min at +25 (ds:59F1), word rem_tick at +27 (ds:59F3) |
+| `181D` (`1B7C`) | show_title: after the credits, if hof_count != 0: frame 41 + logo 54 at (24, 24), show_hof, transition_ltr, pop_wait(240) |
+| `2F2F` (`3008..31C2`) | end_sequence after page 44 and the title: i = first slot whose (rem_min, rem_tick) is lower than the current [50BA] / [50C0] (an equal time stays above); i >= 6: no entry. Else shift the lower entries down (memcpy 29 bytes), empty name, the time, hof_count = min(count + 1, 6); fade out, draw frame 41 + logo, show_hof, fade in; name input `0C83:0544` into the slot with at most 0x18 = 24 characters (repeated until it returns > 0); save_hof; pop_wait(120); title picture, transition_ltr |
+
+So the list ranks time remaining (not deaths; none are counted), holds 6 names, and a finish only enters it after the
+ending. The remake does the same (pop-app `hof.rs`, `flow.rs`): `PRINCE.HOF` next to the exe, but as JSON
+(`{"entries": [{"name", "rem_min", "rem_tick"}]}`), written atomically; a damaged file loads what it can (a non-JSON file
+is kept as PRINCE.HOF.bad). The original's binary file is not read. Name entry: keyboard text (24 characters,
+Backspace), Enter / Esc or a controller's A / Start confirms; an empty name becomes "PRINCE" (controller players). The
+title menu also lists it (Hall of fame). Font and colours of the original text are not copied (the app's UI font).
 
 ### 4.9 Summary
 
@@ -557,7 +577,7 @@ Unambiguous now (exact data): items 1-3, 5 (except the timing constants), the sc
    timing; F3 only).
 3. The chamber set from tiles + hourglass, bed, front pillar, torches, stars; hook `Screen::Cutscene` into flow.rs for levels
    2, 4, 6, 8, 9, 12 (key skip) and the time out (no skip).
-4. The ending: cutscene `2960` + page 44 + music 56 (hall of fame later or never: the remake has no HOF file).
+4. The ending: cutscene `2960` + page 44 + music 56; hall of fame done (4.10).
 5. Title/attract state machine (section 2) with pv_scene, replacing the 15 s idle timer; story pages 42/43/45. (Done:
    flow.rs `ATTRACT`, no idle timer left.)
 6. Tune FADE_FRAMES / transition speed by eye; decide MIDI vs speaker lengths for the waits.

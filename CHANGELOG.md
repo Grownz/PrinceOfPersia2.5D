@@ -6,6 +6,17 @@ The original game data is never part of the repository or a release; see `docs/P
 ## Unreleased
 
 ### Added
+- Hall of fame as in the original (PRINCE.EXE read: load_hof 34D0, save_hof 347B, show_hof 33F8, end_sequence 2F2F;
+  docs/cutscenes.md 4.10): 6 entries ranked by time left, shown as M:SS; a finish that qualifies asks for a name (up to
+  24 characters; controller: A / Start keeps "PRINCE") on the ending pages; the attract loop shows the list after the
+  credits when it has entries. Stored as JSON `PRINCE.HOF` next to the exe (atomic write, damaged files tolerated).
+- Menus (menu.rs logic, menu_ui.rs drawing): Esc / Start on the title opens a menu (start, load, settings, controls,
+  hall of fame, quit; the attract loop holds while it is open); pausing opens the pause menu (resume, restart level,
+  save on levels 3-13, settings, controls, quit to title, quit game). The settings page cycles the settings.json values
+  with left / right / Enter and saves at once; rendering, characters, room change, window, volume and mute apply live,
+  the rest after a restart (marked). Keys: arrows / numpad, Enter, Esc / Backspace; controller d-pad, A, B / Start.
+  P still pauses and resumes directly. Keys pressed in a menu no longer reach the kid after resuming.
+- Screenshot hook `POP_MENU=main|settings|controls|hof|name|attract`.
 - Torch flames, potion bubbles and the glint of a sword on the floor are simulated as in the original (docs/tiles.md
   8.2-8.4): on entering a room every torch, potion and sword gets a random start frame and animates once per tick while
   its room is drawn, drawing from the shared random generator in the original order. `Level::anim_frame` exposes the
