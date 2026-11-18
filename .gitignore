@@ -1,3 +1,6 @@
 target/
 Original_data/
 dist/
+
+.claude/worktrees/
+.~lock.*
