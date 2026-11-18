@@ -17,3 +17,6 @@ pop.log
 tools/rt_probe/
 *.sf2
 *.sf3
+
+# the maintainer's local texture inventory sheet embeds original game graphics: never committed
+docs/texture_mapping.xlsx
