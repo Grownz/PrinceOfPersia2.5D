@@ -3,6 +3,8 @@
 A Rust remake of the DOS Prince of Persia (1990) for Windows x64: a headless, tick-exact simulation (`crates/pop-core`)
 and a Bevy 0.20 app (`crates/pop-app`) with procedural 2.5D rooms and the original sprites read from your own copy.
 
+![Screenshot: the prince fights a guard in the enhanced render mode with voxel characters](docs/images/screenshot.png)
+
 **You need your own copy of the game.** The original data is copyrighted and is not in this repository or in any
 package. See [docs/PROVENANCE.md](docs/PROVENANCE.md). The VGA version this remake is based on is available at
 the Internet Archive: <https://archive.org/details/PERSIA_VGA> (check the rights situation for your country).
