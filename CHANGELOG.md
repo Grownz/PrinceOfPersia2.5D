@@ -3,7 +3,7 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
-## Unreleased
+## [0.2.1] - 2026-11-18
 
 ### Fixed
 - Background light-tight: floor slabs, wall blocks, plates and loose floors now reach into the back wall (they ended
@@ -96,5 +96,6 @@ reads the user's own game files at run time.
 - Analyses: mechanics, collisions, tiles, combat, edge cases, audio, cutscenes, controls, texture inventory,
   render roadmap (ray tracing, voxel characters), enhanced-mode performance.
 
+[0.2.1]: https://github.com/Grownz/PrinceOfPersia2.5D/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Grownz/PrinceOfPersia2.5D/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Grownz/PrinceOfPersia2.5D/releases/tag/v0.1.0
