@@ -146,11 +146,6 @@ pub fn debris_sprite(deb: [&image::Image; 3], floor: [&image::Image; 3]) -> (usi
     (w, h, px)
 }
 
-/// Torch flame frame shown at logic tick `tick` for torch phase `phase`: the original steps every torch one frame per tick
-/// (with rare random jumps, docs/tiles.md 8.4), each from its own random start; here the start is a fixed per-tile phase.
-pub fn flame_frame(tick: u64, phase: u8) -> usize {
-    ((tick + phase as u64) % 9) as usize
-}
 
 /// Build the voxel objects of one set from its DAT (`pal` = palette 200 colours). Returns them and the face count.
 fn load_objects(dat: &Dat, pal: &[[u8; 3]], meshes: &mut Assets<Mesh>) -> (Objects, usize) {
@@ -527,9 +522,6 @@ mod tests {
     fn object_tables() {
         // exit panel: 7 slices on the bottom piece when closed, none when open (the bottom piece stays, behind the lintel)
         assert_eq!([0, 5, 6, 35, 40, 41, 43, 255].map(panel_slices), [7, 6, 6, 1, 1, 0, 0, 0]);
-        // torch flames: one frame per tick, all 9 frames, phases shift the cycle
-        assert_eq!((0..9).map(|t| flame_frame(t, 0)).collect::<Vec<_>>(), (0..9).collect::<Vec<_>>());
-        assert_eq!((flame_frame(9, 0), flame_frame(0, 4), flame_frame(7, 4)), (0, 4, 2));
     }
 
     #[test]

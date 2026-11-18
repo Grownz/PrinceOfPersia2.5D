@@ -369,7 +369,11 @@ Level file bytes at 2112 are copied to `[5902]` start room, `[5903]` start tile 
 - set_start_pos: y = y_land[row + 1]; alive = -1; charid 0; zeroes knock, feather, fall_x, fall_y, sword, offguard and others; then
   **play_seq once** (the first frame is shown at level start). Level 7 in room 17: goto_other_room(3) (the kid starts above and drops in). Then savekid.
 - HP: `[4646]` (hitp_beg_lev) on normal levels, 4 on level 0.
-- The 4 bytes after start_dir (2115..2118) are not read here; they were not traced.
+- The 4 bytes after start_dir (2115..2118) are never read anywhere (xref, docs/tiles.md 1.5).
+- Start tiles (data, VERIFIED by test `start_position_from_the_level_tail`): levels 2..6, 8..12, 14 and 15 start on tile 17, the
+  right half of the entry door (the left half 16 is the door that start_level_door closes); level 0 on a pillar, level 1 and 7
+  over an empty tile (1 falls; 7 starts in room 17 and set_start_pos applies goto_other_room(3), see above), level 13 on floor (seq 84 run).
+  After seq 5 the kid stands at 72 + 14*col +- 7, facing start_dir, on every door level (same test).
 
 ## 9. Collisions and walls (VERIFIED)
 

@@ -298,7 +298,13 @@ fn tile_key(level: &Level, room: usize, idx: usize, palace: bool) -> TileKey {
     let t = level.tile_at(room, idx);
     let lift = match t.kind { Tile::DropButton | Tile::RaiseButton => plate_lift(level.link_timer(t.modifier)), _ => 0.0 };
     let (lk, lm) = left_tile(level, room, idx);
-    (t.kind, if t.kind == Tile::LooseFloor { 0 } else { t.modifier }, lift.to_bits(), crate::tiles::back_decor(lk, lm, t.kind, palace))
+    // loose floors, flames, bubbles and the sword glint animate themselves from the modifier: no rebuild for those bits
+    let m = match t.kind {
+        Tile::LooseFloor | Tile::Torch | Tile::TorchDebris | Tile::Sword => 0,
+        Tile::Potion => t.modifier & 0xE0,
+        _ => t.modifier,
+    };
+    (t.kind, m, lift.to_bits(), crate::tiles::back_decor(lk, lm, t.kind, palace))
 }
 
 /// Tile `idx` of the builder's room.
@@ -402,13 +408,13 @@ pub struct Falling {
     up: f32,
 }
 
-/// A potion's bubbles: the frame shown is (tick + phase) mod 7.
+/// A potion's bubbles (room, tile index): the frame shown is the sim's `Level::anim_frame`.
 #[derive(Component)]
-pub struct Bubbles(u8);
+pub struct Bubbles(u8, u8);
 
-/// A voxel torch flame: the frame shown is `items::flame_frame(tick, phase)`.
+/// A voxel torch flame (room, tile index): the frame shown is the sim's `Level::anim_frame`.
 #[derive(Component)]
-pub struct TorchFlame(u8);
+pub struct TorchFlame(u8, u8);
 
 /// Loose floor wobble amplitudes: vertical bounce (world units, about 1.6 screen px) and roll (radians).
 const WOBBLE_DY: f32 = 0.05;
@@ -458,9 +464,12 @@ pub fn animate(
     for (f, mut t) in &mut falling {
         t.translation = f.base + Vec3::Y * f.up * (1.0 - a);
     }
+    let anim = |room: u8, idx: u8| g.world.level.anim_frame(room as usize, idx as usize);
     if let Some(frames) = p.items.as_ref().map(|i| &i.bubbles).filter(|f| !f.is_empty()) {
         for (b, mut m) in &mut bubbles {
-            let want = &frames[(g.world.tick as usize + b.0 as usize) % frames.len()].mesh;
+            // frames 1..7; 0 = a room never entered (not animated yet): shown as frame 1
+            let f = anim(b.0, b.1).unwrap_or(1).clamp(1, 7) as usize;
+            let want = &frames[f - 1].mesh;
             if m.0 != *want {
                 m.0 = want.clone();
             }
@@ -468,7 +477,7 @@ pub fn animate(
     }
     if let Some(frames) = p.items.as_ref().map(|i| &i.flames).filter(|f| !f.is_empty()) {
         for (f, mut m) in &mut flames {
-            let want = &frames[crate::items::flame_frame(g.world.tick, f.0)].mesh;
+            let want = &frames[anim(f.0, f.1).unwrap_or(0) as usize % frames.len()].mesh;
             if m.0 != *want {
                 m.0 = want.clone();
             }
@@ -644,7 +653,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                     if let (Some(c), Some(f)) = (colour, i.bubbles.first()) {
                         let at = lo + Vec3::new(px_w(crate::items::BUBBLE_DX), px_h(bt.h as f32), 0.0);
                         let e = b.item(f, &i.glow[c], at);
-                        b.cmds.entity(e).insert((Bubbles(idx), bevy::light::NotShadowCaster));
+                        b.cmds.entity(e).insert((Bubbles(b.room as u8, idx), bevy::light::NotShadowCaster));
                     }
                 }
                 None => b.put(if colour == Some(2) { &p.blue } else { &p.red }, Vec3::new(x + 0.4, y, -0.1), Vec3::new(x + 0.6, y + if big { 0.4 } else { 0.3 }, 0.1)),
@@ -739,8 +748,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                 let e = b.object(&h, &items.mat, Vec3::new(x, top.y - px_h(h.h as f32 - 2.0), TORCH_Z), 1.0);
                 b.cmds.entity(e).insert(bevy::light::NotShadowCaster);
                 let e = b.object(&items.flames[0], &items.flame_mat, Vec3::new(x + px_w(axis - FLAME_AXIS), top.y - px_h(FLAME_SINK), TORCH_Z), 1.0);
-                let phase = (b.room as u8).wrapping_mul(7).wrapping_add(idx.wrapping_mul(5)) % 9;
-                b.cmds.entity(e).insert((TorchFlame(phase), bevy::light::NotShadowCaster));
+                b.cmds.entity(e).insert((TorchFlame(b.room as u8, idx), bevy::light::NotShadowCaster));
                 let e = b.cmds.spawn((torch_light(), Transform::from_translation(b.origin + top + Vec3::new(0.0, 0.3, 0.6)))).id();
                 b.tag(e);
                 return;
@@ -974,6 +982,16 @@ mod tests {
         l.set_tile(1, 4, Tile::Empty);
         assert_ne!(tile_key(&l, 1, 4, false), still, "a fallen loose floor is rebuilt");
         assert_eq!(tile_key(&l, 1, 5, false), tile_key(&l, 1, 5, false));
+        // flames, bubbles and the sword glint animate themselves; a potion's kind is part of the look
+        for (t, a, b) in [(Tile::Torch, 0, 8), (Tile::Sword, 1, 40), (Tile::Potion, 0x21, 0x27)] {
+            l.set_tile(1, 8, t);
+            l.set_modifier(1, 8, a);
+            let k = tile_key(&l, 1, 8, false);
+            l.set_modifier(1, 8, b);
+            assert_eq!(tile_key(&l, 1, 8, false), k, "{t:?}");
+        }
+        l.set_modifier(1, 8, 0x41);
+        assert_ne!(tile_key(&l, 1, 8, false), tile_key(&{ let mut c = l.clone(); c.set_modifier(1, 8, 0x21); c }, 1, 8, false));
         // the background piece of tile 7 comes from tile 6: rebuilt when that changes
         l.set_tile(1, 6, Tile::Empty);
         let plain = tile_key(&l, 1, 7, false);

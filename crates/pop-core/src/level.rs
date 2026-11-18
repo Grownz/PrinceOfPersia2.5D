@@ -1,11 +1,15 @@
-//! Level resource (LEVELS.DAT; 2305 bytes, ids 2000 + level number).
-//! Layout (verified against the shipped data, see tests):
-//!   0    fg[720]        tile type (low 5 bits) + flag bits (high 3)
+//! Level resource (LEVELS.DAT; 2305 bytes, ids 2000 + level number). load_level (0000:0E97) reads 0x901 = 2305 bytes raw
+//! to ds:50C2; who reads which byte (xrefs over PRINCE.EXE v1.1, docs/tiles.md 1.5):
+//!   0    fg[720]        tile type (low 5 bits) + flag bits (high 3; only 0x20 is ever read: a loose floor that never falls)
 //!   720  bg[720]        tile modifier (door-link index for buttons, gate state, potion kind, ...)
 //!   1440 doorlinks1[256], 1696 doorlinks2[256]
 //!   1952 room links [24][4]
-//!   2112 start room, start tile, start dir (0 = right, 255 = left), 4 more bytes (unparsed)
-//!   2119 guard tile[24] (30 = none), 2143 guard dir[24]; remaining guard fields (skill, colour, ...) unparsed
+//!   2048 used_rooms     only read by alter_mods_allrm (0000:B622): rooms 1..=used_rooms get load_alter_mod
+//!   2049 room x[24], 2073 room y[24], 2097 15 fill bytes: editor data, never read by the game
+//!   2112 start room, start tile, start dir (0 = right, 255 = left); 2115..2118 never read
+//!   2119 guard tile[24] (30 = none), 2143 dir, 2167 x, 2191 seq lo, 2215 skill, 2239 seq hi, 2263 colour (docs/combat.md)
+//!   2287 18 fill bytes, never read. Resource 2015 is 2304 bytes (its unread last fill byte is missing).
+const USED_ROOMS: usize = 2048;
 pub const ROOMS: usize = 24;
 pub const COLS: usize = 10;
 pub const ROWS: usize = 3;
@@ -88,6 +92,28 @@ impl Level {
         if b.len() < MIN_LEN {
             return None;
         }
+        // alter_mods_allrm (0000:B5FF): load_alter_mod (0000:B656, docs/tiles.md 1.2) for rooms 1..=used_rooms, raw -> runtime
+        // modifiers. Room r's tiles are at 30*(r-1) and its modifiers 720 further on; get_room_address (0000:BAD4) has no upper
+        // bound, so used_rooms 25 (most shipped levels) also alters a pseudo room 25 whose "tiles" are room 1's (already
+        // altered) modifiers and whose "modifiers" are doorlinks1[0..30] (docs/tiles.md 1.5). Rooms above used_rooms keep raw bytes.
+        let mut raw = b.to_vec();
+        for room in 1..=b[USED_ROOMS] as usize {
+            for i in 0..TILES_PER_ROOM {
+                let (t, m) = (30 * (room - 1) + i, N + 30 * (room - 1) + i);
+                if m >= DOORLINKS + 256 {
+                    break; // shortcut: used_rooms > 25 would alter memory past doorlinks1 (never in the data)
+                }
+                raw[m] = match Tile::from_u8(raw[t]) {
+                    Tile::Gate => if raw[m] == 1 { 188 } else { 0 }, // 188 = open, 0 = closed
+                    Tile::LooseFloor => 0,
+                    // level 15's copy-protection potion (kind 6, 0000:B6B7) is not modelled
+                    Tile::Potion => raw[m] << 5,
+                    // walls: (m << 7) | neighbour bits, drawing only; not modelled (no pseudo room-25 wall hits a used doorlink)
+                    _ => raw[m],
+                };
+            }
+        }
+        let b = &raw[..];
         let mut l = Level {
             fg: b[..N].try_into().ok()?,
             bg: b[N..2 * N].try_into().ok()?,
@@ -99,15 +125,6 @@ impl Level {
             start_dir: b[START + 2],
             guards: Vec::new(),
         };
-        // load_alter_mod (0000:B656, docs/tiles.md section 1): raw modifiers -> runtime values
-        for i in 0..N {
-            l.bg[i] = match Tile::from_u8(l.fg[i]) {
-                Tile::Gate => if l.bg[i] == 1 { 188 } else { 0 }, // 188 = open, 0 = closed
-                Tile::LooseFloor => 0,
-                Tile::Potion => l.bg[i] << 5,
-                _ => l.bg[i],
-            };
-        }
         for (r, link) in l.links.iter_mut().enumerate() {
             link.copy_from_slice(&b[ROOMLINKS + r * 4..][..4]);
         }
@@ -178,6 +195,20 @@ impl Level {
 
     pub fn set_modifier(&mut self, room: usize, idx: usize, m: u8) {
         self.bg[Self::at(room, idx)] = m;
+    }
+
+    /// Animation frame of a torch, potion or sword from its runtime modifier, as the original draws it (docs/tiles.md 8.2-8.4):
+    /// torch: flame 0..8 (PRINCE.DAT 151 + f, `0000:A5E1`; none if mod >= 9); potion: bubble frame mod & 0x0F (1..7 =
+    /// PRINCE.DAT 166..172, 0 = not animated yet, `0000:A8AE`); sword: 1 while the glint image is shown (mod == 1, `0000:A910`).
+    /// The modifiers advance in `sim::World` (process_trobs) only for the drawn room. None for other tiles.
+    pub fn anim_frame(&self, room: usize, idx: usize) -> Option<u8> {
+        let t = self.tile_at(room, idx);
+        match t.kind {
+            Tile::Torch | Tile::TorchDebris => (t.modifier < 9).then_some(t.modifier),
+            Tile::Potion => Some(t.modifier & 0x0F),
+            Tile::Sword => Some((t.modifier == 1) as u8),
+            _ => None,
+        }
     }
 
     /// Raw fg byte (type + flag bits); bit 0x20 on a loose floor means it never falls.

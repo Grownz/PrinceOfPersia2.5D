@@ -5,7 +5,24 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## Unreleased
 
+### Added
+- Torch flames, potion bubbles and the glint of a sword on the floor are simulated as in the original (docs/tiles.md
+  8.2-8.4): on entering a room every torch, potion and sword gets a random start frame and animates once per tick while
+  its room is drawn, drawing from the shared random generator in the original order. `Level::anim_frame` exposes the
+  frame; the app's flames and bubbles now show it instead of a fixed per-tile phase.
+- Level 13: entering rooms 23 and 16 starts the loose floors of the room above, staggered at random (check_fall_flo).
+- Tests: the animation stream against a replayed prandom, trobs following the drawn room, level-13 falling floors, the
+  exit-stairs timeline (frames 217..228, the kid gone from tick 13, level end on tick 23), level tail and used_rooms.
+
+### Fixed
+- Load-time modifier conversion covers rooms 1..used_rooms like the original, including its pseudo room 25 (zeroes one
+  door-link byte on level 6, no gameplay effect); rooms above used_rooms keep their raw modifiers.
+
 ### Changed
+- New-game random seed 0x1234567A (the original seeds from the clock); with the extra animation draws this seed keeps
+  the attract-mode demo ending with the kid's win in room 24.
+- Docs: level tail bytes, resource 2015, start position and the exit door verified against PRINCE.EXE (docs/tiles.md
+  1.5, 8.1); ROADMAP M1/M3/M4 status lines and the idle-timer note in docs/cutscenes.md brought up to date.
 - Enhanced auto fallback judges the p95 frame time of each 300-frame window against 1.25 refresh periods (counted at
   no more than 60 Hz, so 20.8 ms on 60 Hz and faster monitors) instead of the average, and needs 3 slow windows in a row,
   so a 30 fps vsync stutter is caught while a single hitch is not. Warm-up and the focus check stay; the log line names

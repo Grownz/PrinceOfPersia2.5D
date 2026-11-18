@@ -55,6 +55,33 @@ For index i: `room = ((dl1[i] & 0x60) >> 5) + ((dl2[i] & 0xE0) >> 3)` (`0000:921
 **dl2[i] & 0x1F is the button timer** of that link (get `0000:91AE`, set `0000:91C5` keeps the top 3 bits).
 The loop condition at `0000:903B` compares the zero-extended byte with -1 and is therefore always true: only bit 7 ends a chain.
 
+### 1.5 Level tail, used_rooms and resource 2015 (VERIFIED by xref of every address ds:58C2..59C4)
+Level struct at ds:50C2 (level offset o = ds - 0x50C2):
+
+| offset | content | read by |
+|---|---|---|
+| 2048 (ds:58C2) | used_rooms | only alter_mods_allrm `B622` (loop `cmp [bp-2],used; ja`: rooms **1..=used_rooms**) |
+| 2049..2072, 2073..2096 | room x / room y per room (editor map, 255 = unused) | nothing |
+| 2097..2111 | fill | nothing |
+| 2112..2114 | start room, tile, dir | do_startpos `4A4F/4A59/4A83` (mechanics.md 8) |
+| 2115..2117 | fill (0) | nothing |
+| 2118 (ds:5908) | fill | only as the 1-based base of guard_tile: follow_guard `3A98/3AA3` and `39CC` write `[room + 5908h] = 0xFF`; with room 0 that would hit this unused byte |
+| 2119.. 2263 | guard tile, dir, x, seq lo, skill, seq hi, colour (24 each) | enter_guard `381E..38EF`, leave_guard `3A26..3A73` (combat.md) |
+| 2287..2304 | fill | nothing (ds:59BB at `3068` is a hall-of-fame copy whose index never reaches the level) |
+
+- **Pseudo room 25** (VERIFIED `BAD4`, `B656`): get_room_address has no upper bound, so with used_rooms = 25 (levels 0, 2,
+  4..9, 11..13) load_alter_mod also runs on room 25: its "tiles" are ds:5392 = room 1's **already altered modifiers**, its
+  "modifiers" ds:5662 = **doorlinks1[0..30]**. In the shipped data only level 6 is hit: room 1 tile 11 (the drop button,
+  link 11) has modifier 11 = "loose floor" -> doorlinks1[11] = 0, and tile 17 modifier 10 = "potion" -> doorlinks1[17] <<= 5
+  (index 17 is unused). Link 11's chain becomes {room 0 tile 0 (bit 7 clear), room 1 tile 12}: get_room_address(0) keeps the
+  previous pointers (the button's room 1), whose tile 0 is a pillar, so trigger_1 returns -1; entry 12 is the same gate the
+  data's entry 11 named. No gameplay change; the port reproduces the bytes (`Level::parse`, test `level_tail_and_used_rooms`).
+- Rooms above used_rooms keep raw modifiers (level 10 room 22, level 14 rooms 8..24, level 15 rooms 10..24; all unreachable).
+- **Resource 2015** (level 15, the copy-protection level) is 2304 bytes, load_level asks for 0x901 = 2305 (`0EB8`): the missing
+  byte is fill 2304, never read. Rooms 1 and 9..24, their links ({255, 0, 255, 0}), room x/y and the guard tiles of rooms 9..24
+  hold the editor's 0/255 fill pattern; the reachable rooms (3..8 from start room 6) are clean. The port parses it like any level
+  (it creates inert guard slots for the filler rooms 9, 11, ...; unreachable).
+
 ---
 
 ## 2. Per-tick structure
@@ -377,6 +404,14 @@ animate_leveldoor `8BE5`:
   (unsigned borrow -> mod = 0, type -1, **sound 14**); at type 4 also sound 15 if `[31C1] & 1` and `[00B8] == 0` (INFERRED: digi sound on).
 - Level start: the **first** tile 16 in Kid.room gets start_level_door `936A`: mod = 43, add_trob(room, tilepos, **3**):
   43 -> 38 -> 21 -> 0 in 3 ticks, sound 14.
+- Entering (VERIFIED `62EE`, `63E0`, seq 70 at ds:20F1, play_level_2 `4DA2`): Up with tile 16 at, behind (`78A2`) or in
+  front of (`7848`) the kid, in that order, start room `[5902]` != drawn room and leveldoor_open != 0 (set only when a door's
+  mod reached 43, so "fully open" is global, not per door): x = x_bump[tile_col + 5] + 10, direction left, seq 70. Seq 70:
+  action 5, dx -5, dy -1, footstep, frames **217..228** (ticks 1..12, the climb, music F2 4 with frame 224 on tick 8), then
+  frame **0 = image 255** (the kid is not drawn) for ticks 13..22 with a footstep every 3rd tick, **op F1 on tick 23**, then
+  `jmp` to a frame-0 loop (F1 runs once). The frame loop returns in that frame if no sound plays, else keeps running full
+  frames (invisible kid) until the sounds end. Port: identical (test `exit_stairs_timeline`); pop-core ends on tick 23, the
+  app holds the exit while the music plays.
 - Level end: seq 70 (go_up_leveldoor) ends with op F1 (next level, mechanics.md section 0). leveldoor_open is also set to 2 at `836C`
   (INFERRED: Jaffar killed; then jaffar exit triggers room 24 via trigger_button) and used as a counter on level 8 room 16 (timers `4FF8`).
 
@@ -402,6 +437,20 @@ Level 12: leaving room 18 to the right turns (room 15, col 1, row 0) into floor 
 
 ### 8.4 Torches (19, 30) (VERIFIED, animation only)
 Start mod = prandom(8); each tick (drawn room only) `8CC5`: r = prandom(255); if r == mod or r >= 9: r = (mod + 1) % 9.
+The flame image is PRINCE.DAT 151 + mod, drawn only if mod < 9 (`A5E1`).
+
+### 8.4a Animation start and drawing, ported (VERIFIED)
+- check_the_end `0FE8` (room entry: next_room != 0 and != drawn_room; also at level start `4B92`) sets drawn_room, then
+  anim_tile_modif `0B3D` for tilepos 0..29 of the drawn room: potion `8E3F` (mod = kind | prandom(6) + 1), torch 19/30 `8E16`
+  (prandom(8)), sword `8E74` (prandom(255) & 0x1F), each with add_trob(type 1); then start_chompers, check_fall_flo, check_shadow.
+- animate_torch `89C3` and animate_sword `8A19` have **no type < 0 test**; animate_potion `89DD` has one. All three call
+  is_trob_in_drawn_room `875A` (trob.room != drawn_room -> type -1), so leaving a room drops its trobs one tick later and the
+  modifiers stay frozen until the room is entered again.
+- Drawing: bubbles image ds:27BE[mod & 0x0F] (`A8AE`, frames 1..7 -> 166..172, 0 -> none); sword image 10 + (mod == 1)
+  (`A910`): the glint shows for exactly one tick per countdown (start 0..31, then 40..103 ticks).
+- Port: `World::check_the_end`, `animate_tile` (the modifiers change without a renderer `version` bump), `Level::anim_frame`;
+  tests `torch_potion_sword_animate_from_the_shared_prandom`, `anim_trobs_follow_the_drawn_room`, `level13_falling_floors_on_room_entry`.
+  The app's flames and bubbles read `anim_frame`; the floor sword (a placeholder bar) shows no glint yet.
 
 ### 8.5 Mirror (13), skeleton (21), debris (14), doortops (VERIFIED where cited)
 - Mirror: placed on level 4 by the exit door (8.1). Jumping through it: mechanics.md 9.2 (is_obstacle sets its mod to 0x56).
@@ -441,8 +490,10 @@ Start mod = prandom(8); each tick (drawn room only) `8CC5`: r = prandom(255); if
 - The **same generator** is used by the tile code: torch (every tick per torch in the drawn room), potion and sword trobs,
   start_anim_* at room entry, loose_shake (prandom(2) until different, plus prandom(1000) when digi sound is on), level 13
   falling floors. To reproduce the original's random sequence exactly (guards also use it), the port must make the same
-  calls in the same order, including those for the visual-only tiles; otherwise use a separate RNG for visuals and accept a
-  different sequence.
+  calls in the same order, including those for the visual-only tiles. **Done** (8.4a): pop-core makes the torch, potion,
+  sword and check_fall_flo calls in the original order. Not consumed: the loose-shake prandom(1000) (digi sample rate, only
+  with digital sound on). The seed: the original seeds from the clock on its first call (`0C83:0418`, flag ds:2956 never
+  reset), the port uses `sim::SEED`; 1763 (wall pattern) saves and restores the seed, so it is stream-neutral.
 
 Background note: for drawing, the modifier of an Empty (1..3) or Floor tile picks the background piece that
 draw_tile_right draws in the next column (`0000:A332`, docs/texture_inventory.md 18).

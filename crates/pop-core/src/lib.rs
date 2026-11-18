@@ -51,6 +51,11 @@ mod tests {
                     let tr = l.tile_at(room, t);
                     if matches!(tr.kind, Tile::DropButton | Tile::RaiseButton) {
                         for k in l.door_links(tr.modifier) {
+                            if k.room == 0 {
+                                // the pseudo room-25 alter zeroes doorlinks1[11] of level 6 (see below): a room-0 entry, inert
+                                assert_eq!((id, tr.modifier), (2006, 11));
+                                continue;
+                            }
                             let kind = l.tile_at(k.room as usize, k.tile as usize).kind;
                             assert!(matches!(kind, Tile::Gate | Tile::ExitLeft), "level {id} room {room} tile {t} -> {k:?} is {kind:?}");
                             n += 1;
@@ -60,6 +65,26 @@ mod tests {
             }
         }
         assert!(n > 100);
+    }
+
+    #[test]
+    fn level_tail_and_used_rooms() {
+        if crate::no_game_data() { return; }
+        let d = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
+        // 2015 is one byte short (the unread last fill byte); every other level is 2305 bytes
+        for id in 2000..=2015u16 {
+            assert_eq!(d.get(id).unwrap().len(), if id == 2015 { 2304 } else { 2305 }, "{id}");
+        }
+        let ls = levels();
+        // used_rooms 25 (level 6): load_alter_mod runs on a pseudo room 25 = room 1's modifiers over doorlinks1. Room 1
+        // tile 11 has modifier 11 ("loose floor") -> doorlinks1[11] = 0: the drop button there gets a room-0 entry before
+        // its real target (room 1, tile 12), which entry 12 repeats; trigger_1 on room 0 finds no gate (inert)
+        let l6 = &ls[6].1;
+        let ks: Vec<(u8, u8)> = l6.door_links(11).iter().map(|k| (k.room, k.tile)).collect();
+        assert_eq!(ks, [(0, 0), (1, 12)]);
+        // rooms above used_rooms keep their raw modifiers: level 10 (used 21) room 22's potion stays 1, not 1 << 5
+        assert_eq!(ls[10].1.tile_at(22, 28).kind, Tile::Potion);
+        assert_eq!(ls[10].1.tile_at(22, 28).modifier, 1);
     }
 
     #[test]

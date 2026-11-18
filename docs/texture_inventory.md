@@ -770,7 +770,7 @@ Images are PRINCE.DAT chtab 1, resource = 150 + image number.
   xh + **3**, xl **1**, y = draw_main_y - 14 - 4 * big. So the bubbles stand 3 px right of the bottle's left edge and their bottom row
   is right above the bottle's top row. The role of the mask (back table, clears the neck under the bubbles) is **[I]** (SDLPoP naming).
 - Bubble timing **[V]** (tiles.md 8.2): start frame prandom(6) + 1 on room entry (`8E3F`), animate_potion `89DD` -> `8CA5`: frame + 1,
-  8 -> 1, once per tick while the potion's room is drawn. The port: frame (tick + tile index) mod 7 (fixed phase instead of random).
+  8 -> 1, once per tick while the potion's room is drawn. The port: the sim's frame (`Level::anim_frame`, docs/tiles.md 8.4a).
 - Colour RGB **[I]**: the mono blit colour is a raw palette index; palette 150 has grey / black / beige at 9 / 10 / 12, so the bubbles
   must use the base EGA entries (as the flash code does, edge_cases.md 3): 12 = (63,21,21), 10 = (21,63,21), 9 = (21,21,63).
 - Pickup **[V]** (edge_cases.md 5.1, unchanged): kinds 1..6 = heal, life, feather, invert, hurt, open; the colour table above agrees

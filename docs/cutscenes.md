@@ -237,8 +237,8 @@ TITLE.DAT 40 set (palette 40, row 11): 41 story frame 320x200, 42 page "In the S
 | | wait until no sound; fade_out_2(rows 11+12); free; **init_game(0)** `4864` -> the demo (level 0) |
 
 The demo ends with start_game (edge_cases.md 4.4), which shows the title again because `[42F8]` is still 0: the attract loop is
-title -> story -> intro scene -> story -> credits -> (hall of fame) -> demo -> title. There is no idle timer (the remake's 15 s
-idle -> demo in flow.rs is not original). Any key or Shift during the whole loop starts the game at level 1 (process_key `04E2`;
+title -> story -> intro scene -> story -> credits -> (hall of fame) -> demo -> title. There is no idle timer (the remake's
+former 15 s idle -> demo timer is gone: flow.rs `ATTRACT` plays these show_title phases and has no idle timer). Any key or Shift during the whole loop starts the game at level 1 (process_key `04E2`;
 how the key reaches it during do_wait goes through the hook `[297A]`, INFERRED). Ctrl+L loads the saved game.
 
 Page timing depends on the sound card: the waits "until sound 54 ends" and "until no sound" use the music length
@@ -558,5 +558,6 @@ Unambiguous now (exact data): items 1-3, 5 (except the timing constants), the sc
 3. The chamber set from tiles + hourglass, bed, front pillar, torches, stars; hook `Screen::Cutscene` into flow.rs for levels
    2, 4, 6, 8, 9, 12 (key skip) and the time out (no skip).
 4. The ending: cutscene `2960` + page 44 + music 56 (hall of fame later or never: the remake has no HOF file).
-5. Title/attract state machine (section 2) with pv_scene, replacing the 15 s idle timer; story pages 42/43/45.
+5. Title/attract state machine (section 2) with pv_scene, replacing the 15 s idle timer; story pages 42/43/45. (Done:
+   flow.rs `ATTRACT`, no idle timer left.)
 6. Tune FADE_FRAMES / transition speed by eye; decide MIDI vs speaker lengths for the waits.

@@ -38,6 +38,7 @@ fn synth(room: usize, rows: std::ops::Range<usize>, start_col: usize, start_row:
         b[g] = 30;
     }
     (b[2112], b[2113], b[2114]) = (room as u8, (10 * start_row + start_col) as u8, 255);
+    b[2048] = 24; // used_rooms
     for &(i, v) in links {
         b[1440 + i as usize] = v; // doorlinks1
     }
@@ -188,6 +189,87 @@ fn potions_5_1() {
     assert!(w.upside);
     let (w, _) = drink(0, 3); // empty flask
     assert_eq!((w.kid.hp, w.kid.hp_max, w.upside), (3, 3, false));
+}
+
+/// Reference prandom (0C83:0412) with the World's seed: the test replays the original call order.
+fn rng() -> crate::kid::Rng {
+    crate::kid::Rng(crate::sim::SEED)
+}
+
+#[test]
+fn torch_potion_sword_animate_from_the_shared_prandom() {
+    if crate::no_game_data() { return; }
+    // room 1: torch (col 1 row 0), heal potion (col 6 row 1), sword (col 8 row 1); the kid stands at col 3
+    let mut l = synth(1, 1..3, 3, 1, &[(1, 0, 19), (6, 1, 10), (8, 1, 22)], &[]);
+    l.bg[16] = 1 << 5;
+    let mut w = World::new(data(), l, 2);
+    // anim_tile_modif (0000:0B3D) in tile order: torch prandom(8), potion prandom(6) + 1, sword prandom(255) & 0x1F
+    let mut r = rng();
+    let (mut torch, mut potion, mut sword) = (r.next(8) as u8, 0x20 | (r.next(6) as u8 + 1), r.next(255) as u8 & 0x1F);
+    let m = |w: &World, i: usize| w.level.tile_at(1, i).modifier;
+    assert_eq!((m(&w, 1), m(&w, 16), m(&w, 18)), (torch, potion, sword));
+    assert_eq!(w.trobs.iter().map(|t| (t.tilepos, t.ty)).collect::<Vec<_>>(), [(1, 1), (16, 1), (18, 1)]);
+    let (mut version, mut glints) = (0, 0);
+    for i in 0..200 {
+        if i == 1 {
+            version = w.version; // the first tick bumps it once (the new World is dirty)
+        }
+        // process_trobs order: torch get_torch_frame(prandom(255)), potion bubble + 1 (8 -> 1), sword countdown
+        torch = crate::cutscene::torch_frame(torch, r.next(255));
+        let f = (potion & 0x1F) + 1;
+        potion = 0x20 | if f >= 8 { 1 } else { f };
+        sword = sword.wrapping_sub(1);
+        if sword == 0 {
+            sword = (r.next(255) as u8 & 0x3F) + 40;
+        }
+        tick(&mut w, NONE, 1);
+        assert_eq!((m(&w, 1), m(&w, 16), m(&w, 18)), (torch, potion, sword));
+        assert_eq!((w.level.anim_frame(1, 1), w.level.anim_frame(1, 16)), (Some(torch), Some(potion & 0x0F)));
+        glints += w.level.anim_frame(1, 18).unwrap() as u32;
+    }
+    assert!((2..=5).contains(&glints), "the glint shows one tick per 40..103: {glints}");
+    assert_eq!(w.version, version, "visual-only modifiers do not ask for a rebuild");
+}
+
+#[test]
+fn anim_trobs_follow_the_drawn_room() {
+    if crate::no_game_data() { return; }
+    // room 1 (torch at col 1 row 0) -> room 2 to its right (floor, torch at col 2 row 0); the kid runs right
+    let mut l = synth(1, 1..3, 6, 1, &[(1, 0, 19)], &[]);
+    for i in 0..30 {
+        l.fg[30 + i] = if i == 2 { 19 } else if i >= 10 { 1 } else { 0 };
+    }
+    (l.links[0][1], l.links[1][0]) = (2, 1);
+    let mut w = World::new(data(), l, 2);
+    for _ in 0..60 {
+        tick(&mut w, RIGHT, 1);
+        if w.kid.room == 2 {
+            break;
+        }
+    }
+    assert_eq!(w.kid.room, 2);
+    assert!(w.trobs.iter().any(|t| (t.room, t.tilepos) == (2, 2)), "room 2 torch started on entry: {:?}", w.trobs);
+    tick(&mut w, NONE, 1);
+    assert!(w.trobs.iter().all(|t| t.room == 2), "room 1 trobs dropped by is_trob_in_drawn_room: {:?}", w.trobs);
+    let frozen = w.level.tile_at(1, 1).modifier;
+    tick(&mut w, NONE, 20);
+    assert_eq!(w.level.tile_at(1, 1).modifier, frozen);
+}
+
+#[test]
+fn level13_falling_floors_on_room_entry() {
+    if crate::no_game_data() { return; }
+    // check_fall_flo (0000:1034): entering room 23 starts tiles 22..27 of the room above (17) with -(prandom(255) & 15)
+    let mut l = synth(23, 0..3, 3, 1, &[], &[]);
+    for i in 22..28 {
+        l.fg[16 * 30 + i] = 11;
+    }
+    l.links[22][2] = 17;
+    let w = World::new(data(), l, 13);
+    let mut r = rng();
+    let want: Vec<u8> = (22..28).map(|_| (r.next(255) as u8 & 15).wrapping_neg()).collect();
+    assert_eq!((22..28).map(|i| w.level.tile_at(17, i).modifier).collect::<Vec<_>>(), want);
+    assert_eq!(w.trobs.iter().filter(|t| t.room == 17 && t.ty == 0).count(), 6);
 }
 
 #[test]
@@ -352,6 +434,31 @@ fn level_exits_4_1() {
 }
 
 #[test]
+fn exit_stairs_timeline() {
+    if crate::no_game_data() { return; }
+    // seq 70 (ds:20F1): frames 217..228 up the stairs on ticks 1..12, then frame 0 (image 255: the kid is gone) with a
+    // footstep every 3rd tick, op F1 (next_level++) on tick 23. play_level_2 (0000:4DA2) returns in that frame when no
+    // sound plays (pop-core: sounds count as finished; the app holds the exit while the music 41 from tick 8 plays).
+    let mut w = world(5, &[(5, 1, 16)], &[]);
+    w.level.start_room = 2;
+    w.leveldoor_open = 1;
+    tick(&mut w, NONE, 6);
+    let mut frames = vec![];
+    for t in 1..=23 {
+        tick(&mut w, if t == 1 { Keys { up: true, ..NONE } } else { NONE }, 1);
+        frames.push(w.kid.frame);
+        assert_eq!(w.exit.is_some(), t == 23, "tick {t}");
+        if t == 8 {
+            assert!(w.sounds.contains(&41), "end-level music with frame 224");
+        }
+    }
+    let want: Vec<u8> = (217..=228).chain([0; 11]).collect();
+    assert_eq!(frames, want);
+    assert_eq!(w.data.frames[0].image, 255);
+    assert_eq!(w.exit, Some(Exit::NextLevel { seamless: false }));
+}
+
+#[test]
 fn mouse_level_8_4_2() {
     if crate::no_game_data() { return; }
     let mut w = World::new(data(), synth(16, 0..3, 2, 1, &[], &[]), 8);
@@ -433,6 +540,16 @@ fn demo_level_0_4_4() {
     // the move list walks the kid to the guard, the guard AI fights for him, then he runs right into room 24
     assert_eq!((w.exit, w.kid.room, w.progress.checkpoint, w.kid.alive), (Some(Exit::Title), 24, true, true), "rooms {rooms:?}");
     assert!(rooms.starts_with(&[1, 2]), "rooms {rooms:?}");
+    // the fight is random (shared prandom, clock-seeded in the original): with another seed the demo kid loses, and the
+    // demo still goes back to the title (death counter, 36-tick text timer on level 0)
+    let mut w = World::seeded_for_test(data(), Level::parse(lv.get(2000).unwrap()).unwrap(), Progress::new_game(0), 0x1234_5678);
+    for _ in 0..1500 {
+        tick(&mut w, NONE, 1);
+        if w.exit.is_some() {
+            break;
+        }
+    }
+    assert_eq!((w.exit, w.kid.alive), (Some(Exit::Title), false));
     // any key ends the demo
     let mut w = World::new(data(), Level::parse(lv.get(2000).unwrap()).unwrap(), 0);
     tick(&mut w, RIGHT, 1);
@@ -620,4 +737,25 @@ fn play_through_every_level_reaches_its_exit() {
         }
     }
     assert!(bad.is_empty(), "{bad:#?}");
+}
+
+
+#[test]
+fn start_position_from_the_level_tail() {
+    if crate::no_game_data() { return; }
+    // do_startpos (0000:4A0F, docs/mechanics.md 8): room, row = tile / 10, x = 72 + 14 * col, direction NOT start_dir and
+    // seq 5 (turn), whose flip restores start_dir and whose dx adds 7 forward: standing at 72 + 14 * col +- 7
+    let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
+    let d = data();
+    for n in [2usize, 3, 4, 5, 6, 8, 9, 10, 11, 12, 14] {
+        let l = Level::parse(lv.get(2000 + n as u16).unwrap()).unwrap();
+        let (room, col, row, left) = (l.start_room, l.start_tile as i32 % 10, l.start_tile as i32 / 10, l.start_dir != 0);
+        // the start tile is the right half of the entry door (its left half, tile 16, closes behind the kid)
+        assert_eq!(l.tile_at(room as usize, l.start_tile as usize).kind, Tile::ExitRight, "level {n}");
+        let mut w = World::new(d.clone(), l, n);
+        w.guard = None;
+        tick(&mut w, NONE, 8);
+        let x = 72 + 14 * col + if left { -7 } else { 7 };
+        assert_eq!((w.kid.room, w.kid.row, w.kid.facing_left, w.kid.x as i32), (room, row, left, x), "level {n}");
+    }
 }

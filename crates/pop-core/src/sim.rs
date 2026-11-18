@@ -5,8 +5,8 @@
 //!
 //! One logic tick (docs/tiles.md 2.1): falling loose floors (mobs), then all moving tiles (trobs), then the
 //! kid. What the kid triggers in tick N first moves in tick N+1. Rules and addresses: docs/tiles.md.
-//! Not simulated: torch/potion/sword animation (visual only, they also consume random numbers in the original),
-//! guards, the shadow, level doors (entering), skeleton, mirror, potions.
+//! Torches, potion bubbles and the sword glint animate as trobs of the drawn room and draw from the shared prandom stream in
+//! the original order (docs/tiles.md 8.2-8.4, 10); guards, shadow, mirror and the rest live in `combat`.
 use crate::exe::{Exe, Frame};
 use crate::kid::{Env, Event, Input, Keys, Kid, Rng, Shared, Y_LAND};
 use crate::level::{Level, Tile, COLS, ROWS, TILES_PER_ROOM};
@@ -29,6 +29,10 @@ pub const FEATHER_TICKS: u8 = 224;
 /// Ctrl+G saves only on levels 3..13 (0000:05EA: level > 2 and < 14); the loader accepts the same range.
 pub const SAVE_LEVELS: std::ops::RangeInclusive<usize> = 3..=13;
 
+/// prandom seed of a new World. The original seeds from the clock on its first prandom call (0C83:0418 -> 0C83:B416), so
+/// any value is a possible original run. The demo's fight depends on it (12 of 60 nearby seeds let the demo kid win in
+/// the port; whether the original demo can lose is UNVERIFIED): this one plays the demo to its end in room 24.
+pub(crate) const SEED: u32 = 0x1234_567A;
 const MAX_TROBS: usize = 30;
 const MAX_MOBS: usize = 14;
 /// y_loose_land (ds:2298) and y_something (ds:228E), indexed by row + 1
@@ -188,6 +192,8 @@ pub struct World {
     /// bumped whenever tiles, trobs or mobs changed; renderers use it to know when to rebuild
     pub version: u32,
     dirty: bool,
+    /// drawn_room (ds:40DE) as check_the_end keeps it: the room whose torch/potion/sword trobs animate
+    drawn_room: u8,
     rng: Rng,
     last_loose_sound: u8,
     /// the one active guard (or skeleton, shadow); `None` = no guard (Guard.direction == 0x56)
@@ -209,6 +215,10 @@ impl World {
 
     /// play_level (0000:48C0) + do_startpos: the level as loaded, the kid from `progress` (docs/edge_cases.md 3.4).
     pub fn from_progress(data: Arc<Data>, level: Level, progress: Progress) -> World {
+        World::seeded(data, level, progress, SEED)
+    }
+
+    fn seeded(data: Arc<Data>, level: Level, progress: Progress, seed: u32) -> World {
         let level_no = progress.level;
         let guard_type = GUARD_TYPE[level_no.min(15)];
         let kid = {
@@ -255,7 +265,8 @@ impl World {
             leveldoor_open: 0,
             version: 0,
             dirty: true,
-            rng: Rng(0x1234_5678),
+            drawn_room: 0,
+            rng: Rng(seed),
             last_loose_sound: 0,
             guard: None,
             slots,
@@ -272,7 +283,7 @@ impl World {
             w.set_mod(room, idx as u8, 43);
             w.add_trob(room, idx as u8, 3);
         }
-        w.start_chompers(room, w.kid.row);
+        w.check_the_end(true); // 0000:4B92: next_room = Kid.room, check_the_end
         w.check_shadow(); // enter_guard / the scripted shadows for the first room
         w.apply_kid_events();
         w
@@ -385,6 +396,7 @@ impl World {
             self.on_room_left(dir, room_before);
             self.guard_after_room_change(dir);
             self.shared.drawn_room = self.kid.room;
+            self.check_the_end(false); // start_chompers already ran from the kid's room-change event
             self.check_shadow();
         }
         self.check_guard_fallout();
@@ -779,11 +791,77 @@ impl World {
             Tile::LooseFloor => self.animate_loose(t, &mut m),
             Tile::ExitLeft => self.animate_leveldoor(t, &mut m),
             Tile::Chomper => self.animate_chomper(t, &mut m),
-            _ => t.ty = -1, // empty, stuck button, debris, torches, ...
+            // animate_potion (0000:89DD): bubble frame + 1, 8 -> 1 (0000:8CA5); kind bits kept
+            Tile::Potion if t.ty >= 0 && self.in_drawn_room(t) => {
+                let f = (m & 0x1F) + 1;
+                m = (m & 0xE0) | if f >= 8 { 1 } else { f };
+            }
+            // animate_torch (0000:89C3): get_torch_frame (0000:8CC5); no type test
+            Tile::Torch | Tile::TorchDebris if self.in_drawn_room(t) => {
+                let r = self.prandom(255);
+                m = crate::cutscene::torch_frame(m, r);
+            }
+            // animate_sword (0000:8A19): glint countdown, the glint image shows at 1 (0000:A910); no type test
+            Tile::Sword if self.in_drawn_room(t) => {
+                m = m.wrapping_sub(1);
+                if m == 0 {
+                    m = (self.prandom(255) as u8 & 0x3F) + 40;
+                }
+            }
+            Tile::Potion | Tile::Torch | Tile::TorchDebris | Tile::Sword => {} // not in the drawn room: dropped
+            _ => t.ty = -1, // empty, stuck button, debris, ...
         }
         // the original writes the modifier back unconditionally (a fallen loose floor sets it in remove_loose)
         if self.modifier(room, tp) != m {
-            self.set_mod(room, tp, m);
+            match self.kind(room, tp) {
+                // visual only: no `version` bump, renderers read the frame every frame (Level::anim_frame)
+                Tile::Potion | Tile::Torch | Tile::TorchDebris | Tile::Sword => self.level.set_modifier(room as usize, tp as usize, m),
+                _ => self.set_mod(room, tp, m),
+            }
+        }
+    }
+
+    /// is_trob_in_drawn_room (0000:875A): a trob of another room is dropped (type -1).
+    fn in_drawn_room(&self, t: &mut Trob) -> bool {
+        if t.room != self.drawn_room {
+            t.ty = -1;
+        }
+        t.room == self.drawn_room
+    }
+
+    /// check_the_end (0000:0FE8) when the kid's room becomes the drawn room: anim_tile_modif (0000:0B3D) gives every potion,
+    /// torch and sword of the room a random phase and a trob, then start_chompers (`chompers`) and check_fall_flo (0000:1034).
+    /// (The level-14 end and check_shadow are done by the callers.)
+    fn check_the_end(&mut self, chompers: bool) {
+        let room = self.kid.room;
+        if room == 0 || room == self.drawn_room || room > 24 {
+            return;
+        }
+        self.drawn_room = room;
+        for tp in 0..TILES_PER_ROOM as u8 {
+            let m = self.modifier(room, tp);
+            let m = match self.kind(room, tp) {
+                Tile::Potion => (m & 0xE0) | (self.prandom(6) as u8 + 1), // start_anim_potion (0000:8E3F)
+                Tile::Torch | Tile::TorchDebris => self.prandom(8) as u8,  // start_anim_torch (0000:8E16)
+                Tile::Sword => self.prandom(255) as u8 & 0x1F,             // start_anim_sword (0000:8E74)
+                _ => continue,
+            };
+            self.level.set_modifier(room as usize, tp as usize, m);
+            self.add_trob(room, tp, 1);
+        }
+        if chompers {
+            self.start_chompers(room, self.kid.row);
+        }
+        // check_fall_flo: level 13 rooms 23 and 16, tiles 22..27 of the room above start falling, staggered by prandom
+        if self.level_no == 13 && (room == 23 || room == 16) {
+            let above = self.level.links[room as usize - 1][2];
+            // shortcut: with no room above the original works on stale room pointers; both rooms have one in the data
+            if above != 0 {
+                for tp in 22..=27 {
+                    let r = self.prandom(255) as u8 & 15;
+                    self.make_loose_fall(above, tp, r.wrapping_neg());
+                }
+            }
         }
     }
 
@@ -1168,6 +1246,9 @@ impl World {
     }
     pub(crate) fn set_tile_for_test(&mut self, room: u8, idx: u8, t: Tile) {
         self.set_tile(room, idx, t);
+    }
+    pub(crate) fn seeded_for_test(data: Arc<Data>, level: Level, progress: Progress, seed: u32) -> World {
+        World::seeded(data, level, progress, seed)
     }
     pub(crate) fn start_spike_for_test(&mut self, room: u8, idx: u8) {
         self.start_anim_spike(room, idx);
