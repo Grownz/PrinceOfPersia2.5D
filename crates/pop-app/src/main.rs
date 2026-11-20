@@ -13,7 +13,7 @@
 //! F6 sprite / voxel characters,
 //! F7 (debug text on, or POP_DEBUG_CAM=1) a closer, turned camera on the kid (POP_CAM_ANGLE="degrees[,distance]").
 //! POP_CAMERA=smooth|flip overrides settings.json "camera_scroll" (camera.rs). POP_SET="start=ROOM:TILE,door=N,upside=1"
-//! (with POP_LEVEL) changes the first world for screenshots (`debug_set`). POP_MENU = main, settings, controls, hof, name
+//! (with POP_LEVEL; "gate=N" sets every gate's opening) changes the first world for screenshots (`debug_set`). POP_MENU = main, settings, controls, hof, name
 //! or attract opens a menu page or a hall-of-fame screen at once (`flow::debug_menu`).
 mod audio;
 mod camera;
@@ -367,6 +367,14 @@ fn debug_set(a: &kid::KidAssets, level: &Level, n: usize) -> sim::World {
     let mut w = sim::World::new(a.data.clone(), l, n);
     w.leveldoor_open = val("door").and_then(|v| v.parse().ok()).unwrap_or(w.leveldoor_open);
     w.upside |= val("upside").as_deref() == Some("1");
+    // gate=N: every gate stands at opening N (0 closed .. 188 open), for screenshots of the half-open states
+    if let Some(m) = val("gate").and_then(|v| v.parse::<u8>().ok()) {
+        for (room, idx) in (1..=ROOMS).flat_map(|r| (0..30).map(move |i| (r, i))) {
+            if w.level.tile_at(room, idx).kind == pop_core::level::Tile::Gate {
+                w.level.set_modifier(room, idx, m);
+            }
+        }
+    }
     w
 }
 

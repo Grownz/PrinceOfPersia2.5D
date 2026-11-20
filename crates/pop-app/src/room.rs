@@ -458,6 +458,10 @@ pub struct Falling {
 #[derive(Component)]
 pub struct Bubbles(u8, u8);
 
+/// A sword lying on the floor (room, tile index): shows the glint image when the sim's `Level::anim_frame` is 1.
+#[derive(Component)]
+pub struct SwordGlint(u8, u8);
+
 /// A voxel torch flame (room, tile index): the frame shown is the sim's `Level::anim_frame` (`neighbour_frame` off the drawn room).
 #[derive(Component)]
 pub struct TorchFlame(u8, u8);
@@ -500,6 +504,7 @@ pub fn animate(
     mut falling: Query<(&Falling, &mut Transform), Without<Loose>>,
     mut bubbles: Query<(&Bubbles, &mut Mesh3d), Without<TorchFlame>>,
     mut flames: Query<(&TorchFlame, &mut Mesh3d), Without<Bubbles>>,
+    mut swords: Query<(&SwordGlint, &mut Mesh3d), (Without<Bubbles>, Without<TorchFlame>)>,
 ) {
     let a = g.world.alpha();
     for (l, mut t) in &mut loose {
@@ -517,6 +522,14 @@ pub fn animate(
             // frames 1..7; 0 = a room never entered (not animated yet): shown as frame 1
             let f = anim(b.0, b.1).unwrap_or(1).clamp(1, 7) as usize;
             let want = &frames[f - 1].mesh;
+            if m.0 != *want {
+                m.0 = want.clone();
+            }
+        }
+    }
+    if let Some(frames) = p.items.as_ref().map(|i| &i.sword).filter(|f| !f.is_empty()) {
+        for (s, mut m) in &mut swords {
+            let want = &frames[anim(s.0, s.1).unwrap_or(0).min(1) as usize].mesh;
             if m.0 != *want {
                 m.0 = want.clone();
             }
@@ -603,6 +616,13 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             floor(b, &plain_floor(b));
             b.debris(x, y);
         }
+        // the original's floor sword (PRINCE.DAT 160 / 161, 32 px wide at the tile's left edge) as a voxel relief in front of the figures
+        Sword if b.items.is_some_and(|(i, _)| !i.sword.is_empty()) => {
+            floor(b, &fl);
+            let i = b.items.unwrap().0;
+            let e = b.item(&i.sword[0], &i.mat, Vec3::new(x, y, SWORD_Z));
+            b.cmds.entity(e).insert(SwordGlint(b.room as u8, idx));
+        }
         Floor | Sword | Debris | BalconyLeft | BalconyRight => {
             floor(b, &fl);
             match t.kind {
@@ -688,8 +708,10 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             if let Some(d) = &ex {
                 door_post(b, d, x, y, t.kind, t.modifier);
             }
-            for (lo, hi) in gate_bars(t.modifier) {
-                b.put(&metal, Vec3::new(x, y, 0.0) + lo, Vec3::new(x, y, 0.0) + hi);
+            if !gate_voxel(b, x, y, t.modifier) {
+                for (lo, hi) in gate_bars(t.modifier) {
+                    b.put(&metal, Vec3::new(x, y, 0.0) + lo, Vec3::new(x, y, 0.0) + hi);
+                }
             }
         }
         StuckButton | DropButton | RaiseButton => {
@@ -834,6 +856,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
 /// Depth of the voxel items' sprite plane: the skeleton behind the figures (VOXEL_Z 0.25), the bottle in front of them.
 const SKELETON_Z: f32 = -0.1;
 const POTION_Z: f32 = 0.4;
+const SWORD_Z: f32 = 0.3;
 /// Depth of the voxel columns' axis: behind the figures (VOXEL_Z 0.25, about 0.06 deep behind it), so the widest base
 /// (big pillar, radius 11.5 px = 0.36) ends at z 0.16 and the kid never cuts through a column.
 const COLUMN_Z: f32 = -0.2;
@@ -890,6 +913,25 @@ pub fn gate_bars(modifier: u8) -> Vec<(Vec3, Vec3)> {
         v.push((Vec3::new(x0 + 0.005, y, -0.15), Vec3::new(x1 - 0.005, y + 0.05, 0.45)));
     }
     v
+}
+
+/// The voxel gate: a barrier plane across the corridor like the procedural grille (x GATE_X, z from the floor's front edge
+/// 0.45 back to the door post's front face -0.15). The original's 24 px wide sprite is an oblique drawing whose horizontal
+/// axis is the corridor depth, so the model is turned 90 degrees about the vertical axis (image x -> -z, scaled to that
+/// span; image y -> y at the exact pixel pitch; a few voxels thick in x). `gate_rise - 1` px over the floor, rebuilt when
+/// the modifier changes (docs/texture_inventory.md 21). False: no models (procedural grille).
+const GATE_Z0: f32 = 0.45;
+const GATE_Z1: f32 = -0.15;
+
+fn gate_voxel(b: &mut B, x: f32, y: f32, modifier: u8) -> bool {
+    let Some((items, o)) = b.objects() else { return false };
+    let rise = crate::items::gate_rise(modifier);
+    let Some(m) = o.gate.get(rise - 1) else { return false };
+    let at = b.origin + Vec3::new(x + GATE_X, y + px_h(rise as f32 - 1.0), GATE_Z0);
+    let t = Transform::from_translation(at).with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new((GATE_Z0 - GATE_Z1) / m.w as f32, px_h(1.0), 1.0 / 32.0));
+    let e = b.cmds.spawn((Mesh3d(m.mesh.clone()), MeshMaterial3d(items.mat.clone()), t)).id();
+    b.tag(e);
+    true
 }
 
 /// A voxel exit door: dark doorway, stairs (not in the start room), the door panel slid up by the modifier (ExitLeft) and

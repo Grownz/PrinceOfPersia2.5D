@@ -3,6 +3,15 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.4.5] - 2026-11-20
+
+### Changed
+- Gates in enhanced mode are built from the original images (VDUNGEON / VPALACE 250, 251, 252..259) as a voxel barrier across the
+  corridor, at the same place and depth as the old procedural grille, with the bars rising by the original draw rule (checked
+  against a 2D composite); the procedural grille stays as fallback. Debug hook `POP_SET=gate=N`.
+- The sword lying on the floor (level 1 room 15, levels 12 and 13) is a voxel built from the original images (PRINCE.DAT 160 / 161,
+  glint animated from the shared animation frame) instead of a grey bar; placed by the original draw rule (docs/texture_inventory.md 21).
+
 ## [0.4.4] - 2026-11-20
 
 ### Fixed

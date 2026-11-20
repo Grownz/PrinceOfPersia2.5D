@@ -145,6 +145,10 @@ So a trob whose tile changed type is dropped or re-dispatched automatically (a l
 `mod` = opening height, **0 = closed, 188 = fully open**; `mod >> 2` (0..47) is what the kid code uses (mechanics.md 9.2/11):
 blocks while `(mod >> 2) + 6 < char_height` (can_bump_into_gate `59FF`). **238** = "fully open, counting down", **255** = open forever.
 Trob types: **0 = closing slowly, 1 = opening, 2 = opening for good, 3..8 = closing fast (type = speed index).**
+Drawing (VERIFIED, `B456` / `B47F` / `B586`, chtab 6): rise = `(min(mod,188) >> 2) + 1` px, the lowest tip row stands rise-1 px above the floor line,
+the bars reach 60 px up (cell top). Back pass: 251 above rise+1, then 252 slices (24x8) every 8 px upwards, the last cut (253..259); front pass: 250 (tips + post
+stripe) at rise-1 (when rise <= 12 the original draws the record piece 248 instead). Port: `items::gate_rise` / `gate_back_sprite`, room.rs `gate_voxel`
+(docs/texture_inventory.md 21). Exit door: already drawn from 233 / 234 slices (section 15), not a bar placeholder.
 Tables: door_delta `ds:27D4` = {-1, +4, +4} (index type 0..2); gate_close_speeds `ds:27C6` = {0,0,0, 20,40,60,80,100,120}.
 
 ### 3.2 animate_door `8B16` (VERIFIED), every tick while the trob exists
@@ -450,7 +454,7 @@ The flame image is PRINCE.DAT 151 + mod, drawn only if mod < 9 (`A5E1`).
   (`A910`): the glint shows for exactly one tick per countdown (start 0..31, then 40..103 ticks).
 - Port: `World::check_the_end`, `animate_tile` (the modifiers change without a renderer `version` bump), `Level::anim_frame`;
   tests `torch_potion_sword_animate_from_the_shared_prandom`, `anim_trobs_follow_the_drawn_room`, `level13_falling_floors_on_room_entry`.
-  The app's flames and bubbles read `anim_frame`; the floor sword (a placeholder bar) shows no glint yet.
+  The app's flames, bubbles and the floor sword's glint read `anim_frame` (sword: PRINCE.DAT 160 / 161, drawn at the tile's left edge, bottom 3 px above the floor line, `A910`).
 
 ### 8.5 Mirror (13), skeleton (21), debris (14), doortops (VERIFIED where cited)
 - Mirror: placed on level 4 by the exit door (8.1). Jumping through it: mechanics.md 9.2 (is_obstacle sets its mod to 0x56).
@@ -502,4 +506,4 @@ draw_tile_right draws in the next column (`0000:A332`, docs/texture_inventory.md
 - Whether the guard's `5D31` is a chomper check for guards (not traced).
 - `[00B8]` in the exit-door closing sound condition, and the meaning of leveldoor_open == 2 (both INFERRED).
 - The full skeleton wake-up and the shadow / Jaffar level events that call trigger_button (only the trigger part was read).
-- The drawing of gates, buttons and spikes from mod (only the pressed-button test was read).
+- The drawing of buttons and spikes from mod (only the pressed-button test was read); the gate drawing is traced (3.1).

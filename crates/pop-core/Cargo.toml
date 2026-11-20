@@ -1,5 +1,5 @@
 [package]
 name = "pop-core"
-version = "0.4.4"
+version = "0.4.5"
 license = "MIT"
 edition = "2021"

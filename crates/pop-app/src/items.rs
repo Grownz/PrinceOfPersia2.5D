@@ -1,4 +1,4 @@
-//! Voxel items on the floor tiles: the skeleton pile (VDUNGEON 1230 / 1231) and the potions (PRINCE.DAT chtab 1: bottles
+//! Voxel items on the floor tiles: the sword (PRINCE.DAT 160 / 161), the skeleton pile (VDUNGEON 1230 / 1231) and the potions (PRINCE.DAT chtab 1: bottles
 //! 162 small / 163 big, palace 164 / 165, bubble frames 166..172 drawn in the potion's colour). Built at runtime with the character voxel
 //! pipeline (`voxel.rs`): the front projection of each model is the original image. Only with `tile_textures` = original;
 //! anything missing keeps the procedural box (room.rs).
@@ -24,6 +24,8 @@ pub struct Items {
     pub bottles: Option<[[Model; 2]; 2]>,
     /// bubble frames 1..7 (potion_fram_bubb), one mesh each
     pub bubbles: Vec<Model>,
+    /// the sword lying on the floor: PRINCE.DAT 160 plain, 161 with the glint (`Level::anim_frame` 0 / 1); empty if missing
+    pub sword: Vec<Model>,
     /// emissive liquid materials [red, green, blue]
     pub glow: [Handle<StandardMaterial>; 3],
     /// voxel columns per set [dungeon, palace] by image id (COLUMN_IDS); empty with `column_style` = flat
@@ -45,6 +47,8 @@ pub struct Objects {
     pub panels: Vec<Model>,
     pub stairs: Option<Model>,
     pub debris: Option<Model>,
+    /// the gate by rise 1..=48 (`gate_rise`, `gate_sprite`; docs/texture_inventory.md 21)
+    pub gate: Vec<Model>,
     /// image x (px) of the torch holder's rod axis (the flame stands on it)
     pub holder_axis: f32,
 }
@@ -64,6 +68,35 @@ pub fn panel_slices(m: u8) -> usize {
         n += 1;
     }
     n
+}
+
+/// Gate bars (draw routine `B47F` / `B586`): the lowest bar tip stands `gate_rise(modifier)` px above the floor line,
+/// modifier 0 closed .. 188 open (`(min(m, 188) >> 2) + 1`, 1..=48). The bars reach 60 px up (the cell top, `[4FCA]`).
+pub fn gate_rise(modifier: u8) -> usize {
+    (modifier.min(188) >> 2) as usize + 1
+}
+
+/// The whole gate for rise `rise` as the original composes it (back pass, then the front tips on top): the 252 slices
+/// stacked upwards from the tips, the last one cut at 60 px over the floor line (the partial slices 253..259 are its lower
+/// rows), tips 251 and the front tips 250 (with the post stripe) at the bottom. Bottom edge `rise - 1` px above the floor
+/// line, 24 px wide: (w, h, pixels). One plane for all pieces, so they line up from every camera angle.
+pub fn gate_sprite(back: &image::Image, slice: &image::Image, front: &image::Image, rise: usize) -> (usize, usize, Vec<u8>) {
+    let (w, h) = (slice.width, (61usize.saturating_sub(rise)).max(front.height));
+    let mut px = vec![0u8; w * h];
+    let put = |px: &mut [u8], im: &image::Image, bottom: usize, over: bool| {
+        for (i, &p) in im.pixels.iter().enumerate().filter(|(_, &p)| p != 0 || !over) {
+            px[(bottom - im.height + i / im.width) * w + i % im.width] = p;
+        }
+    };
+    put(&mut px, back, h - 2, false);
+    let mut top = h - front.height;
+    while top > 0 {
+        let n = top.min(slice.height);
+        px[(top - n) * w..top * w].copy_from_slice(&slice.pixels[(slice.height - n) * w..slice.height * w]);
+        top -= n;
+    }
+    put(&mut px, front, h, true);
+    (w, h, px)
 }
 
 /// Every 8-connected component of the image moved down until it touches the bottom row and stood upright (the 2D spikes
@@ -203,6 +236,10 @@ fn load_objects(dat: &Dat, pal: &[[u8; 3]], meshes: &mut Assets<Mesh>) -> (Objec
                 add(VoxelModel::plate(w, h, &px, 1.0, relief(1.5)))
             })
             .collect();
+    }
+    // gate: one model per rise (the stack is cut at the cell top)
+    if let (Some(t), Some(s), Some(f)) = (img(251), img(252), img(250)) {
+        o.gate = (1..=48).map(|r| { let (w, h, px) = gate_sprite(&t, &s, &f, r); add(VoxelModel::plate(w, h, &px, 1.0, |_| 0)) }).collect();
     }
     o.stairs = img(344).map(|s| add(VoxelModel::plate(s.width, s.height, &s.pixels, 2.0, |_| 0)));
     // debris: the rubble as a heap on the floor (seen from above; room.rs lays the model down)
@@ -375,7 +412,9 @@ impl Items {
         let bottles = (!pal.is_empty() && ims.iter().flatten().all(Option::is_some)).then(|| ims.map(|set| set.map(|i| { let i = i.unwrap(); model(meshes, i.width, i.height, &i.pixels, &pal) })));
         // 1-bit frames: every set pixel is index 1, coloured by the material
         let bubbles: Vec<Model> = (166..=172).filter_map(pimg).map(|i| model(meshes, i.width, i.height, &i.pixels, &[[0; 3], [255; 3]])).collect();
-        for (what, ok) in [("dungeon skeleton (VDUNGEON 1230/1231)", skeleton[0].is_some()), ("potion bottles (PRINCE.DAT 162..165)", bottles.is_some()), ("potion bubbles (PRINCE.DAT 166..172)", bubbles.len() == 7)] {
+        // A910: chtab 1 image 10 + glint, 32 px wide, bottom 3 px above the tile's floor line, at the tile's left edge
+        let sword: Vec<Model> = [160, 161].into_iter().filter_map(pimg).filter(|i| !pal.is_empty() && i.bpp == 4).map(|i| model(meshes, i.width, i.height, &i.pixels, &pal)).collect();
+        for (what, ok) in [("floor sword (PRINCE.DAT 160/161)", sword.len() == 2), ("dungeon skeleton (VDUNGEON 1230/1231)", skeleton[0].is_some()), ("potion bottles (PRINCE.DAT 162..165)", bottles.is_some()), ("potion bubbles (PRINCE.DAT 166..172)", bubbles.len() == 7)] {
             if !ok {
                 info!("items: {what} not found, procedural look used");
             }
@@ -437,7 +476,7 @@ impl Items {
             let c = Color::srgb_u8(r, g, b);
             mats.add(StandardMaterial { base_color: c, emissive: c.to_linear() * 3.0, perceptual_roughness: 0.4, ..default() })
         });
-        Items { mat: mats.add(StandardMaterial { perceptual_roughness: 0.6, ..default() }), skeleton, bottles, bubbles: if bubbles.len() == 7 { bubbles } else { vec![] }, glow, columns, objects, flames: if flames.len() == 9 { flames } else { vec![] }, flame_mat: mats.add(StandardMaterial { unlit: true, ..default() }) }
+        Items { mat: mats.add(StandardMaterial { perceptual_roughness: 0.6, ..default() }), skeleton, bottles, bubbles: if bubbles.len() == 7 { bubbles } else { vec![] }, sword: if sword.len() == 2 { sword } else { vec![] }, glow, columns, objects, flames: if flames.len() == 9 { flames } else { vec![] }, flame_mat: mats.add(StandardMaterial { unlit: true, ..default() }) }
     }
 }
 
@@ -447,6 +486,46 @@ mod tests {
 
     fn img(w: usize, h: usize, px: &[u8]) -> image::Image {
         image::Image { width: w, height: h, bpp: 4, pixels: px.to_vec() }
+    }
+
+    /// Gate rise per modifier (closed 0 -> 1 px, open 188 and 238 / 255 -> 48 px) and the sprite: slices stacked on the tips,
+    /// cut at 60 px over the floor line, no gap in the bars.
+    #[test]
+    fn gate_rise_and_stack() {
+        assert_eq!([0, 3, 4, 187, 188, 238, 255].map(gate_rise), [1, 1, 2, 47, 48, 48, 48]);
+        let back = img(16, 10, &[9; 160]);
+        let front = img(24, 12, &[7; 288]);
+        let slice = img(24, 8, &(0..8).flat_map(|r| [r as u8 + 1; 24]).collect::<Vec<_>>());
+        for rise in [1, 12, 30, 48] {
+            let (w, h, px) = gate_sprite(&back, &slice, &front, rise);
+            assert_eq!((w, h), (24, 61 - rise), "bottom edge rise - 1, top edge 60");
+            assert!((h - 12..h).all(|y| px[y * w + 2] == 7), "front tips at the bottom");
+            let above = h - 12;
+            assert!((0..above).all(|y| px[y * w + 2] as usize == 8 - (above - 1 - y) % 8), "rise {rise}: slices contiguous");
+        }
+    }
+
+    /// The original's partial slices 253..259 are the lower rows of 252 and the 250 tips are 251 plus the post (skips without
+    /// Original_data).
+    #[test]
+    fn gate_images_match_the_stack_rule() {
+        let dir = format!("{}/../../Original_data", env!("CARGO_MANIFEST_DIR"));
+        for name in ["VDUNGEON.DAT", "VPALACE.DAT"] {
+            let Ok(d) = Dat::open(format!("{dir}/{name}")) else { return };
+            let get = |id| d.get(id).and_then(image::decode).unwrap();
+            let s = get(252);
+            assert_eq!((s.width, s.height), (24, 8));
+            for n in 1..8usize {
+                let p = get(260 - n as u16);
+                assert_eq!((p.width, p.height), (24, n), "{name} {}", 260 - n);
+                assert_eq!(p.pixels, s.pixels[(8 - n) * 24..], "{name} partial slice of {n} rows");
+            }
+            let (f, t) = (get(250), get(251));
+            assert_eq!((f.height, t.height), (12, 10));
+            for y in 0..10 {
+                assert!((0..t.width).all(|x| t.pixels[y * t.width + x] == 0 || t.pixels[y * t.width + x] == f.pixels[y * f.width + x]), "{name} row {y}");
+            }
+        }
     }
 
     /// The table traced in PRINCE.EXE (docs/texture_inventory.md 16): kind -> (dungeon bottle, palace bottle, EGA bubble
@@ -677,5 +756,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The floor sword images (PRINCE.DAT 160 / 161) are 32x10 and differ only by the glint star (skips without Original_data).
+    #[test]
+    fn floor_sword_images() {
+        let dir = format!("{}/../../Original_data", env!("CARGO_MANIFEST_DIR"));
+        let Ok(d) = Dat::open(format!("{dir}/PRINCE.DAT")) else { return };
+        let (a, b) = (d.get(160).and_then(image::decode).unwrap(), d.get(161).and_then(image::decode).unwrap());
+        assert_eq!((a.width, a.height, b.width, b.height), (32, 10, 32, 10));
+        assert!(a.pixels.iter().zip(&b.pixels).any(|(x, y)| x != y), "the glint frame differs");
+        let m = VoxelModel::from_image(a.width, a.height, &a.pixels, false, |_| [0; 3]);
+        assert_eq!(m.front(), a.pixels);
     }
 }
