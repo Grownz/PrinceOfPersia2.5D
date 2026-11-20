@@ -3,6 +3,11 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.5.1] - 2026-11-20
+
+### Changed
+- Smaller release exe: Bevy default features trimmed to the ones the game uses (no glTF, animation, scene, picking, gizmos, Vorbis, KTX2, wayland/x11), `lto = "fat"`, `codegen-units = 1`, `panic = "abort"`. The exe shrinks from 97.1 MB to 47.3 MB (zip 31.8 MB to 18.4 MB); screenshots are unchanged.
+
 ## [0.5.0] - 2026-11-20
 
 ### Changed

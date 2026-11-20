@@ -21,6 +21,9 @@ cargo run --release -p pop-app       # release build (no console; log in pop.log
 cargo test --workspace               # tests needing Original_data print "skipping" without it
 ```
 
+Bevy features are listed explicitly in `crates/pop-app/Cargo.toml` (`default-features = false`). If a Bevy feature is missing at
+runtime (e.g. invisible text, wrong tonemapping), add it. Release uses fat LTO and `panic = "abort"` (the panic hook still writes `pop.log`).
+
 Package: `powershell -ExecutionPolicy Bypass -File tools/package.ps1` builds the release exe and creates
 `dist/PrinceOfPersia-x64/` (exe + README.txt) and `dist/PrinceOfPersia-x64.zip`. It never copies `Original_data` or any game
 file. Release notes come from `CHANGELOG.md` (`tools/release_notes.ps1 v0.5.0 notes.md`).
