@@ -232,7 +232,24 @@ fn world_pos(k: &Kid, env: &Env) -> Vec2 {
     let bottom = k.y.wrapping_add(f.dy as u8) as f32;
     // Logic column c spans x = 65 + 14c .. 79 + 14c (collision and floor checks use col_m7 = x - 7), i.e. screen px 32c + 16.
     // The tile geometry is built at world x = c .. c + 1, so the sprite is shifted left by half a tile (16 px).
-    Vec2::new(sx as f32 / 32.0 - 0.5, (181.0 - bottom) * crate::room::TILE_H / TILE_H_PX as f32)
+    Vec2::new((sx as f32 + hang_dx(k.charid, k.frame, k.facing_left)) / 32.0 - 0.5, (181.0 - bottom) * crate::room::TILE_H / TILE_H_PX as f32)
+}
+
+/// The ledge poses (hang 78..=99, climb 135..=149): without a shift the hands lie 5..7 px (facing left, ledge col c - 1, kid x
+/// 118 / 62) or 2..4 px (facing right, kid x 123; the sim grabs 5 logic units differently per mirroring) inside the slab's
+/// end, measured on frame 91 (see `real_hang_hands_grip_the_slab_end_in_both_mirrorings`). The hands should grip the top just
+/// inside its end (0..2 px), so the figure hangs AWAY from the ledge by these px: right when facing left, left when facing right.
+const LEDGE_AWAY: [f32; 2] = [5.0, 2.0]; // [facing left, facing right]
+fn hang_dx(charid: u8, frame: u8, facing_left: bool) -> f32 {
+    // the grab (78..=80) slides out, the drop (81..=85) back; the climb's last frames slide onto the top
+    let k = match (charid < 2, frame) {
+        (true, 78..=80) => (frame - 77) as f32 / 4.0,
+        (true, 81..=85) => (86 - frame) as f32 / 5.0 * 0.75,
+        (true, 87..=99 | 135..=140) => 1.0,
+        (true, 141..=144) => (145 - frame) as f32 / 5.0,
+        _ => 0.0,
+    };
+    if facing_left { LEDGE_AWAY[0] * k } else { -LEDGE_AWAY[1] * k }
 }
 
 /// 7.3: screen x (320 px wide) of the image's left edge (facing left) or exclusive right edge (facing right).
@@ -386,14 +403,14 @@ const VOXEL_Z: f32 = 0.25;
 const HANG_Z: f32 = 0.62;
 
 /// Where the hands lie: the ledge slab is z -0.95..0.5 (room.rs), a hanging figure's arms reach over its top face. The rows
-/// above the ledge line are swept back by HAND_BACK voxels (to z HAND_Z at HANG_Z, joined to the arm);
+/// above the ledge line are swept back into the top face (`hand_back`, joined to the arm);
 /// so the body (below the line, in front of the front face) and the hands (above the top face, inside the footprint) never touch the slab.
-const HAND_Z: f32 = 0.30;
-const HAND_BACK: usize = ((HANG_Z - HAND_Z) * 32.0 + 0.5) as usize;
-
-/// Voxels the row `d` (>= 1) rows above the ledge line moves back: one run at the line, where the arm goes over the front lip.
-fn hand_back(_d: usize) -> usize {
-    HAND_BACK
+/// Voxels the row `d` (>= 1) rows above the ledge line moves back. The original draws the ledge's top face as 13 rows
+/// (docs/texture_inventory.md 20) for the slab's whole depth, so a hand `d` rows above the lip lies `d / 13` of the depth
+/// into the top face (cabinet projection, the same scale as everywhere else): from the front lip (z SLAB_FRONT) back, joined to the arm.
+fn hand_back(d: usize) -> usize {
+    let (lip, per_row) = ((HANG_Z - crate::room::SLAB_FRONT) * 32.0, (crate::room::SLAB_FRONT - crate::room::SLAB_BACK) * 32.0 / 13.0);
+    (lip + per_row * d as f32 + 0.5) as usize
 }
 
 /// The climb (frames 135..=149): the rows above the slab top lean back from HANG_Z at the line to VOXEL_Z (the slab's
@@ -612,7 +629,7 @@ mod tests {
     /// y in the slab's thickness), no hand voxel above it is in front of the front face or below the top.
     #[test]
     fn hands_lie_on_the_ledge_top_and_the_body_clears_the_slab() {
-        use crate::room::{SLAB, SLAB_FRONT};
+        use crate::room::{SLAB, SLAB_BACK, SLAB_FRONT};
         assert_eq!((hang_rows(57, -10), hang_rows(53, -12), hang_rows(45, -32), hang_rows(47, -3)), (4, 2, 14, 0));
         let (w, h, rows) = (6, 40, 4);
         let model = crate::voxel::VoxelModel::character(w, h, &vec![1; w * h], false, |_| [200, 150, 100]).rows_swept(rows, hand_back, true);
@@ -628,14 +645,14 @@ mod tests {
                         assert!(back >= SLAB_FRONT, "body row {y} voxel at z {back} is inside the slab");
                     }
                     if y < rows {
-                        assert!(back >= HAND_Z - 5.0 * px, "hand row {y} reaches back past the footprint: {back}");
+                        assert!(back >= SLAB_BACK, "hand row {y} reaches back past the slab: {back}");
                         // joined to the arm: unbroken from here forward to the body's plane layer
                         assert!((z..=model.plane).all(|k| model.get(x as isize, y as isize, k as isize) != 0), "hand gap at {x},{y},{z}");
                     }
                 }
             }
         }
-        assert_eq!(hand_back(1), HAND_BACK);
+        assert!(hand_back(1) < hand_back(4) && hand_back(4) < 24, "deeper into the top face with each row");
     }
 
     /// Hang frame 91 (image 102, 14 px wide, hands in stored columns 7..9; dx 3, flags 0x80) on the same ledge edge, logic x
@@ -709,6 +726,35 @@ mod tests {
                     assert!(vz + (m.d as f32 - 0.5 - m.plane as f32) * px <= SLAB_FRONT, "frame {frame} stands on the slab");
                 }
             }
+        }
+    }
+
+    /// Hang frame 91 with the real image: the topmost pixel row is the hands. In room coordinates (sx + shift - 16 px, the tile
+    /// shift) the ledge end is world x 4 (drawn px 128) for both mirrorings, and px 0 for the level-1 room 2 ledge (kid x 62):
+    /// the hands lie 0..2 px inside it in every case (facing left: ledge col 3, kid x 118; facing right: ledge col 4, kid x
+    /// 123; frames[91]: image 103, 12 px, dx 2). The climb slides back to 0 at the standing frames.
+    #[test]
+    fn real_hang_hands_grip_the_slab_end_in_both_mirrorings() {
+        let dir = format!("{}/../../Original_data", env!("CARGO_MANIFEST_DIR"));
+        if Exe::open(format!("{dir}/PRINCE.EXE")).is_err() {
+            return;
+        }
+        let a = KidAssets::load(&dir);
+        let fr = a.data.frames[91];
+        let Some((im, _)) = decoded(&a, 255, fr.image, false, 0) else { return };
+        let top = im.pixels.iter().position(|&p| p != 0).unwrap() / im.width;
+        let cols: Vec<i32> = (0..im.width).filter(|&x| im.pixels[top * im.width + x] != 0).map(|x| x as i32).collect();
+        let (lo, hi) = (cols[0], *cols.last().unwrap());
+        for (x, end) in [(118, 128), (62, 0)] {
+            let left = screen_x(x, fr.dx, fr.flags, true) + hang_dx(0, 91, true) as i32 - 16;
+            assert_eq!((end - (left + hi), end - (left + lo)), (0, 2), "facing left, kid x {x}");
+        }
+        let right = screen_x(123, fr.dx, fr.flags, false) + hang_dx(0, 91, false) as i32 - 16;
+        assert_eq!((right - 1 - hi - 128, right - 1 - lo - 128), (0, 2), "facing right");
+        for l in [true, false] {
+            assert!((87..=99).chain(135..=140).all(|f| hang_dx(0, f, l) != 0.0));
+            assert!((141..=144).all(|f| hang_dx(0, f, l).abs() < hang_dx(0, 140, l).abs()));
+            assert!(hang_dx(0, 145, l) == 0.0 && hang_dx(0, 15, l) == 0.0 && hang_dx(2, 91, l) == 0.0);
         }
     }
 

@@ -3,6 +3,14 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.4.4] - 2026-11-20
+
+### Fixed
+- Hanging, dropping and climbing kid (sprite and voxel figures): the hang position is set relative to the ledge direction, so the
+  hands grip the slab's end (0..2 px inside it) in both mirrorings; the figure is shifted 5 px away from a ledge to its left and
+  2 px away from a ledge to its right (`hang_dx`, ramped in at the grab and out at the drop / end of the climb). The hands lie
+  deeper on the ledge top. Test on the real sprite frames, both mirrorings.
+
 ## [0.4.3] - 2026-11-20
 
 ### Fixed
