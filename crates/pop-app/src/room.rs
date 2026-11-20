@@ -4,10 +4,13 @@ use crate::tiles::{Role, Tex, TileSet};
 use crate::Game;
 use bevy::prelude::*;
 use pop_core::level::*;
+use std::collections::HashMap;
 
 /// Height of one tile row (tile width and depth are 1).
 pub const TILE_H: f32 = 2.0;
-pub(crate) const SLAB: f32 = 0.3;
+/// Thickness of the floor slabs: the original's floor front face is the 3-row lip (images 243 / 236 / 296 / 349, 32x3) and the
+/// wall blocks carry the same 3 rows as their base strip: 3 of the 63 px of a row (docs/texture_inventory.md 20).
+pub(crate) const SLAB: f32 = 3.0 * TILE_H / TILE_H_PX as f32;
 /// The back wall box (z, depth) behind every room, front face at -0.9.
 const BACK_WALL: (f32, f32) = (-1.0, -0.9);
 /// Back face of the floor slabs and wall blocks: inside the back wall box, so slabs, walls and the back wall close without
@@ -36,6 +39,8 @@ pub struct Palette {
     flame: Handle<StandardMaterial>,
     /// original tile images [dungeon, palace] (None: procedural)
     tiles: [Option<TileSet>; 2],
+    /// slab box for each floor texture: top face = the surface rows, the other faces = the lip rows (`slab_cube`)
+    slab_mesh: HashMap<AssetId<StandardMaterial>, Handle<Mesh>>,
     /// voxel skeleton and potions (None: procedural)
     items: Option<crate::items::Items>,
 }
@@ -46,6 +51,12 @@ impl Palette {
     pub fn new(meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>, imgs: &mut Assets<Image>, tiles_dir: Option<&str>, columns: bool, objects: bool) -> Self {
         let tiles = tiles_dir.map_or([None, None], |d| crate::tiles::load_sets(d, imgs, mats));
         let items = tiles_dir.map(|d| crate::items::Items::load(d, columns, objects, meshes, mats));
+        let mut by_split: HashMap<u32, Handle<Mesh>> = HashMap::new();
+        let mut slab_mesh = HashMap::new();
+        for (id, split) in tiles.iter().flatten().flat_map(|t| t.floor_splits()) {
+            let h = by_split.entry(split.to_bits()).or_insert_with(|| meshes.add(slab_cube(split))).clone();
+            slab_mesh.insert(id, h);
+        }
         let mut m = |r, g, b| mats.add(StandardMaterial { base_color: Color::srgb(r, g, b), perceptual_roughness: 0.9, ..default() });
         Palette {
             cube: meshes.add(textured_cube()),
@@ -58,6 +69,7 @@ impl Palette {
             glass: m(0.5, 0.75, 0.9),
             flame: mats.add(StandardMaterial { base_color: Color::srgb(1.0, 0.6, 0.1), emissive: LinearRgba::rgb(8.0, 3.0, 0.5), ..default() }),
             tiles,
+            slab_mesh,
             items,
         }
     }
@@ -74,6 +86,18 @@ fn textured_cube() -> Mesh {
         .zip(&nrm)
         .map(|(p, n)| if n[1] != 0.0 { [p[0] + 0.5, p[2] + 0.5] } else if n[0] != 0.0 { [0.5 - p[2] * n[0], 0.5 - p[1]] } else { [0.5 + p[0] * n[2], 0.5 - p[1]] })
         .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+    mesh
+}
+
+/// The unit cube for a floor slab whose texture has the surface rows on top and the lip rows below (`split` = surface rows /
+/// all rows): the top face shows only the surface, the front and side faces only the lip (the slab is as thick as the lip is
+/// high), instead of the whole image squeezed onto every face.
+fn slab_cube(split: f32) -> Mesh {
+    let mut mesh = textured_cube();
+    let nrm = mesh.attribute(Mesh::ATTRIBUTE_NORMAL).and_then(|a| a.as_float3()).unwrap_or_default().to_vec();
+    let Some(bevy::mesh::VertexAttributeValues::Float32x2(uv)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0).cloned() else { return mesh };
+    let uv: Vec<[f32; 2]> = uv.iter().zip(&nrm).map(|(t, n)| if n[1] != 0.0 { [t[0], t[1] * split] } else { [t[0], split + t[1] * (1.0 - split)] }).collect();
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
     mesh
 }
@@ -171,7 +195,11 @@ impl<'a> B<'a, '_, '_> {
     }
 
     fn put_id(&mut self, mat: &Handle<StandardMaterial>, lo: Vec3, hi: Vec3) -> Entity {
-        let e = self.cmds.spawn((Mesh3d(self.p.cube.clone()), MeshMaterial3d(mat.clone()), Transform::from_translation(self.origin + (lo + hi) / 2.0).with_scale(hi - lo))).id();
+        self.put_mesh(self.p.cube.clone(), mat, lo, hi)
+    }
+
+    fn put_mesh(&mut self, mesh: Handle<Mesh>, mat: &Handle<StandardMaterial>, lo: Vec3, hi: Vec3) -> Entity {
+        let e = self.cmds.spawn((Mesh3d(mesh), MeshMaterial3d(mat.clone()), Transform::from_translation(self.origin + (lo + hi) / 2.0).with_scale(hi - lo))).id();
         self.tag(e);
         e
     }
@@ -184,7 +212,8 @@ impl<'a> B<'a, '_, '_> {
     /// A floor slab (or wall block) from `y0` to `y1` in the column at `x`, reaching back into the back wall.
     fn slab(&mut self, mat: &Handle<StandardMaterial>, x: f32, y0: f32, y1: f32) -> Entity {
         let z = self.back();
-        self.put_id(mat, Vec3::new(x, y0, z), Vec3::new(x + 1.0, y1, SLAB_FRONT))
+        let mesh = self.p.slab_mesh.get(&mat.id()).unwrap_or(&self.p.cube).clone();
+        self.put_mesh(mesh, mat, Vec3::new(x, y0, z), Vec3::new(x + 1.0, y1, SLAB_FRONT))
     }
 
     fn tag(&mut self, e: Entity) {
@@ -306,13 +335,26 @@ fn tile_key(level: &Level, room: usize, idx: usize, palace: bool) -> TileKey {
         Tile::Potion => t.modifier & 0xE0,
         _ => t.modifier,
     };
+    // a wall's look depends on its neighbours (the original's runtime modifier), not on the level's modifier bit
+    let m = if t.kind == Tile::Wall { wall_modifier(level, room, idx) } else { m };
     (t.kind, m, lift.to_bits(), crate::tiles::back_decor(lk, lm, t.kind, palace))
+}
+
+/// The original's runtime modifier of wall tile `idx` of `room` (`tiles::wall_modifier`): bit 0 = right neighbour is a wall,
+/// bit 1 = left neighbour is one; the cells across a room border count, a missing room is a wall.
+fn wall_modifier(level: &Level, room: usize, idx: usize) -> u8 {
+    let (c, r) = ((idx % COLS) as i32, (idx / COLS) as i32);
+    let wall = |dc: i32| level.tile_wrapped(room as i32, c + dc, r) == Tile::Wall;
+    crate::tiles::wall_modifier(wall(-1), wall(1))
 }
 
 /// Tile `idx` of the builder's room.
 fn spawn_tile(b: &mut B, level: &Level, room: usize, idx: usize) {
     let (col, row) = (idx % COLS, idx / COLS);
-    let t = level.tile(room, col, row);
+    let mut t = level.tile(room, col, row);
+    if t.kind == Tile::Wall {
+        t.modifier = wall_modifier(level, room, idx);
+    }
     let (x, y) = (col as f32, (ROWS - 1 - row) as f32 * TILE_H);
     b.cur = (!b.chamber).then_some(TileOf(room as u8, idx as u8));
     if t.kind == Tile::LooseFloor {
@@ -376,7 +418,7 @@ fn spawn_edge(b: &mut B, dx: i32, dy: i32) {
         let near = if dy > 0 { row == ROWS - 1 } else { (dx >= 0 || col >= COLS - EDGE_COLS) && (dx <= 0 || col < EDGE_COLS) && (dy == 0 || row == 0) };
         if near {
             let kind = if dy > 0 { Tile::Floor } else { Tile::Wall };
-            tile(b, col as f32, (ROWS - 1 - row) as f32 * TILE_H, TileRef { kind, flags: 0, modifier: 0 }, 0.0, idx as u8);
+            tile(b, col as f32, (ROWS - 1 - row) as f32 * TILE_H, TileRef { kind, flags: 0, modifier: 3 }, 0.0, idx as u8);
         }
     }
 }
@@ -443,9 +485,8 @@ pub fn wobble(m: u8, alpha: f32) -> (f32, f32) {
     (WOBBLE_DY * amp * s.abs(), WOBBLE_ROLL * amp * s)
 }
 
-/// Pressure plates stand out by 10% of the slab thickness (SLAB = 0.3 world units, so 0.03, about one screen pixel of the
-/// 63-px row) while up; pressed (link timer > 1, docs/tiles.md 4.2) they are at floor level. Visual only.
-pub const PLATE_LIFT: f32 = 0.1 * SLAB;
+/// Pressure plates stand out by one screen pixel of the 63-px row (a third of the slab thickness) while up; pressed (link timer > 1, docs/tiles.md 4.2) they are at floor level. Visual only.
+pub const PLATE_LIFT: f32 = TILE_H / TILE_H_PX as f32;
 pub fn plate_lift(timer: u8) -> f32 {
     if timer > 1 { 0.0 } else { PLATE_LIFT }
 }
@@ -523,25 +564,29 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
     };
     match t.kind {
         Empty => {}
-        // textured: one row tall, so the faces of stacked walls and of the floor above do not overlap (z-fighting)
-        // dungeon: the face image on the block and the top strip as a thin cap on its top face; palace: built brick faces
-        Wall => match ex.map(|w| w.mat).or_else(|| b.tiles.and_then(|s| s.palace_wall(b.room, idx))) {
-            Some(m) => {
-                let top = y + TILE_H - SLAB;
-                match piece(Role::WallTop) {
-                    Some(cap) => {
-                        b.slab(&m, x, y - SLAB, top - CAP);
-                        b.slab(&cap.mat, x, top - CAP, top);
-                    }
-                    None => {
-                        b.slab(&m, x, y - SLAB, top);
+        // textured: one row tall (63 px: the face + the 3-row base strip), so the faces of stacked walls and of the floor above do
+        // not overlap (z-fighting). Dungeon: the face of the wall's modifier (neighbours) and the random marks of the original on
+        // it; palace: the brick wall of this room, row and column (`tiles::palace_wall`)
+        Wall => {
+            let dungeon = b.tiles.and_then(|s| s.wall_face(t.modifier));
+            match dungeon.clone().or_else(|| b.tiles.and_then(|s| s.palace_wall(b.room, idx))) {
+                Some(m) => {
+                    b.slab(&m, x, y - SLAB, y - SLAB + TILE_H);
+                    if dungeon.is_some() {
+                        for mk in crate::tiles::dungeon_wall_marks(b.room, idx as usize / COLS, idx as usize % COLS, t.modifier) {
+                            if let Some(tex) = b.tiles.and_then(|s| s.mark(mk.id)).cloned() {
+                                let lo = Vec3::new(x + px_w(mk.x as f32), y - SLAB + px_h(mk.up as f32), SLAB_FRONT);
+                                let e = b.put_id(&tex.mat, lo, lo + Vec3::new(px_w(tex.w), px_h(tex.h), 0.004));
+                                b.cmds.entity(e).insert(bevy::light::NotShadowCaster);
+                            }
+                        }
                     }
                 }
+                None => {
+                    b.slab(&stone, x, y - SLAB, y + TILE_H);
+                }
             }
-            None => {
-                b.slab(&stone, x, y - SLAB, y + TILE_H);
-            }
-        },
+        }
         Skeleton => match b.items.and_then(|(i, set)| Some((i.skeleton[set].clone()?, i.mat.clone()))) {
             // the bones as a voxel relief standing on the plain floor, centred on the tile, behind the figures (z 0.25)
             Some((m, mat)) => {
@@ -564,7 +609,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                 Sword => b.put(&metal, Vec3::new(x + 0.2, y, -0.05), Vec3::new(x + 0.8, y + 0.05, 0.05)),
                 Debris => b.put(&dark, Vec3::new(x + 0.2, y, -0.2), Vec3::new(x + 0.8, y + 0.15, 0.2)),
                 // palace balcony: the window (floor rows cut) on the back wall, its arch above it
-                _ => back_panel(b, &piece, x, y),
+                _ => back_panel(b, &piece, x, y, 0.0),
             }
         }
         LooseFloor => {} // its own entity, spawn_tiles
@@ -618,7 +663,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                 floor(b, &fl);
                 // palace lattice support: its arch panel on the back wall instead of the stone column
                 match piece(Role::BackPanel) {
-                    Some(_) => back_panel(b, &piece, x, y),
+                    Some(_) => back_panel(b, &piece, x, y, 0.0),
                     None => column(b, &stone, 0.5, TILE_H),
                 }
             }
@@ -632,8 +677,9 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
         }
         SmallLattice | LatticeLeft | LatticeRight => {
             floor(b, &fl);
+            // record +2 = -10: the 43-px arch pieces stand 10 px up, so with the 7-px frieze they fill the 60 px under the slab above
             match piece(Role::BackPanel) {
-                Some(_) => back_panel(b, &piece, x, y),
+                Some(_) => back_panel(b, &piece, x, y, 10.0),
                 None => b.put(&metal, Vec3::new(x, y, -0.5), Vec3::new(x + 1.0, y + TILE_H * 0.9, -0.45)),
             }
         }
@@ -808,14 +854,13 @@ const FLAME_SINK: f32 = 1.0;
 const DEBRIS_LAYER: f32 = 1.0 / 32.0;
 const EXIT_Z: [f32; 4] = [-0.33, -0.4, -0.5, -0.58];
 
-/// Height of the dungeon wall's top strip cap (on top of the face block, no coplanar faces).
-const CAP: f32 = 0.01;
 /// Back-wall depth of the balcony windows and lattice arches (the back wall's front face is at -0.9).
 const BACK_Z: f32 = -0.88;
 
-/// The palace balcony window / lattice arch panel on the back wall, standing on the floor, its top piece above it.
-fn back_panel(b: &mut B, piece: &dyn Fn(Role) -> Option<Tex>, x: f32, y: f32) {
+/// The palace balcony window / lattice arch panel on the back wall, standing on the floor (`lift` px up), its top piece above it.
+fn back_panel(b: &mut B, piece: &dyn Fn(Role) -> Option<Tex>, x: f32, y: f32, lift: f32) {
     if let Some(p) = piece(Role::BackPanel) {
+        let y = y + px_h(lift);
         b.sprite(&p, Vec3::new(x, y, BACK_Z));
         if let Some(t) = piece(Role::BackTop) {
             b.sprite(&t, Vec3::new(x, y + px_h(p.h), BACK_Z));
@@ -961,8 +1006,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plate_lift_is_ten_percent_of_the_slab_and_zero_when_pressed() {
-        assert!((PLATE_LIFT - 0.03).abs() < 1e-6);
+    fn plate_lift_is_one_pixel_and_zero_when_pressed() {
+        assert!((PLATE_LIFT - 2.0 / 63.0).abs() < 1e-6 && PLATE_LIFT < SLAB);
         assert_eq!(plate_lift(0), PLATE_LIFT);
         assert_eq!(plate_lift(1), PLATE_LIFT); // pops up when the timer reaches 1
         assert_eq!(plate_lift(5), 0.0);

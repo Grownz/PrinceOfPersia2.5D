@@ -379,7 +379,7 @@ Notes:
 
 - `0000:A222` (called from A1C2 when the current cell is type 0, 9, 12 or 26): if the cell kind at `5A8E[col]` is 20 (Wall) it draws chtab 7, id 2, i.e. resource **362** (`0000:A25E..A27E`) **[V code, I image: VDUNGEON 362 = 25x12, VPALACE 362 = 25x13]**. For kind 7 or 12 in the palace only, chtab 6 with an id from table `ds:27A6` (`A23D`).
 - `0000:A9DD` path `AA25 -> AB3A`: current cell type 20 (Wall). If palace flag is 0 or adapter is not 5, draw chtab 7 with id `T27BA[mod & 7Fh]` at `[5AA4]` (y) and `[4364]` (x), via `0000:AD70`, then (adapter not 1 or 2) `0000:C357` with 1. **[V]**
-- Table `ds:27BA` (16 bytes are used; index 0..15). Real levels contain only modifier 0 and 1 for walls (LEVELS.DAT, all 16 levels, counted by `dump_png`: dungeon 0:2287, 1:243; palace 0:1701, 1:90) **[V]**. So:
+- Table `ds:27BA` (16 bytes are used; index 0..15). **Correction (section 19): the index is the runtime modifier from the neighbours, not the level's bit.** Real levels contain only modifier 0 and 1 for walls (LEVELS.DAT, all 16 levels, counted by `dump_png`: dungeon 0:2287, 1:243; palace 0:1701, 1:90) **[V]**. So:
   - mod 0 -> `27BA[0] = 08h` -> resource **368** (dungeon 32x60, palace 32x12 1bpp)
   - mod 1 -> `27BA[1] = 0Ah` -> resource **370** (dungeon 32x60, palace 32x11 1bpp)
   - Index 2..15 is not used by level data. Values beyond index 15 are text, so the table is 16 entries long in practice.
@@ -705,15 +705,15 @@ Sources: two independent passes over PRINCE.EXE v1.1 (fringe/wall/palace tables,
 
 | tile | textured with | verdict |
 |---|---|---|
-| Wall, dungeon | face 368 (mod 0) / 370 (mod 1) on the one-row block, top strip 367 / 369 (`ds:27B6`, static V) as a 0.01 cap on the block top | looks right; the 367/369 role follows 12.1 (static) against the runtime "floor strip" reading (12.2); edge pieces 373..377 and the face 362 are left out (random-mark rule and 2D perspective pieces, the 3D block has its own sides) |
-| Wall, palace | built faces: 4 courses of 15 rows in palette 360 colours 1..4 / 6..9 (random per brick, as SDLPoP's generate_wall_pattern, from memory), mortar and joints in 14, light edge 11, one 1-bit strip 366..371 per course as grain in 14; 8 variants, chosen per room and tile | reconstruction, convincing at game distance, not the exact original pattern (course heights and strip positions are guesses); 361, 372..374, 284 not used |
+| Wall, dungeon | one 32x63 block texture per runtime modifier (face 368 / 370 / 366 / 364 + base strip 367 / 369 / 365 / 363 below it, section 19), plus the seeded marks of the original as cut-outs on the front | rules read from `A9DD`, `A639`, `B656`, `C357`; see section 19 (supersedes the 368 / 370 by level modifier and the top cap) |
+| Wall, palace | exact VGA path (section 19): room colour table (`1763`), courses 20 / 21 / 19 rows with 32 / 16+16 / 8+24 bricks, 3-row base band, five mono speckle strips from the tile seed; one baked 32x63 texture per (room, row, column) | rules read from `C357..C5BC`; palette mapping 96 + index and the mono colour 6 = palette 200 index 6 are INFERRED |
 | Chomper | blade 1301 + k, front slice 1306 + k (in front of the figures), upper teeth 1311..1313 (k >= 2, bottom 24 / 34 / 37 px above the floor), k = ds:2754 [3,2,0,1,4,3,3][min(mod & 7F, 6)]; floor rows cut, the 47 px stretched to the slab above | looks right (closed, open, both sets); blood strips 1314..1323 left out (id source not traced) |
 | Spikes | floor 1327 / 1333 / 243 as before; back 1328..1332, right piece 1334..1338 in the next column, front 1339..1343, frame = modifier (>= 0x80: 5), tables after ds:2774 | looks right in both sets; the right and front series order is inferred from the back table |
 | Gate | unchanged: post 249 at the right edge, 3D grille across the corridor | 246 / 247 / 248, 250..259 (bar slices) and 260..268 (perspective frames, wedge) not used: the 3D grille replaces them |
 | ExitLeft / ExitRight | frames and lintels as before; door panel = 234 at the bottom edge (modifier px above the floor) plus 233 slices up to the lintel, centred on the doorway between the 237 / 239 posts, ExitLeft only (sheet); stairs 344 behind the door when the room is not the level's start room (SDLPoP rule from memory) | looks right (closed, half open with stairs); 299 left out |
 | Torch / TorchDebris | stub 346 on the back wall under the flame | dungeon right; palace 346 shows a blue lattice strip beside the holder: doubtful |
 | BalconyLeft / Right (palace) | window 1210 / 1212 (floor rows cut) on the back wall, arch 1211 / 1213 above | looks right (level 6 room 18); 1313 at BalconyLeft left out (chomper id, role unclear) |
-| LatticeSupport / SmallLattice / LatticeLeft (palace) | arches 1203 / 1204 / 1205 on the back wall, standing on the floor (1204 / 1205 are R medium, taken so the arcade is uniform) | plausible; LatticeRight (no image) keeps the procedural plate and stands out; LatticePillar keeps column 295 (1201 unused) |
+| LatticeSupport / SmallLattice / LatticeLeft / LatticeRight (palace) | record +0 of types 26..29 (A7BC): 1201 capital, 1203, 1204, 1205 arch pieces (10 px up for the last three) with the frieze 1209 (record +9 / +11) on top, on the back wall; section 19 | VERIFIED rule (code + composite of level 4 room 5); supersedes 1203 / 1204 / 1205 on S / s / L and the plain plate on R |
 | Floor extras | none added: 251 / 253 / 256 / 274 (gate column pieces per 12.1), 363 / 367 floor reading, 1202, 345, palace caps 1278..1283 (trigger not traced) | left out |
 | LooseFloor | normal floor + wobble as before; 252..259 belong to the gate (12.1), so no crumble frames | unchanged |
 
@@ -798,7 +798,7 @@ and timing are unchanged; every added piece keeps the old box when its image is 
 |---|---|---|
 | side walls (row 1, cols 0 / 9) | stone boxes | built palace wall faces (section 13), variant per tile of room 1 |
 | floors (row 2) | stone slabs | palace floor texture 241 / 242 / 243 |
-| lattice row (row 0) | metal plates | arches 1203 / 1204 / 1205 on the back wall (LatticeRight has no image: procedural plate, as in the levels) |
+| lattice row (row 0) | metal plates | arch pieces by tile kind (section 19: 1201 / 1203 / 1204 / 1205 + frieze 1209) |
 | arcade columns (LatticePillar, cols 3 / 8) | stone boxes | column 295, voxel (round) or flat as `column_style` |
 | left front column (PV 951 x 64..73, seen through the bed gap) | 10-px stone box x 68..78 z 0.25..0.5 | PV 952's 10-px shaft (palette 950): voxel revolved about its centre, or a solid textured box, x 64..74, axis z 0.52 (through the bed plane), from the bed's bottom line 183 to the row top; procedural: 10-px stone box at the same place |
 | right front column (PV 951 x 245..254, redrawn by PV 952 at x 240 in front of the actors) | stone box x 240..256 z 0.8..1.2 | the same PV 952 shaft at x 245..255, axis z 1.0, same height; procedural: 10-px stone box there |
@@ -904,3 +904,59 @@ the shadow maps paid back about 0.1 ms).
 Tests: `tiles::tests::background_pieces_follow_draw_tile_right`, `room::tests::slabs_and_walls_close_against_the_back_wall`
 (spawns a room and an edge place into a bare World and checks every slab ends inside the back wall box),
 `room::tests::tile_key_changes_only_with_the_look` (left-neighbour rebuild).
+
+## 19. Wall and arcade arrangement (second look at the same code)
+
+Read in `PRINCE.EXE` with `tools/disasm`: `B656` (load_alter_mod), `A9DD`, `A639`, `A756`, `C357`, `1763`, `ABDA`, `AC56`, `AD70`, `AF1C`, `0C83:0412`.
+Port: `tiles.rs` (`wall_modifier`, `WALL_FACE`, `dungeon_wall_marks`, `palace_pattern`, `palace_wall`, unit tests), `room.rs` (`wall_modifier`, Wall arm, `back_panel`).
+
+**Wall modifier [VERIFIED, `B656..B7B9`].** At level load a wall's modifier byte becomes `(raw << 7) | n`, n = 1 if the **right** neighbour is a
+wall, 2 if the **left** one is, 3 for both; the neighbour across a room border is tile 9 / 0 of the linked room, a missing room counts as a wall.
+Everything that selects an image uses `modifier & 0x7F` = n (`A9DD`, `A639`, `C357`); the level's bit (0x80) is only read for the palace crack 284.
+So the earlier "368 for level modifier 0, 370 for 1" was wrong: the variant follows the neighbours (the level bit has no effect on the dungeon look).
+
+**Dungeon wall [VERIFIED]:** face `360 + ds:27BA[n]` = 368 / 370 / 366 / 364 (60 rows, bottom at the row line - 3) and below it, in the same
+cell, the 3-row strip `ds:27B6[n]` = 367 / 369 / 365 / 363 (`A639`, bottom at the row line): the strip is the wall's **base** (the same 3 rows as the
+floor's front lip), not a top cap (the earlier port put it on top). Then `C357` (seed `ds:2288[row]` {0, 10, 20} + room + column, `random(n)` =
+LCG 214013 / 2531011, high word % (n + 1), one random(1) thrown away; draws a1 = random(1), a4 = random(4), b1 = random(1), b4 = random(4)):
+
+| modifier | marks (x from the tile's left, bottom `up` px above the row line) |
+|---|---|
+| 0 | 1 in 7: crack 374 + random(1) at x 0, up 58 / 41 |
+| 1 | 1 in 5: plain top course 373 (x 0, up 42, opaque); joint 371 + a1 at x 8 + a4, up 21; 1 in 5: edge piece 376 / 377 (random(3): x 24 up 52 / 42, or x 5 + a4 up 31 / 21); 1 in 5: crack (random(3)) |
+| 2 | joints 371 + a1 (x 8 + a4, up 21) and 371 + b1 (x b4, up 0); 1 in 5: edge piece (index 2 / 3); 1 in 5: crack (random(4)) |
+| 3 | as 1 plus the bottom joint; edge piece random(3), crack random(4) |
+
+Crack x: index 2 / 3 = 14 + a4 - a1, index 4 = 6 + b4 - b1; heights 58, 41, 37, 20, 16. The faces have no vertical joints of their own where the marks
+go, so the brick joints of adjacent walls do not line up in a grid: that is the original look. **INFERRED:** that these are drawn as the original's
+transparent blit (0x10) and 373 opaque (blit 0); the 373 corners are index 0 and drawn transparent here.
+
+**Palace wall [VERIFIED code, INFERRED palette]:** the VGA palace path skips the images and draws rectangles from the room's colour table
+(`1763`: seed = room, random(1) discarded, per tile row 0..2 four courses of 11 bricks, colour 0x66 + random(3) for courses 0 and 2, 0x61 + random(3) for
+1 and 3, equal neighbours redrawn). Tile (row, col): course 0 = one 32-px brick (20 rows, colour [0][col]); course 1 = 16 + 16 px (21 rows, [1][col],
+[1][col + 1]); course 2 = 8 + 24 px (19 rows, [2][col], [2][col + 1]); base band 3 rows ([3][col]); so the bricks of a course straddle the tile
+border. Over them five mono strips (blit 0x46): 363..365 (8x7) at x 24, 366..368, 369..371, 372..374 and, on the band, 375..377, each picked by the
+tile's seeded random(2) in that order. Colour = palette 360 index (colour - 96, the tans 1..4 / 6..9 are near identical); the mono colour is
+palette 200 index 6 (cream, ffeaaa) [INFERRED from blit 0x46 and the DAC layout]. The earlier reconstruction (4 courses of 15 rows, dark joints,
+colour pairs swapped) is gone.
+
+**Arcade [VERIFIED, composite of level 4 room 5 checked]:** the 12-byte records of types 26..29 (`ds:25B0 + 12 * type`; section 3 stopped at 25) are
+`26: +0 = 1`, `27: +0 = 3`, `28: +0 = 4`, `29: +0 = 5`, each with +9 = 9 and +11 = 0xCB (-53 px): `A7BC` draws `200 + 1200` slot **1201 / 1203 / 1204 / 1205**
+at the row line - 3 (+2 = 0xF6 = 10 px up for 27..29) and `A9DD` the 7-row frieze **1209** 53 px up. 1201 is the capital (32x53), 1203 the left
+haunch, 1204 the middle arch, 1205 the right haunch (43 rows each): an arcade row `S L R S L R S` is capital, middle arch, right haunch, capital and joins
+without a seam; 53 (or 43 + 10) + 7 = 60 px fill the room height under the slab above. The earlier mapping (S = 1203, s = 1204, L = 1205, R = none) came from
+the marker probe and shifted every arch by one with a plain plate for R. Pillars (kind 25) keep column 295; 1202 (32x3) is still unused.
+Not changed: the balcony arch 1211 / 1213 is drawn by the original in the cell above (`A222`, from 60 px up), the port stacks it on the window.
+
+## 20. Slab thickness
+
+Measured in the original [VERIFIED by sizes]: a floor tile = top surface 13 rows (241 base 32x13, right piece 242) + **front lip 3 rows** (243, 236, 296, 349
+are 32x3); the wall block carries the same 3 rows as its base strip (section 19), so a 63-px row = 60 px of clear height + a 3-px slab. The vertical scale is
+1 px = 2 / 63 world units (`px_h`), so the slab is **3 px = 0.0952 units** (cabinet projection: heights are not foreshortened). The port had 0.3 (9.45 px,
+3.15x too thick; the front face showed the whole 32x16 floor image squeezed in, 3 lip rows over 9.45 px).
+
+Port: `room::SLAB` = `3 * TILE_H / TILE_H_PX`; the room height under the slab above is now 60 px = 1.905 (was 1.7). Floor boxes use `slab_cube`: top face = the 13 surface
+rows, front and side faces = the 3 lip rows (aspect 32 : 3 matches the 1 : 0.095 face). Pressure plates: one pixel up (`PLATE_LIFT` = 2 / 63, was 10 % of the
+slab). `SLAB_BACK`, the torch shadow settings, the back wall and the abutting slabs are unchanged (light tightness: the slabs still end inside the back wall box).
+Things that hang from the slab above (voxel columns, chomper blade stretch `TILE_H - SLAB`, the arcade pieces) grow with the clearance (+0.2 = 6.5 px); the
+hang / climb poses are checked by `kid::tests::hands_lie_on_the_ledge_top_and_the_body_clears_the_slab` and `real_ledge_poses_stay_out_of_the_slab` (z only, slab rows 10 -> 3).

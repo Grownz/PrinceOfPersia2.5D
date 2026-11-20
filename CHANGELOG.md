@@ -3,6 +3,15 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.4.3] - 2026-11-20
+
+### Fixed
+- Tile textures follow the original's drawing rules (PRINCE.EXE draw routines read, docs/texture_inventory.md 19, 20): the
+  dungeon wall face comes from the neighbours (right / left wall, rooms at the edge count as walls) and the 3 px strip is the
+  wall's base; the seeded wall marks (joints, cracks) are drawn; the palace wall uses the real per-room brick pattern; the
+  palace arcade uses the right pieces (capital, left / right ends, middle, frieze) so the arches join seamlessly.
+- Floor slabs are as thick as in the original: the 3-row lip (0.095 units) instead of 0.3, about 3 times too thick before.
+
 ## [0.4.2] - 2026-11-18
 
 ### Fixed

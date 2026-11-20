@@ -483,8 +483,8 @@ mod tests {
         assert_eq!(l.base_color, u.base_color);
     }
 
-    /// The set's pieces through the palace mapping (docs/texture_inventory.md 17): every lattice screen but LatticeRight
-    /// gets its arch, the columns (set and added pillars) image 295, the torches holder 346; walls are built palace faces.
+    /// The set's pieces through the palace mapping (docs/texture_inventory.md 17): every lattice screen
+    /// gets its arch piece and frieze, the columns (set and added pillars) image 295, the torches holder 346; walls are built palace faces.
     #[test]
     fn chamber_pieces_use_the_palace_mapping() {
         use crate::tiles::{pieces, tile_images, Role};
@@ -495,7 +495,9 @@ mod tests {
         for idx in 0..10 {
             let t = l.tile_at(1, idx).kind;
             let arch = pieces(t, 0, true, palace).iter().any(|(r, _)| *r == Role::BackPanel);
-            assert_eq!(arch, t != Tile::LatticeRight, "{t:?}");
+            let lattice = matches!(t, Tile::LatticeSupport | Tile::SmallLattice | Tile::LatticeLeft | Tile::LatticeRight);
+            assert_eq!(arch, lattice, "{t:?}");
+            assert_eq!(pieces(t, 0, true, palace).iter().any(|(r, _)| *r == Role::BackTop), lattice, "{t:?}");
         }
         assert_eq!(l.tile_at(1, 13).kind, Tile::LatticePillar);
         assert_eq!(tile_images(Tile::LatticePillar, 0, palace).1, Some(295));

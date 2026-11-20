@@ -16,8 +16,6 @@ pub fn resolve(v: u8, present: &impl Fn(u16) -> bool) -> Option<u16> {
 /// What an extra piece is for; room.rs places it on the 3D tile (docs/texture_inventory.md 8-12, decisions in 13).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
-    /// top strip of a dungeon wall (chtab 7 table ds:27B6), on the wall block's top face
-    WallTop,
     /// chomper blade (1301 + k), its floor rows cut off; behind the figures
     JawBack,
     /// chomper front slice (1306 + k), floor rows cut off; in front of the figures
@@ -52,15 +50,13 @@ const SPIKE_RIGHT: [u16; 10] = [0, 1334, 1335, 1336, 1337, 1338, 1337, 1335, 133
 const SPIKE_FORE: [u16; 10] = [0, 1339, 1340, 1341, 1342, 1343, 1342, 1340, 1339, 0];
 
 /// The extra pieces of a tile beyond the floor and the main piece of `tile_images`: (role, resource id), only ids the set
-/// has. `palace`: the palace VGA path skips the chtab-7 wall back and fore pieces (docs 8.0), so palace walls get none here
-/// (their bricks are built by `palace_wall`). Only entries rated V or R high are used (docs 13 lists what was left out).
-pub fn pieces(kind: Tile, modifier: u8, palace: bool, present: impl Fn(u16) -> bool) -> Vec<(Role, u16)> {
+/// has. Walls get none (the base strip is part of their block texture, the palace bricks come from `palace_wall`); `_palace` is
+/// kept for the callers. Only entries rated V or R high are used (docs 13 lists what was left out).
+pub fn pieces(kind: Tile, modifier: u8, _palace: bool, present: impl Fn(u16) -> bool) -> Vec<(Role, u16)> {
     use Role::*;
     use Tile::*;
     let m = modifier & 0x7F;
     let mut v: Vec<(Role, u16)> = match kind {
-        // ds:27B6: modifier 0 -> 367, 1 -> 369 (only 0 and 1 occur in the levels)
-        Wall if !palace => vec![(WallTop, if m == 1 { 369 } else { 367 })],
         Chomper => {
             let k = CHOMPER_FRAME[m.min(6) as usize];
             let mut v = vec![(JawBack, 1301 + k), (JawFore, 1306 + k)];
@@ -79,10 +75,12 @@ pub fn pieces(kind: Tile, modifier: u8, palace: bool, present: impl Fn(u16) -> b
             let r = if kind == BalconyLeft { [10, 11] } else { [12, 13] };
             [(BackPanel, r[0]), (BackTop, r[1])].into_iter().filter_map(|(role, v)| Some((role, resolve(v, &present)?))).collect()
         }
-        // 1203 is R high; 1204 / 1205 (R medium) are taken too so the arcade does not mix arches and plain boxes
-        LatticeSupport => vec![(BackPanel, 1203)],
-        SmallLattice => vec![(BackPanel, 1204)],
-        LatticeLeft => vec![(BackPanel, 1205)],
+        // record +0 of types 26..29 (A7BC, ds:25B0 + 12 * type) = 1, 3, 4, 5 -> 1201 capital, 1203 / 1204 / 1205 arch pieces, each
+        // with the 7-row frieze 1209 (record +9 = 9, +11 = -53 px) on top of it: docs/texture_inventory.md 19
+        LatticeSupport => vec![(BackPanel, 1201), (BackTop, 1209)],
+        SmallLattice => vec![(BackPanel, 1203), (BackTop, 1209)],
+        LatticeLeft => vec![(BackPanel, 1204), (BackTop, 1209)],
+        LatticeRight => vec![(BackPanel, 1205), (BackTop, 1209)],
         _ => vec![],
     };
     v.retain(|&(_, id)| id != 0 && present(id));
@@ -124,51 +122,173 @@ pub fn floor_rows(role: Role, h: usize) -> usize {
     }
 }
 
-/// Size of a palace wall face (palette 360 indices).
-pub const PALACE_WALL: (usize, usize) = (32, 60);
+/// The original's random(n) (`0C83:0412`): seed = seed * 214013 + 2531011, result = high word % (n + 1). The wall drawing
+/// reseeds it per tile, so everything below is a pure function of (room, row, column).
+pub struct Rnd(pub u32);
 
-/// A palace wall face, `PALACE_WALL` pixels of palette 360. The VGA palace path fills brick rectangles with random colours
-/// (as SDLPoP's generate_wall_pattern, from memory: courses alternate between colours 1..4 and 6..9 of palette 360, which are
-/// exactly the near-identical tans of VPALACE 360) and draws the 1-bit chtab-7 strips 366..371 over them (docs 10.1, R high).
-/// Reconstruction: 4 courses of 15 rows, mortar and joints in colour 14, a light top edge (11) per brick, one 1-bit strip
-/// per course as grain in colour 14; brick joints and colours from `seed`.
-pub fn palace_wall(grain: &[image::Image], seed: u32) -> Vec<u8> {
-    let (w, h) = PALACE_WALL;
-    let mut s = seed.wrapping_mul(2654435761).wrapping_add(0x9E37);
-    let mut rnd = |n: u32| {
-        s ^= s << 13;
-        s ^= s >> 17;
-        s ^= s << 5;
-        s % n
+impl Rnd {
+    pub fn next(&mut self, n: u32) -> u32 {
+        self.0 = self.0.wrapping_mul(214013).wrapping_add(2531011);
+        (self.0 >> 16) % (n + 1)
+    }
+}
+
+/// Seed of a wall tile (`C3A6`): `ds:2288[row]` (0, 10, 20) + drawn room + column, as a sign-extended word; one random(1) is
+/// then thrown away (`C3B6`).
+fn wall_rnd(room: usize, row: usize, col: usize) -> Rnd {
+    let mut r = Rnd((([0u16, 10, 20][row.min(2)] + room as u16 + col as u16) as i16) as i32 as u32);
+    r.next(1);
+    r
+}
+
+/// Wall modifier of the original's runtime tile (`load_alter_mod` `B656`): bit 0 = the right neighbour is a wall, bit 1 = the
+/// left neighbour is one (outside the level counts as a wall). The level's own modifier bit becomes 0x80 and is not read.
+pub fn wall_modifier(left_wall: bool, right_wall: bool) -> u8 {
+    right_wall as u8 | (left_wall as u8) << 1
+}
+
+/// Wall face by `modifier & 0x7F` (`ds:27BA`: 368, 370, 366, 364) and the 3-row base strip drawn below it (`ds:27B6`: 367, 369,
+/// 365, 363): face 60 rows + strip 3 rows = the 63-px row. Modifiers above 3 do not occur (dungeon).
+pub const WALL_FACE: [u16; 4] = [368, 370, 366, 364];
+pub const WALL_STRIP: [u16; 4] = [367, 369, 365, 363];
+
+/// A decoration the original draws on a dungeon wall (`C5BF..C81A`, `ABDA`, `AC56`): image `id` (chtab 7), left edge `x` px
+/// from the tile's left, bottom edge `up` px above the row's bottom line (the block's bottom, = the floor line minus the slab).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mark {
+    pub id: u16,
+    pub x: i32,
+    pub up: i32,
+}
+
+/// The marks of a dungeon wall tile, in drawing order (docs/texture_inventory.md 19): the seeded random picks joints between
+/// the bricks of the middle and bottom course (371 / 372), sometimes a plain top course (373) and a few cracks (374..377).
+pub fn dungeon_wall_marks(room: usize, row: usize, col: usize, modifier: u8) -> Vec<Mark> {
+    let m = modifier & 0x7F;
+    if m > 3 {
+        return vec![];
+    }
+    let mut r = wall_rnd(room, row, col);
+    let (a1, a4, b1, b4) = (r.next(1) as i32, r.next(4) as i32, r.next(1) as i32, r.next(4) as i32);
+    let mut v = vec![];
+    let mid = Mark { id: 371 + a1 as u16, x: 8 + a4, up: 21 };
+    let bot = Mark { id: 371 + b1 as u16, x: b4, up: 0 };
+    let top = Mark { id: 373, x: 0, up: 42 };
+    // AC56: id 376 + (i & 1); x = 24 for i < 2, else 8 + (a4 - 3); bottom 52 / 42 / 31 / 21 px up
+    let edge = |i: u32| Mark { id: 376 + (i & 1) as u16, x: if i < 2 { 24 } else { 8 + a4 - 3 }, up: [52, 42, 31, 21][i as usize] };
+    // ABDA: id 374 + (i & 1); x from the joint offsets; bottom 58 / 41 / 37 / 20 / 16 px up
+    let crack = |i: u32| {
+        let x = match i {
+            0 | 1 => 0,
+            2 | 3 => 8 + (a4 - a1) + 6,
+            _ => (b4 - b1) + 6,
+        };
+        Mark { id: 374 + (i & 1) as u16, x, up: [58, 41, 37, 20, 16][i as usize] }
     };
+    match m {
+        0 => {
+            if r.next(6) == 0 {
+                v.push(crack(r.next(1)));
+            }
+        }
+        1 => {
+            if r.next(4) == 0 {
+                v.push(top);
+            }
+            v.push(mid);
+            if r.next(4) == 0 {
+                v.push(edge(r.next(3)));
+            }
+            if r.next(4) == 0 {
+                v.push(crack(r.next(3)));
+            }
+        }
+        2 => {
+            v.push(mid);
+            v.push(bot);
+            if r.next(4) == 0 {
+                v.push(edge(r.next(1) + 2));
+            }
+            if r.next(4) == 0 {
+                v.push(crack(r.next(4)));
+            }
+        }
+        _ => {
+            if r.next(4) == 0 {
+                v.push(top);
+            }
+            v.push(mid);
+            v.push(bot);
+            if r.next(4) == 0 {
+                v.push(edge(r.next(3)));
+            }
+            if r.next(4) == 0 {
+                v.push(crack(r.next(4)));
+            }
+        }
+    }
+    v
+}
+
+/// Size of a palace wall tile texture: 60 rows of face + the 3-row base band (palette 360 indices, `MONO` = the speckle colour).
+pub const PALACE_WALL: (usize, usize) = (32, 63);
+/// Index after palette 360's 16 entries: colour 6 of palette 200, the colour of the mono-blitted speckle strips (blit `0x46`).
+pub const MONO: u8 = 16;
+
+/// A room's brick colour table (`1763`, seeded by the room number): 3 tile rows x 4 courses x 11 bricks, screen colours 102..105
+/// for the courses 0 and 2 and 97..100 for 1 and 3 (palette 360 index = colour - 96); neighbours in a course differ.
+pub fn palace_pattern(room: usize) -> [[[u8; 11]; 4]; 3] {
+    let mut r = Rnd(room as u32);
+    r.next(1);
+    let mut t = [[[0u8; 11]; 4]; 3];
+    for row in t.iter_mut() {
+        for (course, bricks) in row.iter_mut().enumerate() {
+            let (base, mut last) = (if course % 2 == 0 { 0x66 } else { 0x61 }, 255);
+            for b in bricks.iter_mut() {
+                let mut c = base + r.next(3) as u8;
+                while c == last {
+                    c = base + r.next(3) as u8;
+                }
+                (*b, last) = (c, c);
+            }
+        }
+    }
+    t
+}
+
+/// The wall of palace tile (`room`, `row`, `col`) as the VGA palace path draws it (`C3E5..C5BC`): brick rectangles from the room's
+/// colour table (course 0: one 32-px brick, course 1: 16 + 16, course 2: 8 + 24, so the joints of a course run on into the next
+/// column; 20 / 21 / 19 rows), the 3-row base band, and five mono speckle strips picked by the tile's seeded random (ids 363..365 at
+/// x 24, 366..368, 369..371, 372..374 and, on the band, 375..377). `strip(id)` = the strip's image (set pixels = nonzero).
+pub fn palace_wall<'a>(room: usize, row: usize, col: usize, pat: &[[[u8; 11]; 4]; 3], strip: impl Fn(u16) -> Option<&'a image::Image>) -> Vec<u8> {
+    let (w, h) = PALACE_WALL;
+    let (c, col) = (&pat[row.min(2)], col.min(9));
     let mut px = vec![0u8; w * h];
-    for c in 0..4 {
-        let (y0, base) = (c * 15, if c % 2 == 0 { 1 } else { 6 });
-        let joint = 6 + rnd(20) as usize;
-        let (left, right) = (base + rnd(4) as u8, base + rnd(4) as u8);
-        let g = (!grain.is_empty()).then(|| &grain[rnd(grain.len() as u32) as usize]);
-        for y in 0..15 {
-            for x in 0..w {
-                px[(y0 + y) * w + x] = if y == 0 || x == joint {
-                    14
-                } else if y == 1 {
-                    11
-                } else if g.is_some_and(|g| y >= 2 && y - 2 < g.height && x < g.width && g.pixels[(y - 2) * g.width + x] != 0) {
-                    14
-                } else if x < joint {
-                    left
-                } else {
-                    right
-                };
+    let mut fill = |y0: usize, y1: usize, x0: usize, x1: usize, colour: u8| {
+        for y in y0..y1 {
+            px[y * w + x0..y * w + x1].fill(colour - 96);
+        }
+    };
+    fill(0, 20, 0, 32, c[0][col]);
+    fill(20, 41, 0, 16, c[1][col]);
+    fill(20, 41, 16, 32, c[1][col + 1]);
+    fill(41, 60, 0, 8, c[2][col]);
+    fill(41, 60, 8, 32, c[2][col + 1]);
+    fill(60, 63, 0, 32, c[3][col]);
+    let mut r = wall_rnd(room, row, col);
+    // (first id, x, bottom row): the speckle strips are drawn over the bricks, the last one over the band
+    for (base, x, bottom) in [(363u16, 24i32, 6i32), (366, 0, 25), (369, 0, 46), (372, 0, 59), (375, 0, 62)] {
+        let Some(im) = strip(base + r.next(2) as u16) else { continue };
+        for y in 0..im.height {
+            for xx in 0..im.width {
+                let (dx, dy) = (x + xx as i32, bottom - im.height as i32 + 1 + y as i32);
+                if im.pixels[y * im.width + xx] != 0 && (0..w as i32).contains(&dx) && (0..h as i32).contains(&dy) {
+                    px[dy as usize * w + dx as usize] = MONO;
+                }
             }
         }
     }
     px
-}
-
-/// Wall variant for a cell (palace walls): a fixed hash of room and tile, so a room looks the same on every visit.
-pub fn wall_variant(room: usize, idx: u8, n: usize) -> usize {
-    (room.wrapping_mul(31).wrapping_add(idx as usize).wrapping_mul(2654435761) >> 7) % n.max(1)
 }
 
 /// Record values (+0 base, +3 right piece, +8 front lip) of the floor of a tile type; None = no textured floor.
@@ -190,7 +310,8 @@ fn floor_record(kind: Tile) -> Option<[u8; 3]> {
 }
 
 /// Image ids of a tile's textured pieces: (floor [base, right, lip], extra piece). The extra piece is the pillar column,
-/// the door post, the exit frame (its lintel is id + 1) or the wall face (chtab 7: 360 + T27BA[modifier], docs 3a).
+/// the door post, the exit frame (its lintel is id + 1) or the wall face (chtab 7: 360 + T27BA[modifier], docs 3a; the modifier
+/// is the runtime one, from the wall's neighbours: `wall_modifier`).
 /// A record whose images are not in the set falls back to the plain floor; a missing extra piece is None.
 pub fn tile_images(kind: Tile, modifier: u8, present: impl Fn(u16) -> bool) -> (Option<[u16; 3]>, Option<u16>) {
     use Tile::*;
@@ -204,7 +325,7 @@ pub fn tile_images(kind: Tile, modifier: u8, present: impl Fn(u16) -> bool) -> (
         ExitLeft => resolve(37, &present),
         ExitRight => resolve(39, &present),
         // only modifiers 0 and 1 occur in the levels (T27BA[0] = 8, T27BA[1] = 10)
-        Wall => Some(360 + if modifier & 0x7F == 1 { 10 } else { 8 }).filter(|&id| present(id)),
+        Wall => WALL_FACE.get((modifier & 0x7F) as usize).copied().filter(|&id| present(id)),
         _ => None,
     };
     (floor, extra)
@@ -257,8 +378,12 @@ pub struct TileSet {
     /// image ids of the set that decode as 4-bit images (the 1-bit palace wall overlays are left out)
     present: std::collections::HashSet<u16>,
     palace: bool,
-    /// palace wall faces built by `palace_wall` (empty in the dungeon set or without the 1-bit strips)
+    /// palace wall tiles built by `palace_wall`, index room * 30 + tile (rooms 0..=24; empty in the dungeon set)
     walls: Vec<Handle<StandardMaterial>>,
+    /// floor texture -> (surface rows / all rows), for the slab's UVs
+    splits: Vec<(AssetId<StandardMaterial>, f32)>,
+    /// dungeon wall blocks by wall modifier 0..=3: face + 3-row base strip, 32 x 63 px
+    faces: [Option<Handle<StandardMaterial>>; 4],
     /// exit doorway in px from the ExitLeft cell's left edge: (end of the left post in 237, start of the right post in 239 + 32)
     pub exit_gap: Option<(f32, f32)>,
 }
@@ -273,8 +398,8 @@ impl TileSet {
     /// Decode the pieces `tile_images` names. Returns the set, the bytes of RGBA uploaded and log lines for what is missing.
     pub fn load(dat: &Dat, name: &str, palace: bool, imgs: &mut Assets<Image>, mats: &mut Assets<StandardMaterial>) -> (TileSet, usize, Vec<String>) {
         let mut all: HashMap<u16, image::Image> = dat.ids().filter_map(|id| Some((id, image::decode(dat.get(id)?)?))).collect();
-        // palace: the 1-bit wall strips 366..371 (the grain of the brick faces)
-        let grain: Vec<image::Image> = if palace { (366..=371).filter_map(|id| all.remove(&id).filter(|im| im.bpp == 1)).collect() } else { vec![] };
+        // palace: the speckle strips 363..377 drawn over the brick rectangles of the walls
+        let strips: HashMap<u16, image::Image> = if palace { (363..=377).filter_map(|id| Some((id, all.remove(&id)?))).collect() } else { HashMap::new() };
         let decoded: HashMap<u16, image::Image> = all.into_iter().filter(|(_, im)| im.bpp == 4).collect();
         let pal = |id: u16| dat.get(id).and_then(image::palette).unwrap_or_default();
         // chtab 6 uses palette 200, chtab 7 (resources 361..377) palette 360 (docs 4)
@@ -283,7 +408,7 @@ impl TileSet {
             (Some(l), Some(r)) => Some(((opaque_cols(l, 20).map_or(0, |c| c.0) + 1..l.width).find(|&x| l.pixels[20 * l.width + x] == 0).unwrap_or(0) as f32, 32.0 + opaque_cols(r, 20).map_or(r.width, |c| c.0) as f32)),
             _ => None,
         };
-        let mut set = TileSet { floors: HashMap::new(), imgs: HashMap::new(), present: decoded.keys().copied().filter(|&id| id != 200 && id != 360).collect(), palace, walls: vec![], exit_gap };
+        let mut set = TileSet { floors: HashMap::new(), imgs: HashMap::new(), present: decoded.keys().copied().filter(|&id| id != 200 && id != 360).collect(), palace, walls: vec![], faces: [None, None, None, None], splits: vec![], exit_gap };
         let (mut bytes, mut missing) = (0, vec![]);
         let mut texture = |w: usize, h: usize, px: &[u8], pal: &[[u8; 3]], opaque: bool| {
             let mut rgba = Vec::with_capacity(px.len() * 4);
@@ -304,11 +429,12 @@ impl TileSet {
                     missing.push(format!("{name}: {kind:?} floor (record {r:?}) not in the set, plain floor used"));
                 }
             }
-            for m in [0, 1] {
+            for m in 0..4 {
                 let (floor, extra) = tile_images(kind, m, |id| set.present.contains(&id));
                 if let Some(f) = floor.filter(|f| !set.floors.contains_key(f)) {
                     let (w, h, px) = floor_pixels(&decoded[&f[0]], &decoded[&f[1]], &decoded[&f[2]]);
                     let mat = texture(w, h, &px, &p200, true); // black where the original shows the black background
+                    set.splits.push((mat.id(), decoded[&f[0]].height as f32 / h as f32));
                     set.floors.insert(f, mat);
                 }
                 // exit frames: the image without its floor rows, plus the lintel above it
@@ -342,20 +468,55 @@ impl TileSet {
             let mat = texture(im.width, h, &im.pixels[..im.width * h], &p200, false);
             set.imgs.insert(id, Tex { mat, w: im.width as f32, h: h as f32 });
         }
-        if palace {
-            if grain.is_empty() {
-                missing.push(format!("{name}: no 1-bit wall strips 366..371, procedural palace walls"));
-            } else {
-                let (w, h) = PALACE_WALL;
-                set.walls = (0..8).map(|v| texture(w, h, &palace_wall(&grain, v), &p360, true)).collect();
+        // dungeon walls: the face of each modifier with its base strip below, as one 32 x 63 block texture
+        if !palace {
+            for m in 0..4 {
+                let (Some(f), Some(st)) = (decoded.get(&WALL_FACE[m]), decoded.get(&WALL_STRIP[m])) else { continue };
+                if f.width == 32 && f.height == 60 && st.width == 32 && st.height == 3 {
+                    set.faces[m] = Some(texture(32, 63, &[f.pixels.clone(), st.pixels.clone()].concat(), &p360, true));
+                }
+            }
+            // the marks (joints 371 / 372, the plain top course 373, cracks 374..377) as cut-outs
+            for id in 371..=377u16 {
+                let Some(im) = decoded.get(&id).filter(|_| !set.imgs.contains_key(&id)) else { continue };
+                let mat = texture(im.width, im.height, &im.pixels, &p360, false);
+                set.imgs.insert(id, Tex { mat, w: im.width as f32, h: im.height as f32 });
+            }
+        } else {
+            let mono = [p360.clone(), vec![p200.get(6).copied().unwrap_or([255, 255, 255])]].concat();
+            let (w, h) = PALACE_WALL;
+            let pats: Vec<_> = (0..=24).map(palace_pattern).collect();
+            for room in 0..=24usize {
+                for idx in 0..30usize {
+                    let px = palace_wall(room, idx / 10, idx % 10, &pats[room], |id| strips.get(&id));
+                    set.walls.push(texture(w, h, &px, &mono, true));
+                }
+            }
+            if strips.is_empty() {
+                missing.push(format!("{name}: no speckle strips 363..377, palace walls without them"));
             }
         }
         (set, bytes, missing)
     }
 
-    /// Material of a palace wall face for tile `idx` of `room` (None: dungeon set or no strips).
+    /// Material of the palace wall at tile `idx` of `room` (None: dungeon set).
     pub fn palace_wall(&self, room: usize, idx: u8) -> Option<Handle<StandardMaterial>> {
-        self.walls.get(wall_variant(room, idx, self.walls.len())).cloned()
+        self.walls.get(room.min(24) * 30 + idx as usize).cloned()
+    }
+
+    /// Material of a dungeon wall block for the runtime wall modifier (None: palace set or images missing).
+    pub fn wall_face(&self, modifier: u8) -> Option<Handle<StandardMaterial>> {
+        self.faces.get((modifier & 0x7F) as usize)?.clone()
+    }
+
+    /// Every floor texture with the share of its rows that are the top surface (the rest is the front lip).
+    pub fn floor_splits(&self) -> impl Iterator<Item = (AssetId<StandardMaterial>, f32)> + '_ {
+        self.splits.iter().copied()
+    }
+
+    /// A wall mark's image (`dungeon_wall_marks`).
+    pub fn mark(&self, id: u16) -> Option<&Tex> {
+        self.imgs.get(&id)
     }
 
     /// The tile's extra pieces with their textures (see `pieces`).
@@ -450,7 +611,9 @@ mod tests {
         assert_eq!(tile_images(BigPillarTop, 0, dungeon), (None, Some(1291)));
         assert_eq!(tile_images(Gate, 188, dungeon).1, Some(249));
         assert_eq!((tile_images(ExitLeft, 0, dungeon).1, tile_images(ExitRight, 0, dungeon).1), (Some(237), Some(239)));
-        assert_eq!((tile_images(Wall, 0, dungeon), tile_images(Wall, 1, dungeon).1), ((None, Some(368)), Some(370)));
+        // wall face by the runtime modifier (neighbours): none, right, left, both
+        assert_eq!(tile_images(Wall, 0, dungeon), (None, Some(368)));
+        assert_eq!([1, 2, 3, 0x81, 4].map(|m| tile_images(Wall, m, dungeon).1), [Some(370), Some(366), Some(364), Some(370), None]);
         assert_eq!(tile_images(LooseFloor, 0, dungeon), (None, None));
     }
 
@@ -490,18 +653,17 @@ mod tests {
         assert_eq!(ids(Spikes, 255, true), [1332, 1338, 1343]);
         assert_eq!(ids(Spikes, 6, false), [1331, 1337, 1342]);
         assert_eq!(ids(Spikes, 9, false), Vec::<u16>::new());
-        // walls: dungeon top strip by modifier (ds:27B6), none on the palace VGA path
-        assert_eq!(pieces(Wall, 0, false, dungeon), vec![(WallTop, 367)]);
-        assert_eq!(ids(Wall, 1, false), [369]);
-        assert_eq!(ids(Wall, 0, true), Vec::<u16>::new());
+        // walls: the base strip is part of the block texture (WALL_STRIP), no extra piece
+        assert_eq!(ids(Wall, 1, false), Vec::<u16>::new());
         // exit door slices and stairs on ExitLeft only, torch stub, balcony and lattice palace only
         assert_eq!(pieces(ExitLeft, 0, false, dungeon), vec![(DoorSlice, 233), (DoorBottom, 234), (Stairs, 344)]);
         assert_eq!(ids(ExitRight, 0, false), Vec::<u16>::new());
         assert_eq!((ids(Torch, 0, false), ids(TorchDebris, 0, true)), (vec![346], vec![346]));
         assert_eq!(pieces(BalconyLeft, 0, true, palace), vec![(BackPanel, 1210), (BackTop, 1211)]);
         assert_eq!(ids(BalconyRight, 0, true), [1212, 1213]);
-        assert_eq!(ids(LatticeSupport, 0, true), [1203]);
-        assert_eq!((ids(SmallLattice, 0, true), ids(LatticeLeft, 0, true), ids(LatticeRight, 0, true)), (vec![1204], vec![1205], vec![]));
+        // arcade (record +0 of types 26..29 = 1, 3, 4, 5) with the frieze 1209 on each
+        assert_eq!(pieces(LatticeSupport, 0, true, palace), vec![(BackPanel, 1201), (BackTop, 1209)]);
+        assert_eq!([SmallLattice, LatticeLeft, LatticeRight].map(|k| ids(k, 0, true)), [[1203, 1209], [1204, 1209], [1205, 1209]]);
         assert_eq!(ids(Floor, 0, true), Vec::<u16>::new());
     }
 
@@ -548,17 +710,71 @@ mod tests {
     }
 
     #[test]
-    fn palace_wall_bricks() {
-        let g = || img(4, 2, &[1, 0, 0, 1, 0, 1, 0, 0]);
-        let a = palace_wall(&[g()], 3);
-        assert_eq!(a.len(), PALACE_WALL.0 * PALACE_WALL.1);
-        assert!(a.iter().all(|&c| [1, 2, 3, 4, 6, 7, 8, 9, 11, 14].contains(&c)));
-        // mortar row on top of each course, brick top edge below it, grain at row 2
-        assert!(a[..32].iter().all(|&c| c == 14) && a[15 * 32..16 * 32].iter().all(|&c| c == 14));
-        assert_eq!(a[2 * 32], 14);
-        assert_eq!(a, palace_wall(&[g()], 3));
-        assert_ne!(a, palace_wall(&[g()], 4));
-        assert!((0..30u8).all(|i| wall_variant(7, i, 8) < 8));
+    fn random_and_wall_modifier() {
+        // seed 0: 2531011 >> 16 = 38; the tile seed adds ds:2288[row] + room + column
+        assert_eq!(Rnd(0).next(99), 38);
+        let mut r = Rnd(18);
+        r.next(1);
+        assert_eq!(wall_rnd(5, 1, 3).0, r.0);
+        // runtime modifier: bit 0 = right neighbour a wall, bit 1 = left neighbour a wall
+        assert_eq!([(false, false), (false, true), (true, false), (true, true)].map(|(l, r)| wall_modifier(l, r)), [0, 1, 2, 3]);
+        assert_eq!(WALL_FACE.map(|f| f - 360), [8, 10, 6, 4]);
+    }
+
+    #[test]
+    fn dungeon_wall_marks_follow_the_c5bf_path() {
+        let all: Vec<_> = (1..=24).flat_map(|room| (0..30).map(move |i| (room, i / 10, i % 10))).collect();
+        // deterministic, nothing for an impossible modifier, positions inside the 32 x 63 block
+        for &(room, row, col) in &all {
+            for m in 0..4 {
+                let v = dungeon_wall_marks(room, row, col, m);
+                assert_eq!(v, dungeon_wall_marks(room, row, col, m | 0x80));
+                for k in &v {
+                    assert!((371..=377).contains(&k.id) && (0..=63).contains(&k.up) && (-3..=40).contains(&k.x), "{k:?}");
+                }
+                // both bottom joints (371 / 372 at the bottom line) exactly when a wall touches the left one (modifier 2, 3)
+                assert_eq!(v.iter().any(|k| k.up == 0 && k.id <= 372), m >= 2);
+                // the middle joint (21 px up) whenever a neighbour is a wall
+                assert_eq!(v.iter().any(|k| k.up == 21 && k.id <= 372), m >= 1);
+            }
+            assert!(dungeon_wall_marks(room, row, col, 4).is_empty());
+        }
+        // modifier 0: a crack in about 1 of 6 tiles, 374 / 375 at 58 or 41 px
+        let n = all.iter().filter(|&&(r, w, c)| !dungeon_wall_marks(r, w, c, 0).is_empty()).count();
+        assert!(n > 720 / 12 && n < 720 / 3, "{n}");
+        // the plain top course (373) shows in about 1 of 4 walls with a wall on the right
+        let t = all.iter().filter(|&&(r, w, c)| dungeon_wall_marks(r, w, c, 3).iter().any(|k| k.id == 373)).count();
+        assert!(t > 720 / 8 && t < 720 / 2, "{t}");
+    }
+
+    #[test]
+    fn palace_walls_follow_the_vga_path() {
+        let pat = palace_pattern(7);
+        assert_eq!(pat, palace_pattern(7));
+        assert_ne!(pat, palace_pattern(8));
+        for (row, courses) in pat.iter().enumerate() {
+            for (c, bricks) in courses.iter().enumerate() {
+                let base = if c % 2 == 0 { 0x66 } else { 0x61 };
+                assert!(bricks.iter().all(|b| (base..base + 4).contains(b)), "row {row} course {c}");
+                assert!(bricks.windows(2).all(|w| w[0] != w[1]), "neighbours differ");
+            }
+        }
+        let strip = img(8, 7, &[1; 56]);
+        let w = palace_wall(7, 1, 4, &pat, |_| Some(&strip));
+        let (pw, ph) = PALACE_WALL;
+        assert_eq!(w.len(), pw * ph);
+        let c = &pat[1];
+        let at = |x: usize, y: usize| w[y * pw + x];
+        // courses: 20 rows (one brick), 21 rows (16 + 16), 19 rows (8 + 24), 3-row band; neighbours share the joint bricks
+        assert_eq!((at(0, 10), at(31, 19)), (c[0][4] - 96, c[0][4] - 96));
+        assert_eq!((at(0, 30), at(15, 40), at(16, 30), at(31, 40)), (c[1][4] - 96, c[1][4] - 96, c[1][5] - 96, c[1][5] - 96));
+        assert_eq!((at(0, 50), at(7, 52), at(8, 50), at(31, 45)), (c[2][4] - 96, c[2][4] - 96, c[2][5] - 96, c[2][5] - 96));
+        assert_eq!((at(10, 60), at(31, 61)), (c[3][4] - 96, c[3][4] - 96));
+        // the speckle strips (all set here): top right corner (x 24, rows 0..6) and the band
+        assert!(w[..7 * pw].iter().filter(|&&p| p == MONO).count() >= 56 && at(24, 0) == MONO && at(23, 0) != MONO);
+        assert_eq!(at(0, 62), MONO);
+        // without strips only the rectangles
+        assert!(palace_wall(7, 1, 4, &pat, |_| None).iter().all(|&p| p != MONO));
     }
 
     #[test]
