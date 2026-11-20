@@ -27,6 +27,7 @@ mod menu;
 mod menu_ui;
 mod mixer;
 mod music;
+mod particles;
 mod perf;
 mod room;
 mod settings;
@@ -186,6 +187,8 @@ fn main() {
         .insert_resource(Time::<Fixed>::from_hz(sim::STEP_HZ))
         .insert_resource(Game { world, levels, level, room, kid_prev: kid::Snap::default(), guard_prev: kid::Snap::default(), kid_respawn: false, banner: (0, String::new()), debug: false, gen: 0 })
         .insert_resource(kid::Latch::default())
+        .init_resource::<particles::Clash>()
+        .init_resource::<particles::Swords>()
         .insert_resource(assets)
         .init_resource::<flow::Flow>()
         .init_resource::<menu_ui::MenuUi>()
@@ -226,7 +229,7 @@ fn main() {
                 fullscreen,
                 char_style_key,
                 (kid::live_look, cutscene::live_look, (room::palette_live, cutscene::chamber_live).chain()), // settings that apply live
-                (enhanced::mode_key, enhanced::watchdog, enhanced::apply, enhanced::sun_brightness, enhanced::torch_shadows).chain(),
+                (enhanced::mode_key, enhanced::watchdog, enhanced::apply, enhanced::sun_brightness, room::flicker, enhanced::torch_shadows, enhanced::bubble_lights, particles::clash_sparks, particles::sparks).chain(),
                 perf_log.run_if(move || perf),
                 (perf::overlay, perf::bench, perf::casters),
                 screenshot_and_quit,

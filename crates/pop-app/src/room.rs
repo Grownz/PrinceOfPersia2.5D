@@ -466,6 +466,29 @@ pub struct SwordGlint(u8, u8);
 #[derive(Component)]
 pub struct TorchFlame(u8, u8);
 
+/// A voxel torch's light (room, tile index, flicker factor 0.8..1): follows the visible pixels of the flame frame.
+#[derive(Component)]
+pub struct TorchLight(pub u8, pub u8, pub f32);
+
+/// The faint light of a potion's bubbles, in the bubbles' colour (intensity set by `enhanced::bubble_lights`).
+#[derive(Component)]
+pub struct BubbleLight;
+
+/// Every frame: each torch light's strength follows the opaque pixel count of its flame frame (fewest = 80 %, most = 100 %),
+/// eased so the steps between frames blend smoothly. `enhanced::torch_shadows` multiplies it into the intensity.
+pub fn flicker(g: Res<Game>, p: Res<Palette>, time: Res<Time>, mut q: Query<&mut TorchLight>) {
+    let Some(px) = p.items.as_ref().map(|i| &i.flame_px).filter(|v| !v.is_empty()) else { return };
+    let (lo, hi) = (*px.iter().min().unwrap() as f32, *px.iter().max().unwrap() as f32);
+    let k = 1.0 - (-time.delta_secs() * 14.0).exp();
+    let (level, drawn, tick) = (&g.world.level, g.world.shared.drawn_room, g.world.tick);
+    for mut t in &mut q {
+        let f = if t.0 == drawn { level.anim_frame(t.0 as usize, t.1 as usize) } else { neighbour_frame(level.tile_at(t.0 as usize, t.1 as usize).kind, tick, t.0, t.1) };
+        let n = px[f.unwrap_or(0) as usize % px.len()] as f32;
+        let want = 0.8 + 0.2 * if hi > lo { (n - lo) / (hi - lo) } else { 1.0 };
+        t.2 += (want - t.2) * k;
+    }
+}
+
 /// Loose floor wobble amplitudes: vertical bounce (world units, about 1.6 screen px) and roll (radians).
 const WOBBLE_DY: f32 = 0.05;
 const WOBBLE_ROLL: f32 = 0.08;
@@ -740,6 +763,9 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                         let at = lo + Vec3::new(px_w(crate::items::BUBBLE_DX), px_h(bt.h as f32), 0.0);
                         let e = b.item(f, &i.glow[c], at);
                         b.cmds.entity(e).insert((Bubbles(b.room as u8, idx), bevy::light::NotShadowCaster));
+                        let [r, g, bl] = crate::items::GLOW[c];
+                        let e = b.cmds.spawn((BubbleLight, PointLight { color: Color::srgb_u8(r, g, bl), intensity: 0.0, range: 2.5, shadow_maps_enabled: false, ..default() }, Transform::from_translation(b.origin + at + Vec3::new(0.0, 0.1, 0.3)))).id();
+                        b.tag(e);
                     }
                 }
                 None => b.put(if colour == Some(2) { &p.blue } else { &p.red }, Vec3::new(x + 0.4, y, -0.1), Vec3::new(x + 0.6, y + if big { 0.4 } else { 0.3 }, 0.1)),
@@ -835,7 +861,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                 b.cmds.entity(e).insert(bevy::light::NotShadowCaster);
                 let e = b.object(&items.flames[0], &items.flame_mat, Vec3::new(x + px_w(axis - FLAME_AXIS), top.y - px_h(FLAME_SINK), TORCH_Z), 1.0);
                 b.cmds.entity(e).insert((TorchFlame(b.room as u8, idx), bevy::light::NotShadowCaster));
-                let e = b.cmds.spawn((torch_light(), Transform::from_translation(b.origin + top + Vec3::new(0.0, 0.3, 0.6)))).id();
+                let e = b.cmds.spawn((torch_light(), TorchLight(b.room as u8, idx, 1.0), Transform::from_translation(b.origin + top + Vec3::new(0.0, 0.3, 0.6)))).id();
                 b.tag(e);
                 return;
             }

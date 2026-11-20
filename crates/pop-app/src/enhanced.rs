@@ -117,7 +117,7 @@ pub fn sun_brightness(mode: Res<RenderMode>, set: Res<Settings>, mut sun: Query<
     }
 }
 /// Enhanced torches are brighter: their shadows and the position nearer the wall take light away.
-const ENHANCED_TORCH_GAIN: f32 = 1.4;
+pub const ENHANCED_TORCH_GAIN: f32 = 1.4;
 
 /// Torch light: shadows on (only the nearest few), biases large enough for 1/32-unit voxel steps.
 const DEPTH_BIAS: f32 = 0.02;
@@ -225,16 +225,16 @@ const ENHANCED_TORCH_Z: f32 = -0.6;
 
 /// Every frame: in enhanced mode the `n` torches nearest to the view cast shadows, the rest stay shadowless (a point
 /// shadow is 6 cube faces); in classic every light is back to `room::torch_light`'s values and its classic position.
-pub fn torch_shadows(mut cmds: Commands, mode: Res<RenderMode>, set: Res<Settings>, cam: Query<&GlobalTransform, With<Camera3d>>, mut lights: Query<(Entity, &mut Transform, &mut PointLight, Option<&ClassicZ>)>) {
+pub fn torch_shadows(mut cmds: Commands, mode: Res<RenderMode>, set: Res<Settings>, cam: Query<&GlobalTransform, With<Camera3d>>, mut lights: Query<(Entity, &mut Transform, &mut PointLight, Option<&ClassicZ>, Option<&crate::room::TorchLight>), (Without<crate::room::BubbleLight>, Without<crate::particles::Spark>)>) {
     let enhanced = *mode == RenderMode::Enhanced;
     let n = if enhanced { torch_count(&set) } else { 0 };
     let focus = cam.single().map_or(Vec2::ZERO, |t| t.translation().truncate());
-    let pos: Vec<Vec2> = lights.iter().map(|(_, t, _, _)| t.translation.truncate()).collect();
+    let pos: Vec<Vec2> = lights.iter().map(|(_, t, _, _, _)| t.translation.truncate()).collect();
     let on = nearest(&pos, focus, n);
     let d = PointLight::default();
-    for (i, (e, mut t, mut l, cz)) in lights.iter_mut().enumerate() {
+    for (i, (e, mut t, mut l, cz, flick)) in lights.iter_mut().enumerate() {
         let want = if on.contains(&i) { (true, DEPTH_BIAS, NORMAL_BIAS) } else { (false, d.shadow_depth_bias, d.shadow_normal_bias) };
-        let intensity = crate::room::torch_light().intensity * if enhanced { ENHANCED_TORCH_GAIN } else { 1.0 };
+        let intensity = crate::room::torch_light().intensity * if enhanced { ENHANCED_TORCH_GAIN } else { 1.0 } * flick.map_or(1.0, |f| f.2);
         if (l.shadow_maps_enabled, l.shadow_depth_bias, l.shadow_normal_bias, l.intensity) != (want.0, want.1, want.2, intensity) {
             (l.shadow_maps_enabled, l.shadow_depth_bias, l.shadow_normal_bias, l.intensity) = (want.0, want.1, want.2, intensity);
         }
@@ -248,6 +248,28 @@ pub fn torch_shadows(mut cmds: Commands, mode: Res<RenderMode>, set: Res<Setting
                 cmds.entity(e).remove::<ClassicZ>();
             }
             _ => {}
+        }
+    }
+}
+
+/// Intensity of a potion's bubble light (enhanced only; torches are 250 000).
+const BUBBLE_LIGHT: f32 = 24_000.0;
+/// Bubble lights that shine at once (the nearest to the view): each casts shadows so it cannot shine through walls and
+/// slabs; the farther ones are off. With shadows off (`shadow_quality`) none shines, as it would leak.
+const BUBBLE_LIGHTS: usize = 2;
+
+/// The bubbles' faint coloured light shines in enhanced mode only.
+pub fn bubble_lights(mode: Res<RenderMode>, set: Res<Settings>, cam: Query<&GlobalTransform, With<Camera3d>>, mut q: Query<(&Transform, &mut PointLight), With<crate::room::BubbleLight>>) {
+    let n = if *mode == RenderMode::Enhanced && torch_count(&set) > 0 { BUBBLE_LIGHTS } else { 0 };
+    let focus = cam.single().map_or(Vec2::ZERO, |t| t.translation().truncate());
+    let pos: Vec<Vec2> = q.iter().map(|(t, _)| t.translation.truncate()).collect();
+    let on = nearest(&pos, focus, n);
+    for (i, (_, mut l)) in q.iter_mut().enumerate() {
+        let lit = on.contains(&i);
+        let (i, s) = (if lit { BUBBLE_LIGHT } else { 0.0 }, lit);
+        if (l.intensity, l.shadow_maps_enabled) != (i, s) {
+            (l.intensity, l.shadow_maps_enabled) = (i, s);
+            (l.shadow_depth_bias, l.shadow_normal_bias, l.shadow_map_near_z) = (DEPTH_BIAS, NORMAL_BIAS, 0.02);
         }
     }
 }

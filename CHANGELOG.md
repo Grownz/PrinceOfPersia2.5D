@@ -3,6 +3,15 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.6.0] - 2026-11-20
+
+### Added
+- Sword sparks: when two swords clash, 20 tiny, glowing white-yellow sparks fly radially out of the point where the blades cross, fall on a ballistic path (at most half the prince's sprite height up) and stay on the floor the prince stands on. They burn out within 2 s; in enhanced mode each is a small light, together as strong as a torch at the start, fading exponentially.
+- Potion bubbles give off a faint light in their own colour (enhanced mode). It casts shadows, so it does not shine through walls or slabs; only the two potions nearest to the view shine, and none with shadows off.
+
+### Changed
+- Torches flicker between 80 % and 100 % of their strength, following the visible pixels of the current flame frame, with smooth transitions.
+
 ## [0.5.3] - 2026-11-20
 
 ### Fixed

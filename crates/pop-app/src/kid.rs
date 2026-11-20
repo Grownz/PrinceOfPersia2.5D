@@ -581,18 +581,18 @@ fn draw_sword(
     vis: &mut Visibility,
     mat: &mut MeshMaterial3d<StandardMaterial>,
     mesh: &mut Mesh3d,
-) {
+) -> Option<(Vec2, Vec2)> {
     let data = a.data.clone();
     let env = mk_env(&data, level, gtype);
     let f = env.frame_of(k.charid, k.frame);
     let entry = a.sword_table.get((f.sword & 0x3F) as usize).copied();
     let (Some(p), Some((img, dx, dy)), true) = (body, entry, sword_shown(k)) else {
         *vis = Visibility::Hidden;
-        return;
+        return None;
     };
     let Some((m, w, h)) = (img != 255).then(|| material_for(a, imgs, mats, 254, img, false, false, 0)).flatten() else {
         *vis = Visibility::Hidden;
-        return;
+        return None;
     };
     *vis = Visibility::Inherited;
     let dxs = if k.facing_left { -(dx as f32) } else { dx as f32 };
@@ -602,6 +602,7 @@ fn draw_sword(
     let (cx, flip) = if k.facing_left { (x + sw / 2.0, 1.0) } else { (x - sw / 2.0, -1.0) };
     // voxel sword just in front of the body's thickest layers (the original draws it over the body)
     show(a, vx, (254, img, false, false, 0), !k.facing_left, m, Vec3::new(cx, y + sh / 2.0, 0.65), Vec2::new(flip * sw, sh), VOXEL_Z + 5.0 / 32.0, (0, false), t, mat, mesh);
+    Some((Vec2::new(cx, y + sh / 2.0), Vec2::new(sw, sh)))
 }
 
 pub fn render(
@@ -615,6 +616,7 @@ pub fn render(
     set: Res<crate::settings::Settings>,
     mut q: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d), (With<KidSprite>, Without<GuardSprite>)>,
     mut qg: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d), (With<GuardSprite>, Without<KidSprite>)>,
+    mut swords: ResMut<crate::particles::Swords>,
     mut qs: Query<(&SwordSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d), (Without<KidSprite>, Without<GuardSprite>)>,
 ) {
     let mut a = a;
@@ -644,8 +646,11 @@ pub fn render(
     for (SwordSprite(is_guard), mut t, mut vis, mut mat, mut mesh) in &mut qs {
         let (k, body) = if *is_guard { (w.guard.as_ref(), guard_body) } else { (Some(&w.kid), kid_body) };
         match k {
-            Some(k) => draw_sword(k, body, &mut a, &w.level, w.guard_type, &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh),
-            None => *vis = Visibility::Hidden,
+            Some(k) => swords.0[*is_guard as usize] = draw_sword(k, body, &mut a, &w.level, w.guard_type, &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh),
+            None => {
+                *vis = Visibility::Hidden;
+                swords.0[*is_guard as usize] = None;
+            }
         }
     }
 }

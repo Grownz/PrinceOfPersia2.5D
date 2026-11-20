@@ -34,6 +34,8 @@ pub struct Items {
     pub objects: [Objects; 2],
     /// torch flame frames (PRINCE.DAT 151..159) and their unlit, overbright material (blooms in enhanced mode)
     pub flames: Vec<Model>,
+    /// visible (opaque) pixels of each flame frame: drives the torch light's flicker
+    pub flame_px: Vec<usize>,
     pub flame_mat: Handle<StandardMaterial>,
 }
 
@@ -467,10 +469,12 @@ impl Items {
             o
         });
         // flames: palette colours overbright on an unlit material, so they glow (and bloom in enhanced mode)
+        let mut flame_px = vec![];
         let flames: Vec<Model> = if objects.iter().any(|o| !o.ids.is_empty()) {
             (151..=159)
                 .filter_map(pimg)
                 .map(|i| {
+                    flame_px.push(i.pixels.iter().filter(|&&p| p != 0).count());
                     let m = VoxelModel::revolve_runs(i.width, i.height, &i.pixels);
                     let mesh = m.mesh(|p| {
                         let [r, g, b] = pal.get(p as usize).copied().unwrap_or([255, 160, 0]);
@@ -494,7 +498,7 @@ impl Items {
             let c = Color::srgb_u8(r, g, b);
             mats.add(StandardMaterial { base_color: c, emissive: c.to_linear() * 3.0, perceptual_roughness: 0.4, ..default() })
         });
-        Items { mat: mats.add(StandardMaterial { perceptual_roughness: 0.6, ..default() }), skeleton, bottles, bubbles: if bubbles.len() == 7 { bubbles } else { vec![] }, sword: if sword.len() == 2 { sword } else { vec![] }, glow, columns, objects, flames: if flames.len() == 9 { flames } else { vec![] }, flame_mat: mats.add(StandardMaterial { unlit: true, ..default() }) }
+        Items { mat: mats.add(StandardMaterial { perceptual_roughness: 0.6, ..default() }), skeleton, bottles, bubbles: if bubbles.len() == 7 { bubbles } else { vec![] }, sword: if sword.len() == 2 { sword } else { vec![] }, glow, columns, objects, flame_px: if flames.len() == 9 { flame_px } else { vec![] }, flames: if flames.len() == 9 { flames } else { vec![] }, flame_mat: mats.add(StandardMaterial { unlit: true, ..default() }) }
     }
 }
 

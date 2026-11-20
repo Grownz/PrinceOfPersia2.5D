@@ -206,10 +206,11 @@ pub fn before_step(mut cmds: Commands, mut g: ResMut<Game>, mut a: ResMut<AudioS
 
 /// FixedUpdate, after the world step: drain the sound log; hold the death counter while a sound plays (edge_cases.md 3.2).
 /// The timing counts fixed steps (not the audio device), so it is deterministic and independent of mute and volume.
-pub fn fixed(mut cmds: Commands, mut g: ResMut<Game>, s: Res<Sounds>, mut a: ResMut<AudioState>, playing: Query<(Entity, &Sfx)>) {
+pub fn fixed(mut cmds: Commands, mut g: ResMut<Game>, s: Res<Sounds>, mut a: ResMut<AudioState>, playing: Query<(Entity, &Sfx)>, mut clash: ResMut<crate::particles::Clash>) {
     let mut ids = std::mem::take(&mut g.world.sounds);
     ids.sort_unstable();
     ids.dedup();
+    clash.0 |= ids.contains(&10); // swords clash: sparks
     for id in ids {
         play(&mut cmds, &s, &mut a, id, &playing);
     }
