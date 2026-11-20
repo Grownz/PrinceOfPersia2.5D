@@ -417,7 +417,7 @@ fn draw_char(
     let guard_img = f.sword >> 6 == 3;
     let kind = if guard_img { gtype.max(0) as u8 } else { 255 };
     let key = (kind, f.image, k.charid == 1 && !guard_img, palace(level_no), k.colour);
-    let Some((m, w, h)) = (f.image != 255).then(|| material_for(a, imgs, mats, key.0, key.1, key.2, key.3, key.4)).flatten() else {
+    let Some((m, w, h)) = (f.image != 255 && !stairs_gone(k.frame)).then(|| material_for(a, imgs, mats, key.0, key.1, key.2, key.3, key.4)).flatten() else {
         *vis = Visibility::Hidden;
         return None;
     };
@@ -430,7 +430,7 @@ fn draw_char(
     let (cx, flip) = if k.facing_left { (p.x + sw / 2.0, 1.0) } else { (p.x - sw / 2.0, -1.0) };
     let vz = settle_z(&mut a.voxel_zs[slot], k.frame, k.action, dt);
     let hang = hang_of(k.frame, h as i32, f.dy as i32);
-    show(a, vx, key, !k.facing_left, m, Vec3::new(cx, p.y + sh / 2.0, 0.6), Vec2::new(flip * sw, sh), vz, hang, t, mat, mesh);
+    show(a, vx, key, !k.facing_left, m, Vec3::new(cx, p.y + sh / 2.0, if on_stairs(k.frame) { STAIRS_Z } else { 0.6 }), Vec2::new(flip * sw, sh), vz, hang, t, mat, mesh);
     // hit flash (voxel only): hp_delta stays negative until the next logic tick clears it
     if k.hp_delta < 0 && mat.0 == a.voxel_mat {
         mat.0 = a.voxel_flash.clone();
@@ -503,15 +503,32 @@ fn ease_z(z: &mut f32, target: f32, dt: f32) -> f32 {
 
 /// The depth of this frame. The climb frames (135..=149) set it at once: their mesh already leans from HANG_Z to VOXEL_Z, an ease would slide the whole figure through the slab.
 fn settle_z(z: &mut f32, frame: u8, action: u8, dt: f32) -> f32 {
-    if matches!(frame, 135..=149) {
+    if matches!(frame, 135..=149 | 217..=228) {
         *z = voxel_z(frame, action);
         return *z;
     }
     ease_z(z, voxel_z(frame, action), dt)
 }
 
+/// The exit stairs climb (frames 217..=228, docs/tiles.md 8.1): the prince walks into the doorway and has to vanish behind it.
+/// The exit door's frame reaches about z -0.17 at its front, its panel and stairs end at -0.35 / -0.42, so the figure goes
+/// between them (voxel figure about 0.08 behind and 0.14 in front of its plane, flat quad exactly at it).
+const STAIRS_Z: f32 = -0.32;
+
+/// The last steps of the climb lead past the doorway's right post; the original hides them behind the door's mask, which the
+/// 3D door has no counterpart for, so the figure is gone from here on.
+fn stairs_gone(frame: u8) -> bool {
+    matches!(frame, 225..=228)
+}
+
+fn on_stairs(frame: u8) -> bool {
+    matches!(frame, 217..=228)
+}
+
 fn voxel_z(frame: u8, action: u8) -> f32 {
-    if matches!(action, 2 | 6) || matches!(frame, 78..=99 | 135..=144) { HANG_Z } else { VOXEL_Z }
+    if on_stairs(frame) {
+        STAIRS_Z
+    } else if matches!(action, 2 | 6) || matches!(frame, 78..=99 | 135..=144) { HANG_Z } else { VOXEL_Z }
 }
 
 /// The voxel side of `render`: the style in use and the mesh store.

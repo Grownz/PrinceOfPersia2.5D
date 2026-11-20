@@ -3,6 +3,11 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.5.3] - 2026-11-20
+
+### Fixed
+- The prince climbing the exit stairs no longer overlaps the door frame: he now walks between the stairs and the frame (sprite and 3D figure alike) and disappears behind the right post.
+
 ## [0.5.2] - 2026-11-20
 
 ### Added
