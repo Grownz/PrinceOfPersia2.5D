@@ -3,7 +3,9 @@
 **The 1989 classic, rebuilt for modern PCs.** Run, jump, climb and fence through the sultan's dungeons and palace in the
 original's exact rhythm, now in 3D lighting with real shadows, smooth motion and the music the way it was meant to sound.
 
-![The prince fights a guard in the enhanced render mode with voxel characters](docs/images/screenshot.png)
+The prince fights a guard in the enhanced render mode with voxel characters:
+
+https://github.com/user-attachments/assets/498f5ae6-aa68-4cbb-ad87-2fd131e3076d
 
 ## Why play it
 
