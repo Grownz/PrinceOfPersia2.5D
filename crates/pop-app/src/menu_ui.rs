@@ -463,7 +463,7 @@ fn view(m: &Menu, idx: usize, row: Row, set: &Settings) -> View {
                     v.drop = true;
                     v.value += "  v";
                     if let (true, Some(h)) = (focus, m.open) {
-                        v.popup = Some((o.values.iter().map(|x| menu::shown(o.key, x)).collect(), h, o.values.iter().position(|x| *x == cur).unwrap_or(usize::MAX)));
+                        v.popup = Some((o.values.iter().map(|x| menu::entry_label(o.key, x)).collect(), h, o.values.iter().position(|x| *x == cur).unwrap_or(usize::MAX)));
                     }
                 }
             }

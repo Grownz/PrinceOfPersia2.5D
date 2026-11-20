@@ -993,10 +993,11 @@ pub fn rebuild_on_change(
     mut built: Local<Built>,
 ) {
     let now = (g.level, g.room, g.world.version, g.gen);
-    if *last == now {
+    let new_palette = p.is_changed() && !built.0.is_empty(); // tile / column / object settings changed: every piece is rebuilt
+    if *last == now && !new_palette {
         return;
     }
-    let full = (last.0, last.1) != (g.level, g.room) || built.0.is_empty();
+    let full = (last.0, last.1) != (g.level, g.room) || built.0.is_empty() || new_palette;
     *last = now;
     REBUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let (level, palace) = (&g.world.level, crate::kid::palace(g.level));
@@ -1168,4 +1169,39 @@ mod tests {
         assert!(open[0].0.y > 1.5 && closed[0].0.y == 0.0);
         assert_eq!(gate_bars(255)[0].0.y, open[0].0.y); // 238 / 255 = fully open
     }
+}
+
+/// How long a `Palette` that is no longer in use stays cached (switching back is instant); then it is dropped and Bevy frees
+/// its meshes, materials and images. POP_PALETTE_TTL (seconds) is for testing.
+fn palette_ttl() -> f64 {
+    std::env::var("POP_PALETTE_TTL").ok().and_then(|v| v.parse().ok()).unwrap_or(300.0)
+}
+
+/// `tile_textures`, `column_style` and `object_style` apply live: the `Palette` is swapped (the old one is kept for
+/// `palette_ttl`, a switch back reuses it) and `rebuild_on_change` / `cutscene::chamber_live` respawn the pieces.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn palette_live(
+    set: Res<crate::settings::Settings>,
+    mut pal: ResMut<Palette>,
+    time: Res<Time<Real>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+    mut imgs: ResMut<Assets<Image>>,
+    mut last: Local<Option<(bool, bool, bool)>>,
+    mut parked: Local<HashMap<(bool, bool, bool), (Palette, f64)>>,
+) {
+    let t = time.elapsed_secs_f64();
+    let ttl = palette_ttl();
+    if parked.values().any(|(_, since)| t - since >= ttl) {
+        parked.retain(|_, (_, since)| t - *since < ttl);
+        info!("palette cache: dropped unused palettes (their assets are freed by Bevy)");
+    }
+    let now = (set.tile_textures(), set.voxel_columns(), set.voxel_objects());
+    let Some(old_key) = last.replace(now).filter(|&l| l != now) else { return };
+    let new = parked.remove(&now).map(|(p, _)| p).unwrap_or_else(|| {
+        let dir = now.0.then(crate::data_dir);
+        Palette::new(&mut meshes, &mut mats, &mut imgs, dir.as_deref(), now.1, now.2)
+    });
+    let old = std::mem::replace(&mut *pal, new);
+    parked.insert(old_key, (old, t));
 }

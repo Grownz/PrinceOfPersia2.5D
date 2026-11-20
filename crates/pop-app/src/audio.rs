@@ -40,7 +40,8 @@ const IDS: u8 = 57;
 pub fn plugin(app: &mut App) {
     app.add_audio_source::<Mixer>()
         .insert_resource(AudioState { volume: 0.7, ..default() })
-        .add_systems(Startup, setup);
+        .add_systems(Startup, setup)
+        .add_systems(Update, sound_live);
 }
 
 /// Original sound `id`: digitized (type 1: u16 rate, u16 count, u16 ?, u8 bits = 8, unsigned samples; type bit 7 = flag) or
@@ -86,11 +87,15 @@ fn load_soundfont(id: &str) -> Option<Arc<rustysynth::SoundFont>> {
     rustysynth::SoundFont::new(&mut r).map_err(|e| warn!("soundfont {}: {e:?}; using adlib", path.display())).ok().map(Arc::new)
 }
 
-fn setup(mut cmds: Commands, mut mixers: ResMut<Assets<Mixer>>, mut a: ResMut<AudioState>, set: Res<Settings>) {
-    (a.volume, a.muted) = (set.volume.clamp(0.0, 1.0), set.muted);
-    let mode = std::env::var("POP_SOUND").unwrap_or_else(|_| set.sound.clone());
+/// The sound mode in use: POP_SOUND, else the `sound` setting.
+fn sound_mode(set: &Settings) -> String {
+    std::env::var("POP_SOUND").unwrap_or_else(|_| set.sound.clone())
+}
+
+/// Renders every clip of sound set `mode` (the OPL / SoundFont renders take a second or more).
+fn render_clips(mode: &str, soundfont: &str) -> Vec<Option<(Pcm, u32)>> {
     // soundfont: the downloaded SoundFont plays the music; without a usable file it falls back to adlib (log line)
-    let sf = (mode == "soundfont").then(|| load_soundfont(&set.soundfont)).flatten();
+    let sf = (mode == "soundfont").then(|| load_soundfont(soundfont)).flatten();
     let adlib = mode == "adlib" || (mode == "soundfont" && sf.is_none()); // original effects + MIDI through the AdLib driver and an OPL2 emulator
     let orig = adlib || sf.is_some() || mode == "original";
     let dir = crate::data_dir();
@@ -115,9 +120,43 @@ fn setup(mut cmds: Commands, mut mixers: ResMut<Assets<Mixer>>, mut a: ResMut<Au
         })
         .collect::<Vec<_>>();
     info!("audio: {mode} mode, {} clips, rendered in {:?}", clips.iter().flatten().count(), t0.elapsed());
+    clips
+}
+
+fn setup(mut cmds: Commands, mut mixers: ResMut<Assets<Mixer>>, mut a: ResMut<AudioState>, set: Res<Settings>) {
+    (a.volume, a.muted) = (set.volume.clamp(0.0, 1.0), set.muted);
+    let clips = render_clips(&sound_mode(&set), &set.soundfont);
     cmds.insert_resource(Sounds(clips));
     // the one source that mixes and limits everything; `Sfx(255)` lets pause / volume reach its sink
     cmds.spawn((AudioPlayer::<Mixer>(mixers.add(Mixer(a.mix.clone()))), PlaybackSettings::ONCE.with_volume(a.gain()), Sfx(255)));
+}
+
+/// `sound` and `soundfont` apply live: the clips are rendered again on a thread and swapped in when ready (what plays stops;
+/// the clip lengths, and with them the waits, follow the new set). The mixer source stays.
+#[allow(clippy::type_complexity)]
+pub fn sound_live(set: Res<Settings>, mut a: ResMut<AudioState>, mut cmds: Commands, mut last: Local<Option<(String, String, bool)>>, mut job: Local<Option<std::sync::mpsc::Receiver<Vec<Option<(Pcm, u32)>>>>>) {
+    let mode = sound_mode(&set);
+    let font = if mode == "soundfont" { set.soundfont.clone() } else { String::new() }; // the font only matters in that set
+    // a download that finishes (or a delete) of the chosen font changes the key: it is loaded (or dropped) at once
+    let ready = mode == "soundfont" && crate::soundfont::index_of(&set.soundfont).is_some_and(crate::soundfont::available);
+    let now = (mode, font, ready);
+    if last.is_none() {
+        *last = Some(now.clone());
+    }
+    if last.as_ref() != Some(&now) {
+        *last = Some(now.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(render_clips(&now.0, &now.1)); // a newer request drops this receiver: the send fails, harmlessly
+        });
+        *job = Some(rx);
+    }
+    if let Some(clips) = job.as_ref().and_then(|rx| rx.try_recv().ok()) {
+        *job = None;
+        a.mix.send(Cmd::StopAll);
+        a.busy = 0;
+        cmds.insert_resource(Sounds(clips));
+    }
 }
 
 impl AudioState {

@@ -102,13 +102,26 @@ impl FallbackJudge {
 
 /// Sun (fill) illuminance: classic, and enhanced (lower, so the torches stay the main light next to the sun's shadows).
 pub const CLASSIC_SUN: f32 = 4000.0;
-const ENHANCED_SUN: f32 = 3300.0;
+/// Enhanced sun illuminance per `sun_brightness` step ("high" is the former fixed value).
+fn sun_lux(step: &str) -> f32 {
+    match step { "dim" => 300.0, "low" => 800.0, "medium" => 1600.0, _ => 3300.0 }
+}
+
+/// Every frame: follows the `sun_brightness` setting live (enhanced mode only; apply() sets it on a mode change).
+pub fn sun_brightness(mode: Res<RenderMode>, set: Res<Settings>, mut sun: Query<&mut DirectionalLight>) {
+    if *mode != RenderMode::Enhanced || !set.is_changed() {
+        return;
+    }
+    for mut l in &mut sun {
+        l.illuminance = sun_lux(&set.sun_brightness);
+    }
+}
 /// Enhanced torches are brighter: their shadows and the position nearer the wall take light away.
 const ENHANCED_TORCH_GAIN: f32 = 1.4;
 
 /// Torch light: shadows on (only the nearest few), biases large enough for 1/32-unit voxel steps.
-const DEPTH_BIAS: f32 = 0.2;
-const NORMAL_BIAS: f32 = 2.5;
+const DEPTH_BIAS: f32 = 0.02;
+const NORMAL_BIAS: f32 = 0.6;
 
 /// Applies the mode to camera, ambient, sun and shadow-map resources whenever it changes (not at a classic startup).
 #[allow(clippy::too_many_arguments)]
@@ -121,14 +134,16 @@ pub fn apply(
     mut sun: Query<(Entity, &mut DirectionalLight)>,
     mut point_map: ResMut<PointLightShadowMap>,
     mut dir_map: ResMut<DirectionalLightShadowMap>,
-    mut last: Local<Option<RenderMode>>,
+    mut last: Local<Option<(RenderMode, String, bool)>>,
 ) {
-    if *last == Some(*mode) || (last.is_none() && *mode == RenderMode::Classic) {
-        *last = Some(*mode);
+    // runs again when the mode, the shadow quality or SSAO changes (the menu applies them live)
+    let now = (*mode, set.shadow_quality.clone(), set.ssao);
+    if last.as_ref() == Some(&now) || (last.is_none() && *mode == RenderMode::Classic) {
+        *last = Some(now);
         return;
     }
     let Ok((cam_e, mut amb)) = cam.single_mut() else { return };
-    *last = Some(*mode);
+    *last = Some(now);
     // the RT trial sets up its own camera (solari.rs); leaving it comes back through here
     #[cfg(feature = "solari")]
     if *mode == RenderMode::Rt {
@@ -153,6 +168,8 @@ pub fn apply(
     // SSAO needs 5 storage textures per stage (bevy_pbr skips its plugin below that) and MSAA off
     let ssao_ok = device.is_some_and(|d| d.limits().max_storage_textures_per_shader_stage >= 5);
     let ssao = set.ssao && ssao_ok && fx.ssao;
+    // a re-run with SSAO turned off must undo what the last run inserted
+    c.remove::<(ScreenSpaceAmbientOcclusion, Smaa, DepthPrepass, NormalPrepass)>().insert(Msaa::default());
     // flames (emissive 8, 3, 0.5) are the only values far above 1, so the threshold-free natural bloom only glows there
     match (fx.hdr, fx.bloom) {
         (true, true) => {
@@ -184,7 +201,7 @@ pub fn apply(
     *amb = if fx.ambient { enhanced_ambient() } else { classic_ambient() };
     for (e, mut l) in &mut sun {
         // a little more normal bias than the default 1.8: the stacked wall boxes showed blotches on faces facing the sun
-        (l.shadow_maps_enabled, l.illuminance, l.shadow_normal_bias) = (shadows > 0 && fx.sun_shadow, ENHANCED_SUN, 2.5);
+        (l.shadow_maps_enabled, l.illuminance, l.shadow_normal_bias) = (shadows > 0 && fx.sun_shadow, sun_lux(&set.sun_brightness), 2.5);
         // one cascade over the visible rooms (camera ~9 units away), so the sun's shadow texels stay small
         cmds.entity(e).insert(CascadeShadowConfigBuilder { num_cascades: 1, minimum_distance: 1.0, maximum_distance: 30.0, ..default() }.build());
     }

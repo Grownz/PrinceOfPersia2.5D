@@ -3,6 +3,16 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.5.2] - 2026-11-20
+
+### Added
+- Settings, Graphics: "Sun light (enhanced)" (`sun_brightness` = `dim|low|medium|high`, applies live) so the torches can be the main light.
+
+### Changed
+- Every setting now applies at runtime, none needs a restart any more: tile textures, columns and objects (rooms and the princess chamber are rebuilt), voxel normals and shading, shadow quality and SSAO, and the sound set / SoundFont (the clips are re-rendered on a thread and swapped in). The "after restart" badges are gone. A tile palette that is no longer used stays cached for 5 minutes (switching back is instant), then its meshes, materials and images are freed.
+- SoundFonts that are not downloaded cannot be picked (the drop-down marks them "not installed", the arrows skip them, and the "Soundfont" sound set needs one). A SoundFont that finishes downloading is loaded at once; deleting the one in use falls back to AdLib at once.
+- Enhanced torch shadows: much smaller depth and normal bias, so torch light no longer leaks through thin floor slabs onto the wall behind them.
+
 ## [0.5.1] - 2026-11-20
 
 ### Changed

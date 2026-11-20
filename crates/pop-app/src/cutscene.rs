@@ -132,9 +132,11 @@ fn chamber_level(base: &pop_core::level::Level) -> pop_core::level::Level {
     l
 }
 
-pub fn setup(mut cmds: Commands, g: Res<Game>, p: Res<Palette>, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>, mut imgs: ResMut<Assets<Image>>, mut cut: ResMut<Cut>) {
+/// Everything of the princess chamber that depends on the `Palette` (tiles, columns, torch holders), plus the sky and the
+/// stars. Respawned by `chamber_live` when the tile settings change.
+fn chamber_parts(cmds: &mut Commands, g: &Game, p: &Palette, cut: &Cut, meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>, imgs: &mut Assets<Image>) {
     let level = chamber_level(&g.levels[g.levels.len() - 1]);
-    room::spawn_chamber(&mut cmds, &level, 1, ORIGIN, &p);
+    room::spawn_chamber(cmds, &level, 1, ORIGIN, p);
     let o = ORIGIN;
     // the arched opening on the left with the night sky (stars at ds:0DD6)
     let sky = mats.add(StandardMaterial { base_color: Color::srgb(0.02, 0.03, 0.16), unlit: true, ..default() });
@@ -168,20 +170,38 @@ pub fn setup(mut cmds: Commands, g: Res<Game>, p: Res<Palette>, mut meshes: ResM
     // from the bed's bottom line (951 runs them to the screen bottom; the gap is open down to there) to the top of the row
     let (y0, y1) = (o.y + wy(BED_BOTTOM), o.y + TILE_H);
     for (x, z) in FRONT_COLUMNS {
-        if !front.as_ref().is_some_and(|(v, t)| room::chamber_column(&mut cmds, &p, v, t, Vec3::new(o.x + wx(x), y0, o.z + z), y1)) {
+        if !front.as_ref().is_some_and(|(v, t)| room::chamber_column(cmds, p, v, t, Vec3::new(o.x + wx(x), y0, o.z + z), y1)) {
             let r = 5.0 / 32.0;
-            room::chamber_box(&mut cmds, &p, "stone", Vec3::new(o.x + wx(x), y0, o.z + z - r), Vec3::new(o.x + wx(x + 10.0), y1, o.z + z + r));
+            room::chamber_box(cmds, p, "stone", Vec3::new(o.x + wx(x), y0, o.z + z - r), Vec3::new(o.x + wx(x + 10.0), y1, o.z + z + r));
         }
     }
-    let quad = meshes.add(Rectangle::new(1.0, 1.0));
-    cut.quad = quad.clone();
-    // torches: holder (the level's 346 with original tiles), flame (original sprite, or the level's voxel flame), the level light
-    for (i, &x) in TORCH_X.iter().enumerate() {
+    // torches: holder (the level's 346 with original tiles) and the level light
+    for &x in TORCH_X.iter() {
         let cx = wx(x + 8.0);
-        if !room::chamber_holder(&mut cmds, &p, o + Vec3::new(cx, wy(TORCH_BOTTOM), 0.0)) {
-            room::chamber_box(&mut cmds, &p, "dark", o + Vec3::new(cx - 0.08, wy(TORCH_BOTTOM) - 0.25, -0.88), o + Vec3::new(cx + 0.08, wy(TORCH_BOTTOM) + 0.02, -0.75));
+        if !room::chamber_holder(cmds, p, o + Vec3::new(cx, wy(TORCH_BOTTOM), 0.0)) {
+            room::chamber_box(cmds, p, "dark", o + Vec3::new(cx - 0.08, wy(TORCH_BOTTOM) - 0.25, -0.88), o + Vec3::new(cx + 0.08, wy(TORCH_BOTTOM) + 0.02, -0.75));
         }
         cmds.spawn((room::torch_light(), Transform::from_translation(o + Vec3::new(cx, wy(TORCH_BOTTOM) + 0.6, -0.2)), Chamber));
+    }
+}
+
+/// The chamber follows the tile / column / object settings: it is respawned when the `Palette` is rebuilt.
+pub fn chamber_live(mut cmds: Commands, g: Res<Game>, p: Res<Palette>, cut: Res<Cut>, old: Query<Entity, With<Chamber>>, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>, mut imgs: ResMut<Assets<Image>>) {
+    if !p.is_changed() || p.is_added() {
+        return;
+    }
+    for e in &old {
+        cmds.entity(e).despawn();
+    }
+    chamber_parts(&mut cmds, &g, &p, &cut, &mut meshes, &mut mats, &mut imgs);
+}
+
+pub fn setup(mut cmds: Commands, g: Res<Game>, p: Res<Palette>, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>, mut imgs: ResMut<Assets<Image>>, mut cut: ResMut<Cut>) {
+    chamber_parts(&mut cmds, &g, &p, &cut, &mut meshes, &mut mats, &mut imgs);
+    let quad = meshes.add(Rectangle::new(1.0, 1.0));
+    cut.quad = quad.clone();
+    // torch flames: the original sprite, or the level's voxel flame
+    for i in 0..TORCH_X.len() {
         cmds.spawn((Mesh3d(quad.clone()), MeshMaterial3d::<StandardMaterial>::default(), Transform::default(), Visibility::Hidden, FlameSprite(i), bevy::light::NotShadowCaster));
     }
     for s in [Slot::Kid, Slot::Princess] {
@@ -292,6 +312,17 @@ pub fn fixed(mut c: ResMut<Cut>, mut cmds: Commands, s: Res<crate::audio::Sounds
 }
 
 /// Update in Cutscene: remember a key for the next frame (any key or Shift, like idle() in the original).
+/// Applies `voxel_shading` and `voxel_normals` to the cutscene actors when the settings change (see `kid::live_look`).
+pub fn live_look(set: Res<crate::settings::Settings>, mut c: ResMut<Cut>, mut mats: ResMut<Assets<StandardMaterial>>) {
+    if !set.is_changed() || set.is_added() {
+        return;
+    }
+    c.vox.clear();
+    if let Some(mut m) = mats.get_mut(&c.voxel_mat) {
+        *m = crate::voxel::character_material(set.unlit_voxels(), false);
+    }
+}
+
 pub fn latch(k: Res<ButtonInput<KeyCode>>, pads: Query<&Gamepad>, mut c: ResMut<Cut>) {
     if crate::flow::any_key(&k) || k.just_pressed(KeyCode::ShiftLeft) || k.just_pressed(KeyCode::ShiftRight) || crate::flow::pad_any(&pads) {
         c.key = true;

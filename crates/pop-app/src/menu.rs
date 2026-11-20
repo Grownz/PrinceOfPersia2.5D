@@ -143,7 +143,7 @@ pub struct Opt {
 const ON_OFF: &[&str] = &["true", "false"];
 const PERCENT: Ctl = Ctl::Slider { min: 0, max: 100, step: 5 };
 
-pub const OPTS: [Opt; 16] = [
+pub const OPTS: [Opt; 17] = [
     Opt { key: "render_mode", label: "Rendering", values: &["classic", "enhanced"], live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "character_style", label: "Characters", values: &settings::CHARACTER_STYLES, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "camera_scroll", label: "Room change", values: &settings::CAMERA_SCROLLS, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
@@ -151,15 +151,16 @@ pub const OPTS: [Opt; 16] = [
     Opt { key: "window", label: "Window mode", values: &["windowed", "borderless"], live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "volume", label: "Volume", values: &[], live: true, tab: Tab::Audio, ctl: PERCENT },
     Opt { key: "muted", label: "Mute", values: ON_OFF, live: true, tab: Tab::Audio, ctl: Ctl::Checkbox },
-    Opt { key: "sound", label: "Sound set", values: &["synth", "original", "adlib", "soundfont"], live: false, tab: Tab::Audio, ctl: Ctl::Dropdown },
-    Opt { key: "soundfont", label: "SoundFont", values: &["musescore", "fluidr3"], live: false, tab: Tab::Audio, ctl: Ctl::Dropdown },
-    Opt { key: "tile_textures", label: "Tile textures", values: &settings::TILE_TEXTURES, live: false, tab: Tab::Graphics, ctl: Ctl::Dropdown },
-    Opt { key: "column_style", label: "Columns", values: &settings::COLUMN_STYLES, live: false, tab: Tab::Graphics, ctl: Ctl::Dropdown },
-    Opt { key: "object_style", label: "Objects", values: &settings::OBJECT_STYLES, live: false, tab: Tab::Graphics, ctl: Ctl::Dropdown },
-    Opt { key: "voxel_normals", label: "Voxel normals", values: &settings::VOXEL_NORMALS, live: false, tab: Tab::Graphics, ctl: Ctl::Dropdown },
-    Opt { key: "voxel_shading", label: "Voxel shading", values: &settings::VOXEL_SHADINGS, live: false, tab: Tab::Graphics, ctl: Ctl::Dropdown },
-    Opt { key: "shadow_quality", label: "Shadows (enhanced)", values: &settings::SHADOW_QUALITIES, live: false, tab: Tab::Graphics, ctl: Ctl::Steps },
-    Opt { key: "ssao", label: "SSAO (enhanced)", values: ON_OFF, live: false, tab: Tab::Graphics, ctl: Ctl::Checkbox },
+    Opt { key: "sound", label: "Sound set", values: &["synth", "original", "adlib", "soundfont"], live: true, tab: Tab::Audio, ctl: Ctl::Dropdown },
+    Opt { key: "soundfont", label: "SoundFont", values: &["musescore", "fluidr3"], live: true, tab: Tab::Audio, ctl: Ctl::Dropdown },
+    Opt { key: "tile_textures", label: "Tile textures", values: &settings::TILE_TEXTURES, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
+    Opt { key: "column_style", label: "Columns", values: &settings::COLUMN_STYLES, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
+    Opt { key: "object_style", label: "Objects", values: &settings::OBJECT_STYLES, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
+    Opt { key: "voxel_normals", label: "Voxel normals", values: &settings::VOXEL_NORMALS, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
+    Opt { key: "voxel_shading", label: "Voxel shading", values: &settings::VOXEL_SHADINGS, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
+    Opt { key: "shadow_quality", label: "Shadows (enhanced)", values: &settings::SHADOW_QUALITIES, live: true, tab: Tab::Graphics, ctl: Ctl::Steps },
+    Opt { key: "sun_brightness", label: "Sun light (enhanced)", values: &settings::SUN_BRIGHTNESS, live: true, tab: Tab::Graphics, ctl: Ctl::Steps },
+    Opt { key: "ssao", label: "SSAO (enhanced)", values: ON_OFF, live: true, tab: Tab::Graphics, ctl: Ctl::Checkbox },
 ];
 
 /// The settings.json value of `key` as text ("classic", "true", "0.7").
@@ -211,12 +212,36 @@ pub fn cycle(s: &Settings, i: usize, dir: i32) -> Settings {
         return set_percent(s, i, next.clamp(min, max));
     }
     let n = o.values.len() as i32;
-    let next = match pos(s, i) {
+    let mut next = match pos(s, i) {
         Some(p) if o.ctl == Ctl::Steps => (p as i32 + dir).clamp(0, n - 1),
         Some(p) => (p as i32 + dir).rem_euclid(n),
         None => if dir > 0 { 0 } else { n - 1 },
     };
+    // values that cannot be picked yet (a SoundFont that is not downloaded) are skipped
+    for _ in 0..n {
+        if available(o.key, o.values[next as usize]) {
+            break;
+        }
+        next = (next + dir.signum()).rem_euclid(n);
+    }
+    if !available(o.key, o.values[next as usize]) {
+        return s.clone(); // nothing to pick
+    }
     with_value(s, o.key, o.values[next as usize])
+}
+
+/// Whether value `v` of option `key` can be picked: a SoundFont (and the "soundfont" sound set) only once it is downloaded.
+pub fn available(key: &str, v: &str) -> bool {
+    match (key, v) {
+        ("soundfont", v) => crate::soundfont::index_of(v).is_some_and(crate::soundfont::available),
+        ("sound", "soundfont") => (0..crate::soundfont::FONTS.len()).any(crate::soundfont::available),
+        _ => true,
+    }
+}
+
+/// A drop-down entry: the value, with a note when it cannot be picked yet.
+pub fn entry_label(key: &str, v: &str) -> String {
+    if available(key, v) { shown(key, v) } else { format!("{} (not installed)", shown(key, v)) }
 }
 
 /// What a value looks like in the menu.
@@ -290,7 +315,7 @@ pub struct FontInfo {
 
 pub fn font_info(i: usize, s: &Settings, st: &Status) -> FontInfo {
     let f = &soundfont::FONTS[i];
-    // the font chosen in the settings is gone: the sound set falls back to AdLib at the next start, the setting stays
+    // the font chosen in the settings is gone: the sound set falls back to AdLib at once, the setting stays
     let selected = s.sound == "soundfont" && s.soundfont == f.id;
     let licence = soundfont::licence_line(i).to_string();
     let (mut sub, mut warn) = (licence, false);
@@ -522,9 +547,12 @@ impl Menu {
     fn nav_row(&mut self, n: Nav, row: Row, count: usize, s: &mut Settings) -> Option<Action> {
         if let (Some(h), Row::Opt(i)) = (self.open, row) {
             let len = OPTS[i].values.len();
+            let ok = |k: usize| available(OPTS[i].key, OPTS[i].values[k]);
             match n {
-                Nav::Up => self.open = Some((h + len - 1) % len),
-                Nav::Down => self.open = Some((h + 1) % len),
+                // the highlight skips entries that cannot be picked yet
+                Nav::Up => self.open = (1..=len).map(|d| (h + len - d) % len).find(|&k| ok(k)).or(Some(h)),
+                Nav::Down => self.open = (1..=len).map(|d| (h + d) % len).find(|&k| ok(k)).or(Some(h)),
+                Nav::Enter if !ok(h) => {} // stays open
                 Nav::Enter => {
                     self.open = None;
                     *s = with_value(s, OPTS[i].key, OPTS[i].values[h]);
@@ -589,7 +617,7 @@ impl Menu {
 pub fn deleted_note(i: usize, s: &Settings) -> String {
     let f = &soundfont::FONTS[i];
     if s.sound == "soundfont" && s.soundfont == f.id {
-        format!("{} deleted. Music uses AdLib at the next start (the setting stays).", f.name)
+        format!("{} deleted. Music uses AdLib now (the setting stays).", f.name)
     } else {
         format!("{} deleted.", f.name)
     }
@@ -681,6 +709,8 @@ mod tests {
 
     #[test]
     fn settings_values_cycle_and_wrap() {
+        let _g = soundfont::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        soundfont::debug_set(0, Status::Installed); // the font sound sets need one installed font
         let mut s = Settings::default();
         let mut m = settings_menu();
         focus_opt(&mut m, 0);
@@ -767,11 +797,41 @@ mod tests {
         let idx = m.sel;
         assert_eq!(m.press(idx, 0, &mut s), Some(Action::Changed(mute)), "a click toggles too");
         assert!(!s.muted);
-        assert!(OPTS[opt("ssao")].ctl == Ctl::Checkbox && !OPTS[opt("ssao")].live);
+        assert!(OPTS[opt("ssao")].ctl == Ctl::Checkbox);
+    }
+
+    #[test]
+    fn fonts_that_are_not_installed_cannot_be_picked() {
+        let _g = soundfont::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        soundfont::debug_set(0, Status::Absent);
+        soundfont::debug_set(1, Status::Absent);
+        let (snd, font) = (opt("sound"), opt("soundfont"));
+        let mut s = Settings::default();
+        s.sound = "adlib".into();
+        assert_eq!(cycle(&s, snd, 1).sound, "synth", "the soundfont set is skipped without a font (wraps past it)");
+        assert!(!available("soundfont", "musescore") && available("sound", "adlib"));
+        assert!(entry_label("soundfont", "musescore").ends_with("(not installed)"));
+        s.soundfont = "fluidr3".into();
+        assert_eq!(cycle(&s, font, 1).soundfont, "fluidr3", "nothing installed: no change");
+        soundfont::debug_set(0, Status::Installed);
+        assert_eq!(cycle(&s, font, 1).soundfont, "musescore");
+        assert_eq!(cycle(&s, snd, 1).sound, "soundfont");
+        // the open drop-down: Enter on an entry that is not installed does nothing
+        soundfont::debug_set(0, Status::Absent);
+        let mut m = settings_menu();
+        m.page = Page::Settings;
+        m.tab = Tab::Audio;
+        m.sel = m.rows().iter().position(|r| *r == Row::Opt(font)).unwrap();
+        m.open = Some(0);
+        assert!(m.nav(Nav::Enter, &mut s).is_none() && m.open == Some(0) && s.soundfont == "fluidr3");
+        soundfont::debug_clear(0);
+        soundfont::debug_clear(1);
     }
 
     #[test]
     fn dropdown_opens_selects_wraps_and_closes() {
+        let _g = soundfont::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        soundfont::debug_set(0, Status::Installed); // the font sound sets need one installed font
         let mut s = Settings::default();
         let mut m = settings_menu();
         let snd = opt("sound");
@@ -798,7 +858,7 @@ mod tests {
         m.nav(Nav::Right, &mut s);
         m.nav(Nav::Right, &mut s);
         assert_eq!(s.sound, "synth");
-        assert!(!OPTS[snd].live && OPTS[opt("volume")].live, "the restart badge follows Opt.live");
+        assert!(OPTS.iter().all(|o| o.live), "every option applies at runtime, none carries the restart badge");
         assert_eq!(shown("sound", "adlib"), "Adlib");
     }
 
@@ -835,7 +895,7 @@ mod tests {
         // a tab click focuses the strip
         m.focus(0);
         m.set_tab(2);
-        assert_eq!((m.tab, m.visible().len()), (Tab::Graphics, 8));
+        assert_eq!((m.tab, m.visible().len()), (Tab::Graphics, 9));
     }
 
     #[test]

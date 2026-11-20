@@ -69,7 +69,7 @@ Hall of fame. Settings has four tabs, each option a widget:
 | Graphics | drop-downs Tile textures, Columns, Objects, Voxel normals, Voxel shading; slider Shadows (off / low / high); checkbox SSAO |
 | Downloads | one row per SoundFont: Download, licence confirmation, progress bar with Cancel, installed size with Delete, Retry |
 
-Options that only apply after a restart carry an "after restart" badge. Every change is written to settings.json at once
+Every option applies at once, without a restart (switching the tile textures or the sound set rebuilds the room or re-renders the clips, which can take a moment). Every change is written to settings.json at once
 (atomic); live options apply immediately.
 
 | Input | Does |
@@ -89,7 +89,7 @@ for respecting its licence) with Accept / Cancel; while it runs a progress bar s
 Cancel really aborts (curl or tar is killed, the partial file is removed, the font is back to "not installed"). An installed
 font shows its size on disk and Delete, which asks Yes / No (No is preselected) and then removes the SF2 and its licence text
 from `soundfonts/`. If the deleted font is the selected SoundFont, the setting stays and the row shows a warning: music uses
-AdLib at the next start until it is downloaded again. The game stays frozen while the pause menu is open. The Controls page
+AdLib until it is downloaded again. The game stays frozen while the pause menu is open. The Controls page
 lists the kid's keys from settings.json and the fixed keys.
 
 Hall of fame name entry (after the ending, when the time qualifies): type up to 24 characters, Backspace deletes,

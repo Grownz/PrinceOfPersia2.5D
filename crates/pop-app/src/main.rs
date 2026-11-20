@@ -225,7 +225,8 @@ fn main() {
                 debug_text,
                 fullscreen,
                 char_style_key,
-                (enhanced::mode_key, enhanced::watchdog, enhanced::apply, enhanced::torch_shadows).chain(),
+                (kid::live_look, cutscene::live_look, (room::palette_live, cutscene::chamber_live).chain()), // settings that apply live
+                (enhanced::mode_key, enhanced::watchdog, enhanced::apply, enhanced::sun_brightness, enhanced::torch_shadows).chain(),
                 perf_log.run_if(move || perf),
                 (perf::overlay, perf::bench, perf::casters),
                 screenshot_and_quit,

@@ -100,6 +100,11 @@ pub fn status(i: usize) -> Status {
     s.unwrap_or_else(|| if installed(i) { Status::Installed } else { Status::Absent })
 }
 
+/// Usable for music now (downloaded; the delete confirmation still counts).
+pub fn available(i: usize) -> bool {
+    matches!(status(i), Status::Installed | Status::ConfirmDelete)
+}
+
 fn set(i: usize, s: Option<Status>) {
     if let Ok(mut g) = STATE.lock() {
         g[i] = s;

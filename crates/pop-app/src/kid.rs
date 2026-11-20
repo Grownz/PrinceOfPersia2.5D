@@ -94,6 +94,23 @@ pub fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: Res
     }
 }
 
+/// Applies `voxel_shading` and `voxel_normals` when the settings change: the shared materials are rewritten in place and the
+/// mesh cache is dropped, so `show` builds the figures' meshes again with the new normals on the next frame.
+pub fn live_look(set: Res<crate::settings::Settings>, mut a: ResMut<KidAssets>, mut mats: ResMut<Assets<StandardMaterial>>) {
+    if !set.is_changed() || set.is_added() {
+        return;
+    }
+    for (h, flash) in [(a.voxel_mat.clone(), false), (a.voxel_flash.clone(), true)] {
+        if let Some(mut m) = mats.get_mut(&h) {
+            *m = crate::voxel::character_material(set.unlit_voxels(), flash);
+        }
+    }
+    if a.smooth != set.smooth_normals() {
+        a.smooth = set.smooth_normals();
+        a.vcache.clear();
+    }
+}
+
 fn ctrl_held(k: &ButtonInput<KeyCode>) -> bool {
     k.pressed(KeyCode::ControlLeft) || k.pressed(KeyCode::ControlRight) // Ctrl+arrows navigate rooms instead
 }

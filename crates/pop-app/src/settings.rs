@@ -30,6 +30,8 @@ pub struct Settings {
     pub shadow_quality: String,
     /// enhanced mode only: screen-space ambient occlusion (turns MSAA off and uses SMAA instead)
     pub ssao: bool,
+    /// enhanced mode only: brightness of the sun next to the torches: "dim", "low", "medium" or "high"
+    pub sun_brightness: String,
     /// "original" (the tile images of VDUNGEON.DAT / VPALACE.DAT on the room pieces) or "procedural" (plain coloured
     /// boxes); POP_TILES overrides
     pub tile_textures: String,
@@ -58,6 +60,8 @@ pub const MOTION_SMOOTHINGS: [&str; 2] = ["position", "off"];
 pub const RENDER_MODES: [&str; 3] = ["classic", "enhanced", "rt_experimental"];
 pub const CHARACTER_STYLES: [&str; 2] = ["sprite", "voxel"];
 pub const SHADOW_QUALITIES: [&str; 3] = ["off", "low", "high"];
+/// enhanced sun brightness steps (illuminance 300 / 800 / 1600 / 3300), see enhanced::sun_lux
+pub const SUN_BRIGHTNESS: [&str; 4] = ["dim", "low", "medium", "high"];
 pub const TILE_TEXTURES: [&str; 2] = ["original", "procedural"];
 pub const COLUMN_STYLES: [&str; 2] = ["voxel", "flat"];
 pub const OBJECT_STYLES: [&str; 2] = ["voxel", "flat"];
@@ -140,7 +144,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into() }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "high".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into() }
     }
 }
 
@@ -178,6 +182,7 @@ impl Settings {
             character_style: field(&o, "character_style", d.character_style, |s| CHARACTER_STYLES.contains(&s.as_str())),
             shadow_quality: field(&o, "shadow_quality", d.shadow_quality, |s| SHADOW_QUALITIES.contains(&s.as_str())),
             ssao: field(&o, "ssao", d.ssao, |_| true),
+            sun_brightness: field(&o, "sun_brightness", d.sun_brightness, |s| SUN_BRIGHTNESS.contains(&s.as_str())),
             tile_textures: field(&o, "tile_textures", d.tile_textures, |s| TILE_TEXTURES.contains(&s.as_str())),
             column_style: field(&o, "column_style", d.column_style, |s| COLUMN_STYLES.contains(&s.as_str())),
             object_style: field(&o, "object_style", d.object_style, |s| OBJECT_STYLES.contains(&s.as_str())),
