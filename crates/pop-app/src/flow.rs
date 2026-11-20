@@ -520,7 +520,7 @@ pub fn menu_action(mut ui: ResMut<MenuUi>, mut g: ResMut<Game>, a: Res<KidAssets
             exit.write(AppExit::Success);
         }
         Action::Download(i) => crate::soundfont::start(i),
-        Action::Close | Action::Changed(_) => {}
+        Action::Close | Action::Changed(_) | Action::Deleted(_) => {}
     }
 }
 
@@ -657,12 +657,37 @@ pub fn debug_menu(mut ui: ResMut<MenuUi>, mut f: ResMut<Flow>, mut hof: ResMut<H
         page => {
             let pause = *state.get() == Screen::Playing;
             let mut m = Menu::new(if pause { Ctx::Pause } else { Ctx::Title }, pause, false);
+            use crate::menu::Tab;
             m.page = match page {
-                "settings" => Page::Settings,
+                "settings" | "video" | "audio" | "graphics" | "downloads" => Page::Settings,
                 "controls" => Page::Controls,
                 "hof" => Page::Hof,
                 _ => Page::Main,
             };
+            m.tab = match page {
+                "audio" => Tab::Audio,
+                "graphics" => Tab::Graphics,
+                "downloads" => Tab::Downloads,
+                _ => Tab::Video,
+            };
+            // POP_MENU_SEL = focused row, POP_MENU_OPEN = open its drop-down, POP_MENU_FAKE = made-up download states
+            m.sel = std::env::var("POP_MENU_SEL").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+            if std::env::var("POP_MENU_OPEN").is_ok() {
+                m.open = Some(0);
+            }
+            if let Ok(fake) = std::env::var("POP_MENU_FAKE") {
+                use crate::soundfont::{debug_set, Status};
+                let (a, b) = match fake.split_once(':') {
+                    Some(("downloading", pct)) => (Status::Busy { phase: "downloading", done: crate::soundfont::FONTS[0].bytes * pct.parse::<u64>().unwrap_or(0) / 100, total: crate::soundfont::FONTS[0].bytes }, Status::Installed),
+                    _ => match fake.as_str() {
+                        "confirm" => (Status::Confirm, Status::Failed("download failed (network?)".into())),
+                        "delete" => (Status::Installed, Status::ConfirmDelete),
+                        "unpack" => (Status::Absent, Status::Busy { phase: "unpacking", done: 0, total: 0 }),
+                        _ => (Status::Installed, Status::Absent),
+                    },
+                };
+                (debug_set(0, a), debug_set(1, b));
+            }
             ui.menu = Some(m);
             if pause {
                 next.set(Screen::Paused);

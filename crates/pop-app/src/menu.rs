@@ -1,6 +1,12 @@
-//! Menu logic (M6), no Bevy: pages, items, navigation and settings value cycling. menu_ui.rs reads the keys and draws it,
-//! flow.rs carries out the actions. The title menu opens with Esc / Start, the pause menu whenever the game is paused.
+//! Menu logic (M6), no Bevy: pages, tabs, widgets, focus and settings editing. menu_ui.rs reads keys, mouse and controller and
+//! draws it (hit testing is there), flow.rs carries out the actions. The title menu opens with Esc / Start, the pause menu
+//! whenever the game is paused.
+//!
+//! Model: a page is a list of `Row`s; `sel` is the focused row, `sub` the focused button inside a download row, `open` the
+//! highlighted entry of an open drop-down. The Settings page has a tab row (row 0) and one tab of option rows each; every
+//! option (`Opt`) is drawn as a slider, a checkbox or a drop-down (`Ctl`).
 use crate::settings::{self, Bindings, Settings};
+use crate::soundfont::{self, Status};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Ctx {
@@ -14,9 +20,30 @@ pub enum Page {
     Settings,
     Controls,
     Hof,
-    SoundFonts,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tab {
+    Video,
+    Audio,
+    Graphics,
+    Downloads,
+}
+
+pub const TABS: [Tab; 4] = [Tab::Video, Tab::Audio, Tab::Graphics, Tab::Downloads];
+
+impl Tab {
+    pub fn name(self) -> &'static str {
+        match self {
+            Tab::Video => "Video",
+            Tab::Audio => "Audio",
+            Tab::Graphics => "Graphics",
+            Tab::Downloads => "Downloads",
+        }
+    }
+}
+
+/// The plain buttons of the main / pause menu, and Back.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {
     Start,
@@ -29,15 +56,37 @@ pub enum Item {
     Hof,
     QuitTitle,
     Quit,
+    Back,
+}
+
+impl Item {
+    pub fn label(self) -> &'static str {
+        match self {
+            Item::Start => "Start game",
+            Item::Load => "Load game",
+            Item::Resume => "Resume",
+            Item::Restart => "Restart level",
+            Item::Save => "Save game",
+            Item::Settings => "Settings",
+            Item::Controls => "Controls",
+            Item::Hof => "Hall of fame",
+            Item::QuitTitle => "Quit to title",
+            Item::Quit => "Quit game",
+            Item::Back => "Back",
+        }
+    }
+}
+
+/// One focusable line of a page.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Row {
+    /// the tab strip of the Settings page
+    Tabs,
     /// index into OPTS
     Opt(usize),
-    /// opens the SoundFonts page
-    SoundFonts,
     /// a downloadable SoundFont (index into soundfont::FONTS)
     Font(usize),
-    /// a line of the licence notice (not selectable in effect)
-    Note(usize),
-    Back,
+    Item(Item),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -48,6 +97,8 @@ pub enum Nav {
     Right,
     Enter,
     Back,
+    PrevTab,
+    NextTab,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -64,36 +115,51 @@ pub enum Action {
     Changed(usize),
     /// start downloading soundfont::FONTS[i] (the user confirmed the licence notice)
     Download(usize),
+    /// soundfont::FONTS[i] was deleted
+    Deleted(usize),
 }
 
-/// One settings.json key: shown label, the values it cycles through, whether it applies at once (else after a restart).
+/// How an option is edited.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Ctl {
+    /// a number in percent (the setting is a fraction)
+    Slider { min: i32, max: i32, step: i32 },
+    /// ordered values on a slider (off / low / high)
+    Steps,
+    Checkbox,
+    Dropdown,
+}
+
+/// One settings.json key: shown label, the values it takes, whether it applies at once (else after a restart).
 pub struct Opt {
     pub key: &'static str,
     pub label: &'static str,
     pub values: &'static [&'static str],
     pub live: bool,
+    pub tab: Tab,
+    pub ctl: Ctl,
 }
 
 const ON_OFF: &[&str] = &["true", "false"];
-const VOLUMES: &[&str] = &["0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1"];
+const PERCENT: Ctl = Ctl::Slider { min: 0, max: 100, step: 5 };
 
 pub const OPTS: [Opt; 16] = [
-    Opt { key: "render_mode", label: "Rendering", values: &["classic", "enhanced"], live: true },
-    Opt { key: "character_style", label: "Characters", values: &settings::CHARACTER_STYLES, live: true },
-    Opt { key: "camera_scroll", label: "Room change", values: &settings::CAMERA_SCROLLS, live: true },
-    Opt { key: "motion_smoothing", label: "Motion smoothing", values: &settings::MOTION_SMOOTHINGS, live: true },
-    Opt { key: "window", label: "Window", values: &["windowed", "borderless"], live: true },
-    Opt { key: "volume", label: "Volume", values: VOLUMES, live: true },
-    Opt { key: "muted", label: "Mute", values: ON_OFF, live: true },
-    Opt { key: "sound", label: "Sound set", values: &["synth", "original", "adlib", "soundfont"], live: false },
-    Opt { key: "soundfont", label: "SoundFont", values: &["musescore", "fluidr3"], live: false },
-    Opt { key: "tile_textures", label: "Tile textures", values: &settings::TILE_TEXTURES, live: false },
-    Opt { key: "column_style", label: "Columns", values: &settings::COLUMN_STYLES, live: false },
-    Opt { key: "object_style", label: "Objects", values: &settings::OBJECT_STYLES, live: false },
-    Opt { key: "voxel_normals", label: "Voxel normals", values: &settings::VOXEL_NORMALS, live: false },
-    Opt { key: "voxel_shading", label: "Voxel shading", values: &settings::VOXEL_SHADINGS, live: false },
-    Opt { key: "shadow_quality", label: "Shadows (enhanced)", values: &settings::SHADOW_QUALITIES, live: false },
-    Opt { key: "ssao", label: "SSAO (enhanced)", values: ON_OFF, live: false },
+    Opt { key: "render_mode", label: "Rendering", values: &["classic", "enhanced"], live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
+    Opt { key: "character_style", label: "Characters", values: &settings::CHARACTER_STYLES, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
+    Opt { key: "camera_scroll", label: "Room change", values: &settings::CAMERA_SCROLLS, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
+    Opt { key: "motion_smoothing", label: "Motion smoothing", values: &settings::MOTION_SMOOTHINGS, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
+    Opt { key: "window", label: "Window mode", values: &["windowed", "borderless"], live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
+    Opt { key: "volume", label: "Volume", values: &[], live: true, tab: Tab::Audio, ctl: PERCENT },
+    Opt { key: "muted", label: "Mute", values: ON_OFF, live: true, tab: Tab::Audio, ctl: Ctl::Checkbox },
+    Opt { key: "sound", label: "Sound set", values: &["synth", "original", "adlib", "soundfont"], live: false, tab: Tab::Audio, ctl: Ctl::Dropdown },
+    Opt { key: "soundfont", label: "SoundFont", values: &["musescore", "fluidr3"], live: false, tab: Tab::Audio, ctl: Ctl::Dropdown },
+    Opt { key: "tile_textures", label: "Tile textures", values: &settings::TILE_TEXTURES, live: false, tab: Tab::Graphics, ctl: Ctl::Dropdown },
+    Opt { key: "column_style", label: "Columns", values: &settings::COLUMN_STYLES, live: false, tab: Tab::Graphics, ctl: Ctl::Dropdown },
+    Opt { key: "object_style", label: "Objects", values: &settings::OBJECT_STYLES, live: false, tab: Tab::Graphics, ctl: Ctl::Dropdown },
+    Opt { key: "voxel_normals", label: "Voxel normals", values: &settings::VOXEL_NORMALS, live: false, tab: Tab::Graphics, ctl: Ctl::Dropdown },
+    Opt { key: "voxel_shading", label: "Voxel shading", values: &settings::VOXEL_SHADINGS, live: false, tab: Tab::Graphics, ctl: Ctl::Dropdown },
+    Opt { key: "shadow_quality", label: "Shadows (enhanced)", values: &settings::SHADOW_QUALITIES, live: false, tab: Tab::Graphics, ctl: Ctl::Steps },
+    Opt { key: "ssao", label: "SSAO (enhanced)", values: ON_OFF, live: false, tab: Tab::Graphics, ctl: Ctl::Checkbox },
 ];
 
 /// The settings.json value of `key` as text ("classic", "true", "0.7").
@@ -112,49 +178,185 @@ pub fn with_value(s: &Settings, key: &str, v: &str) -> Settings {
     Settings::parse(&o.to_string())
 }
 
-/// Step OPTS[i] by `dir` (+1 / -1, wrapping); a current value outside the list (rt_experimental, volume 0.65) starts at
-/// the nearest end.
+/// Index of the current value in OPTS[i].values (None for a value outside the list, e.g. rt_experimental).
+fn pos(s: &Settings, i: usize) -> Option<usize> {
+    let cur = value(s, OPTS[i].key);
+    OPTS[i].values.iter().position(|v| *v == cur)
+}
+
+/// The slider's percent value (volume is the only one).
+fn percent(s: &Settings) -> i32 {
+    (s.volume * 100.0).round() as i32 // f32 sums such as 0.70000005 still land on their step
+}
+
+fn set_percent(s: &Settings, i: usize, p: i32) -> Settings {
+    with_value(s, OPTS[i].key, &format!("{}", p as f32 / 100.0))
+}
+
+/// Slider position 0..1 of a slider / steps option.
+pub fn frac(s: &Settings, i: usize) -> f32 {
+    match OPTS[i].ctl {
+        Ctl::Slider { min, max, .. } => (percent(s) - min) as f32 / (max - min) as f32,
+        _ => pos(s, i).map_or(0.0, |p| p as f32 / (OPTS[i].values.len() - 1).max(1) as f32),
+    }
+}
+
+/// Step OPTS[i] by `dir` (+1 / -1): sliders stop at their ends, everything else wraps; a current value outside the list
+/// (rt_experimental) starts at the nearest end.
 pub fn cycle(s: &Settings, i: usize, dir: i32) -> Settings {
     let o = &OPTS[i];
-    let cur = value(s, o.key);
+    if let Ctl::Slider { min, max, step } = o.ctl {
+        let c = percent(s);
+        let next = if dir > 0 { (c.div_euclid(step) + 1) * step } else { (c + step - 1).div_euclid(step) * step - step };
+        return set_percent(s, i, next.clamp(min, max));
+    }
     let n = o.values.len() as i32;
-    let pos = if o.key == "volume" {
-        Some((s.volume * 10.0).round() as i32) // f32 sums such as 0.70000005 still find their step
-    } else {
-        o.values.iter().position(|v| *v == cur).map(|p| p as i32)
-    };
-    let next = match pos {
-        Some(p) if o.key == "volume" => (p + dir).clamp(0, n - 1), // volume stops at 0 and 100 %
-        Some(p) => (p + dir).rem_euclid(n),
+    let next = match pos(s, i) {
+        Some(p) if o.ctl == Ctl::Steps => (p as i32 + dir).clamp(0, n - 1),
+        Some(p) => (p as i32 + dir).rem_euclid(n),
         None => if dir > 0 { 0 } else { n - 1 },
     };
     with_value(s, o.key, o.values[next as usize])
 }
 
-/// What the value looks like in the menu.
-fn shown(key: &str, v: &str) -> String {
+/// What a value looks like in the menu.
+pub fn shown(key: &str, v: &str) -> String {
     match (key, v) {
         ("volume", v) => format!("{}%", (v.parse::<f32>().unwrap_or(0.0) * 100.0).round()),
+        ("soundfont", v) => crate::soundfont::index_of(v).map_or(v.into(), |i| crate::soundfont::FONTS[i].name.into()),
         (_, "true") => "on".into(),
         (_, "false") => "off".into(),
-        (_, v) => v.into(),
+        (_, v) => {
+            let mut c = v.chars();
+            c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+        }
     }
 }
+
+/// The text beside OPTS[i]'s widget.
+pub fn opt_value(s: &Settings, i: usize) -> String {
+    shown(OPTS[i].key, &value(s, OPTS[i].key))
+}
+
+/// The buttons of a font's row for its current state (the first one is the default).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FontBtn {
+    Download,
+    Accept,
+    Decline,
+    Abort,
+    Delete,
+    Yes,
+    No,
+    Retry,
+}
+
+impl FontBtn {
+    pub fn label(self) -> &'static str {
+        match self {
+            FontBtn::Download => "Download",
+            FontBtn::Accept => "Accept",
+            FontBtn::Decline | FontBtn::Abort => "Cancel",
+            FontBtn::Delete => "Delete",
+            FontBtn::Yes => "Yes",
+            FontBtn::No => "No",
+            FontBtn::Retry => "Retry",
+        }
+    }
+}
+
+pub fn font_buttons(st: &Status) -> Vec<FontBtn> {
+    match st {
+        Status::Absent => vec![FontBtn::Download],
+        Status::Confirm => vec![FontBtn::Accept, FontBtn::Decline],
+        Status::Busy { .. } => vec![FontBtn::Abort],
+        Status::Installed => vec![FontBtn::Delete],
+        Status::ConfirmDelete => vec![FontBtn::Yes, FontBtn::No],
+        Status::Failed(_) => vec![FontBtn::Retry],
+    }
+}
+
+/// Everything the Downloads row of font `i` shows.
+pub struct FontInfo {
+    pub title: String,
+    pub sub: String,
+    /// the sub line is a notice / warning (accent colour)
+    pub warn: bool,
+    pub status: String,
+    /// progress bar fill 0..1 while downloading
+    pub bar: Option<f32>,
+    pub btns: Vec<FontBtn>,
+}
+
+pub fn font_info(i: usize, s: &Settings, st: &Status) -> FontInfo {
+    let f = &soundfont::FONTS[i];
+    // the font chosen in the settings is gone: the sound set falls back to AdLib at the next start, the setting stays
+    let selected = s.sound == "soundfont" && s.soundfont == f.id;
+    let licence = soundfont::licence_line(i).to_string();
+    let (mut sub, mut warn) = (licence, false);
+    let mut bar = None;
+    let status = match st {
+        Status::Absent => "not installed".to_string(),
+        Status::Confirm => {
+            (sub, warn) = (format!("{} Downloaded from the source's server: you are responsible for respecting its licence.", sub), true);
+            "licence notice".into()
+        }
+        Status::Busy { done, total, .. } if *total > 0 => {
+            bar = Some((*done as f32 / *total as f32).clamp(0.0, 1.0));
+            format!("{} / {} MB  {}%", done / 1_000_000, total / 1_000_000, (done * 100 + total / 2) / total)
+        }
+        Status::Busy { phase, .. } => {
+            bar = Some(1.0);
+            format!("{phase}...")
+        }
+        Status::Installed => format!("{} MB on disk", std::fs::metadata(soundfont::path(i)).map_or(f.bytes, |m| m.len()) / 1_000_000),
+        Status::ConfirmDelete => {
+            (sub, warn) = ("Deletes the font file and its licence text.".into(), true);
+            if selected {
+                sub += " It is the selected SoundFont: music uses AdLib until you download it again.";
+            }
+            "Delete?".into()
+        }
+        Status::Failed(e) => {
+            (sub, warn) = (e.clone(), true);
+            "failed".into()
+        }
+    };
+    if selected && matches!(st, Status::Absent) {
+        (sub, warn) = ("Selected SoundFont is missing: music uses AdLib until it is downloaded.".into(), true);
+    }
+    FontInfo { title: f.name.to_string(), sub: if warn { sub } else { format!("{} MB. {sub}", soundfont::size_mb(i)) }, warn, status, bar, btns: font_buttons(st) }
+}
+
+/// Visible pooled rows (the tab strip is drawn apart).
+pub const ROWS: usize = 9;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Menu {
     pub ctx: Ctx,
     pub page: Page,
+    pub tab: Tab,
+    /// focused row
     pub sel: usize,
+    /// focused button of a download row
+    pub sub: usize,
+    /// highlighted entry of the open drop-down of the focused row
+    pub open: Option<usize>,
+    /// scroll: first visible pooled row
+    pub top: usize,
     /// pause: Ctrl+G would save here (levels 3..13)
     pub can_save: bool,
     /// title: PRINCE.SAV exists
     pub has_save: bool,
 }
 
+fn confirming_any() -> bool {
+    (0..soundfont::FONTS.len()).any(|i| matches!(soundfont::status(i), Status::Confirm | Status::ConfirmDelete))
+}
+
 impl Menu {
     pub fn new(ctx: Ctx, can_save: bool, has_save: bool) -> Menu {
-        Menu { ctx, page: Page::Main, sel: 0, can_save, has_save }
+        Menu { ctx, page: Page::Main, tab: Tab::Video, sel: 0, sub: 0, open: None, top: 0, can_save, has_save }
     }
 
     pub fn title(&self) -> &'static str {
@@ -164,113 +366,232 @@ impl Menu {
             (Page::Settings, _) => "SETTINGS",
             (Page::Controls, _) => "CONTROLS",
             (Page::Hof, _) => "HALL OF FAME",
-            (Page::SoundFonts, _) => "SOUNDFONTS",
         }
     }
 
-    pub fn items(&self) -> Vec<Item> {
+    pub fn rows(&self) -> Vec<Row> {
         use Item::*;
+        let items = |v: &[Item]| v.iter().copied().map(Row::Item).collect::<Vec<_>>();
         match (self.page, self.ctx) {
-            (Page::Main, Ctx::Title) => [Start, Load, Settings, Controls, Hof, Quit].into_iter().filter(|&i| i != Load || self.has_save).collect(),
-            (Page::Main, Ctx::Pause) => [Resume, Restart, Save, Settings, Controls, QuitTitle, Quit].into_iter().filter(|&i| i != Save || self.can_save).collect(),
-            (Page::Settings, _) => (0..OPTS.len()).map(Item::Opt).chain([Item::SoundFonts, Back]).collect(),
-            (Page::SoundFonts, _) => match crate::soundfont::confirming() {
-                Some(_) => (0..3).map(Item::Note).chain([Item::Font(crate::soundfont::confirming().unwrap()), Back]).collect(),
-                None => (0..crate::soundfont::FONTS.len()).map(Item::Font).chain([Back]).collect(),
-            },
-            (Page::Controls | Page::Hof, _) => vec![Back],
+            (Page::Main, Ctx::Title) => items(&[Start, Load, Settings, Controls, Hof, Quit]).into_iter().filter(|&r| r != Row::Item(Load) || self.has_save).collect(),
+            (Page::Main, Ctx::Pause) => items(&[Resume, Restart, Save, Settings, Controls, QuitTitle, Quit]).into_iter().filter(|&r| r != Row::Item(Save) || self.can_save).collect(),
+            (Page::Settings, _) => {
+                let body: Vec<Row> = if self.tab == Tab::Downloads { (0..soundfont::FONTS.len()).map(Row::Font).collect() } else { (0..OPTS.len()).filter(|&i| OPTS[i].tab == self.tab).map(Row::Opt).collect() };
+                [Row::Tabs].into_iter().chain(body).chain([Row::Item(Back)]).collect()
+            }
+            (Page::Controls | Page::Hof, _) => items(&[Back]),
         }
     }
 
-    pub fn label(&self, item: Item, s: &Settings) -> String {
-        match item {
-            Item::Start => "Start game".into(),
-            Item::Load => "Load game".into(),
-            Item::Resume => "Resume".into(),
-            Item::Restart => "Restart level".into(),
-            Item::Save => "Save game".into(),
-            Item::Settings => "Settings".into(),
-            Item::Controls => "Controls".into(),
-            Item::Hof => "Hall of fame".into(),
-            Item::QuitTitle => "Quit to title".into(),
-            Item::Quit => "Quit game".into(),
-            Item::Back => "Back".into(),
-            Item::SoundFonts => "SoundFonts (download)".into(),
-            Item::Font(i) => crate::soundfont::label(i),
-            Item::Note(k) => match crate::soundfont::confirming() {
-                Some(i) => match k {
-                    0 => format!("{}: {}", crate::soundfont::FONTS[i].name, crate::soundfont::licence_line(i)),
-                    1 => "Downloaded from the source's server. You are".into(),
-                    _ => "responsible for respecting its licence.".into(),
-                },
-                None => String::new(),
-            },
-            Item::Opt(i) => {
-                let o = &OPTS[i];
-                format!("{}:  < {} >{}", o.label, shown(o.key, &value(s, o.key)), if o.live { "" } else { "  (after restart)" })
+    /// Rows drawn in the pool: (row index, row), scrolled by `top`; the tab strip is not part of it.
+    pub fn visible(&self) -> Vec<(usize, Row)> {
+        self.rows().into_iter().enumerate().skip(self.first()).skip(self.top).take(ROWS).collect()
+    }
+
+    fn first(&self) -> usize {
+        (self.page == Page::Settings) as usize
+    }
+
+    fn keep_visible(&mut self) {
+        let (n, first) = (self.rows().len() - self.first(), self.first());
+        self.top = self.top.min(n.saturating_sub(ROWS));
+        if self.sel >= first {
+            let p = self.sel - first;
+            if p < self.top {
+                self.top = p;
+            } else if p >= self.top + ROWS {
+                self.top = p + 1 - ROWS;
             }
         }
     }
 
-    /// One key press. Settings changes are made in `s`; the caller applies and saves them on `Changed`.
+    pub fn hint(&self) -> &'static str {
+        match (self.page, self.rows().get(self.sel)) {
+            _ if self.open.is_some() => "Up / Down: choose   Enter: select   Esc: close   Mouse: click",
+            (Page::Settings, Some(Row::Tabs)) => "Left / Right: tab   Up / Down: choose   Esc / B: back",
+            (Page::Settings, _) => "Up / Down: choose   Left / Right: change   Enter: open, toggle   Q / E, LB / RB: tab   Esc / B: back",
+            _ => "Up / Down / d-pad: choose   Enter / A: select   Esc / B: back   Mouse: click, wheel",
+        }
+    }
+
+    /// Select the tab `k` (strip click, Q / E).
+    pub fn set_tab(&mut self, k: usize) {
+        self.tab = TABS[k % TABS.len()];
+        (self.top, self.sub, self.open) = (0, 0, None);
+        self.sel = self.sel.min(self.rows().len() - 1);
+    }
+
+    /// Move the focus to row `idx` (mouse hover); a drop-down stays open only on its own row.
+    pub fn focus(&mut self, idx: usize) {
+        if idx != self.sel {
+            (self.sel, self.sub, self.open) = (idx.min(self.rows().len() - 1), 0, None);
+        }
+    }
+
+    /// The row index of pool slot `slot` (None past the end).
+    pub fn slot_idx(&self, slot: usize) -> Option<usize> {
+        let i = self.first() + self.top + slot;
+        (slot < ROWS && i < self.rows().len()).then_some(i)
+    }
+
+    /// Mouse wheel: scroll the pooled rows by `d` (the focus follows the view).
+    pub fn scroll(&mut self, d: i32) {
+        let n = self.rows().len() - self.first();
+        self.top = (self.top as i32 + d).clamp(0, n.saturating_sub(ROWS) as i32) as usize;
+        let (lo, hi) = (self.first() + self.top, self.first() + self.top + ROWS - 1);
+        if self.sel >= self.first() && !(lo..=hi).contains(&self.sel) {
+            self.focus(self.sel.clamp(lo, hi));
+        }
+    }
+
+    /// Mouse press on row `idx` (button `sub` of a download row): focus it and do what Enter does.
+    pub fn press(&mut self, idx: usize, sub: usize, s: &mut Settings) -> Option<Action> {
+        self.focus(idx);
+        self.sub = sub;
+        self.nav(Nav::Enter, s)
+    }
+
+    /// Mouse press on entry `k` of the open drop-down.
+    pub fn pick(&mut self, k: usize, s: &mut Settings) -> Option<Action> {
+        self.open = Some(k);
+        self.nav(Nav::Enter, s)
+    }
+
+    /// Set a slider row (mouse press / drag at `f` 0..1 of the track).
+    pub fn slide(&mut self, idx: usize, f: f32, s: &mut Settings) -> Option<Action> {
+        self.focus(idx);
+        let Some(&Row::Opt(i)) = self.rows().get(idx) else { return None };
+        let f = f.clamp(0.0, 1.0);
+        let next = match OPTS[i].ctl {
+            Ctl::Slider { min, max, step } => set_percent(s, i, (((f * (max - min) as f32) / step as f32).round() as i32 * step + min).clamp(min, max)),
+            Ctl::Steps => with_value(s, OPTS[i].key, OPTS[i].values[(f * (OPTS[i].values.len() - 1) as f32).round() as usize]),
+            _ => return None,
+        };
+        (next != *s).then(|| {
+            *s = next;
+            Action::Changed(i)
+        })
+    }
+
+    fn back_to_main(&mut self) {
+        let from = match self.page {
+            Page::Settings => Item::Settings,
+            Page::Controls => Item::Controls,
+            _ => Item::Hof,
+        };
+        self.page = Page::Main;
+        (self.sub, self.top, self.open) = (0, 0, None);
+        self.sel = self.rows().iter().position(|&r| r == Row::Item(from)).unwrap_or(0);
+    }
+
+    fn open_page(&mut self, p: Page) {
+        (self.page, self.sel, self.sub, self.top, self.open) = (p, 0, 0, 0, None);
+    }
+
+    fn font_press(&mut self, i: usize) -> Option<Action> {
+        let b = font_buttons(&soundfont::status(i));
+        let b = b[self.sub.min(b.len() - 1)];
+        self.sub = 0;
+        match b {
+            FontBtn::Download | FontBtn::Retry => soundfont::ask(i),
+            FontBtn::Accept => return Some(Action::Download(i)),
+            FontBtn::Decline | FontBtn::No => soundfont::cancel_all(),
+            FontBtn::Abort => soundfont::cancel(i),
+            FontBtn::Delete => {
+                soundfont::ask_delete(i);
+                self.sub = 1; // "No" is the default of a delete question
+            }
+            FontBtn::Yes => {
+                soundfont::delete(i);
+                return Some(Action::Deleted(i));
+            }
+        }
+        None
+    }
+
+    /// One key press (or its mouse equivalent). Settings changes are made in `s`; the caller applies and saves them on `Changed`.
     pub fn nav(&mut self, n: Nav, s: &mut Settings) -> Option<Action> {
-        let items = self.items();
-        self.sel = self.sel.min(items.len() - 1);
-        let item = items[self.sel];
-        match (n, item) {
-            (Nav::Up, _) => self.sel = (self.sel + items.len() - 1) % items.len(),
-            (Nav::Down, _) => self.sel = (self.sel + 1) % items.len(),
-            (Nav::Left | Nav::Right | Nav::Enter, Item::Opt(i)) => {
+        let rows = self.rows();
+        self.sel = self.sel.min(rows.len() - 1);
+        let row = rows[self.sel];
+        let act = self.nav_row(n, row, rows.len(), s);
+        self.keep_visible();
+        act
+    }
+
+    fn nav_row(&mut self, n: Nav, row: Row, count: usize, s: &mut Settings) -> Option<Action> {
+        if let (Some(h), Row::Opt(i)) = (self.open, row) {
+            let len = OPTS[i].values.len();
+            match n {
+                Nav::Up => self.open = Some((h + len - 1) % len),
+                Nav::Down => self.open = Some((h + 1) % len),
+                Nav::Enter => {
+                    self.open = None;
+                    *s = with_value(s, OPTS[i].key, OPTS[i].values[h]);
+                    return Some(Action::Changed(i));
+                }
+                Nav::Back => self.open = None,
+                _ => {}
+            }
+            return None;
+        }
+        self.open = None;
+        match (n, row) {
+            (Nav::Up, _) => (self.sel, self.sub) = ((self.sel + count - 1) % count, 0),
+            (Nav::Down, _) => (self.sel, self.sub) = ((self.sel + 1) % count, 0),
+            (Nav::PrevTab | Nav::NextTab, _) if self.page == Page::Settings => self.set_tab((TABS.iter().position(|&t| t == self.tab).unwrap_or(0) + if n == Nav::NextTab { 1 } else { TABS.len() - 1 }) % TABS.len()),
+            (Nav::PrevTab | Nav::NextTab, _) => {}
+            (Nav::Left | Nav::Right, Row::Tabs) => self.set_tab((TABS.iter().position(|&t| t == self.tab).unwrap_or(0) + if n == Nav::Right { 1 } else { TABS.len() - 1 }) % TABS.len()),
+            (Nav::Left | Nav::Right, Row::Opt(i)) => {
                 *s = cycle(s, i, if n == Nav::Left { -1 } else { 1 });
                 return Some(Action::Changed(i));
             }
-            (Nav::Left | Nav::Right, _) => {}
-            (Nav::Back, _) if self.page == Page::SoundFonts && crate::soundfont::confirming().is_some() => {
-                crate::soundfont::cancel_all();
-                self.sel = 0;
+            (Nav::Left | Nav::Right, Row::Font(i)) => {
+                let k = font_buttons(&soundfont::status(i)).len();
+                self.sub = if n == Nav::Right { (self.sub + 1).min(k - 1) } else { self.sub.saturating_sub(1) };
             }
-            (Nav::Back, _) | (Nav::Enter, Item::Back) => {
+            (Nav::Left | Nav::Right, _) | (Nav::Enter, Row::Tabs) => {}
+            (Nav::Enter, Row::Opt(i)) => match OPTS[i].ctl {
+                Ctl::Checkbox => {
+                    *s = cycle(s, i, 1);
+                    return Some(Action::Changed(i));
+                }
+                Ctl::Dropdown => self.open = Some(pos(s, i).unwrap_or(0)),
+                _ => {}
+            },
+            (Nav::Enter, Row::Font(i)) => return self.font_press(i),
+            (Nav::Back, _) if self.page == Page::Settings && confirming_any() => soundfont::cancel_all(),
+            (Nav::Back, _) | (Nav::Enter, Row::Item(Item::Back)) => {
                 if self.page == Page::Main {
                     return Some(Action::Close);
                 }
-                if self.page == Page::SoundFonts {
-                    self.page = Page::Settings;
-                    self.sel = self.items().iter().position(|&i| i == Item::SoundFonts).unwrap_or(0);
-                    return None;
-                }
-                let from = match self.page {
-                    Page::Settings => Item::Settings,
-                    Page::Controls => Item::Controls,
-                    _ => Item::Hof,
-                };
-                self.page = Page::Main;
-                self.sel = self.items().iter().position(|&i| i == from).unwrap_or(0);
+                self.back_to_main();
             }
-            (Nav::Enter, Item::SoundFonts) => (self.page, self.sel) = (Page::SoundFonts, 0),
-            (Nav::Enter, Item::Font(i)) => match crate::soundfont::status(i) {
-                crate::soundfont::Status::Confirm => {
-                    self.sel = i;
-                    return Some(Action::Download(i));
-                }
-                crate::soundfont::Status::Absent | crate::soundfont::Status::Failed(_) => {
-                    crate::soundfont::ask(i);
-                    self.sel = 3; // the font line below the notice
-                }
-                _ => {}
+            (Nav::Enter, Row::Item(it)) => match it {
+                Item::Settings => self.open_page(Page::Settings),
+                Item::Controls => self.open_page(Page::Controls),
+                Item::Hof => self.open_page(Page::Hof),
+                Item::Resume => return Some(Action::Close),
+                Item::Start => return Some(Action::Start),
+                Item::Load => return Some(Action::Load),
+                Item::Restart => return Some(Action::Restart),
+                Item::Save => return Some(Action::Save),
+                Item::QuitTitle => return Some(Action::QuitTitle),
+                Item::Quit => return Some(Action::Quit),
+                Item::Back => {}
             },
-            (Nav::Enter, Item::Note(_)) => {}
-            (Nav::Enter, Item::Settings) => (self.page, self.sel) = (Page::Settings, 0),
-            (Nav::Enter, Item::Controls) => (self.page, self.sel) = (Page::Controls, 0),
-            (Nav::Enter, Item::Hof) => (self.page, self.sel) = (Page::Hof, 0),
-            (Nav::Enter, Item::Resume) => return Some(Action::Close),
-            (Nav::Enter, Item::Start) => return Some(Action::Start),
-            (Nav::Enter, Item::Load) => return Some(Action::Load),
-            (Nav::Enter, Item::Restart) => return Some(Action::Restart),
-            (Nav::Enter, Item::Save) => return Some(Action::Save),
-            (Nav::Enter, Item::QuitTitle) => return Some(Action::QuitTitle),
-            (Nav::Enter, Item::Quit) => return Some(Action::Quit),
         }
         None
+    }
+}
+
+/// Message after a font was deleted.
+pub fn deleted_note(i: usize, s: &Settings) -> String {
+    let f = &soundfont::FONTS[i];
+    if s.sound == "soundfont" && s.soundfont == f.id {
+        format!("{} deleted. Music uses AdLib at the next start (the setting stays).", f.name)
+    } else {
+        format!("{} deleted.", f.name)
     }
 }
 
@@ -291,6 +612,7 @@ pub fn controls(k: &Bindings) -> Vec<String> {
             "F5: classic / enhanced   F6: sprite / voxel   F9: frame times",
             "Controller: d-pad / stick move, A / X action,",
             "Start pause, Back restart; menus: A ok, B back",
+            "Menus: mouse; Q / E, PgUp / PgDn: tab",
         ]
         .map(String::from),
     );
@@ -300,38 +622,58 @@ pub fn controls(k: &Bindings) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::soundfont::{debug_set, Status};
+
+    fn settings_menu() -> Menu {
+        let mut m = Menu::new(Ctx::Title, false, false);
+        m.page = Page::Settings;
+        m
+    }
+
+    fn opt(key: &str) -> usize {
+        OPTS.iter().position(|o| o.key == key).unwrap()
+    }
+
+    /// moves the focus to the row of OPTS[i] (switching the tab)
+    fn focus_opt(m: &mut Menu, i: usize) {
+        m.set_tab(TABS.iter().position(|&t| t == OPTS[i].tab).unwrap());
+        m.sel = m.rows().iter().position(|&r| r == Row::Opt(i)).unwrap();
+    }
 
     #[test]
     fn pause_menu_navigation_and_back() {
+        let _g = soundfont::LOCK.lock().unwrap_or_else(|e| e.into_inner()); // Esc looks at the shared download state
         let mut s = Settings::default();
         let mut m = Menu::new(Ctx::Pause, false, false);
-        assert!(!m.items().contains(&Item::Save), "no save outside levels 3..13");
+        assert!(!m.rows().contains(&Row::Item(Item::Save)), "no save outside levels 3..13");
         assert_eq!(m.nav(Nav::Up, &mut s), None);
-        assert_eq!(m.items()[m.sel], Item::Quit, "up wraps to the bottom");
+        assert_eq!(m.rows()[m.sel], Row::Item(Item::Quit), "up wraps to the bottom");
         assert_eq!(m.nav(Nav::Down, &mut s), None);
         assert_eq!(m.nav(Nav::Enter, &mut s), Some(Action::Close), "Resume");
         m.sel = 1;
         assert_eq!(m.nav(Nav::Enter, &mut s), Some(Action::Restart));
         // into settings and back with Esc: the cursor returns to "Settings"
-        m.sel = m.items().iter().position(|&i| i == Item::Settings).unwrap();
+        m.sel = m.rows().iter().position(|&r| r == Row::Item(Item::Settings)).unwrap();
         m.nav(Nav::Enter, &mut s);
         assert_eq!((m.page, m.sel), (Page::Settings, 0));
+        assert_eq!(m.rows()[0], Row::Tabs);
         assert_eq!(m.nav(Nav::Back, &mut s), None);
-        assert_eq!((m.page, m.items()[m.sel]), (Page::Main, Item::Settings));
+        assert_eq!((m.page, m.rows()[m.sel]), (Page::Main, Row::Item(Item::Settings)));
         assert_eq!(m.nav(Nav::Back, &mut s), Some(Action::Close), "Esc on the main page resumes");
-        assert!(Menu::new(Ctx::Pause, true, false).items().contains(&Item::Save));
+        assert!(Menu::new(Ctx::Pause, true, false).rows().contains(&Row::Item(Item::Save)));
     }
 
     #[test]
     fn title_menu_items() {
         let mut s = Settings::default();
         let mut m = Menu::new(Ctx::Title, false, false);
-        assert_eq!(m.items(), [Item::Start, Item::Settings, Item::Controls, Item::Hof, Item::Quit]);
-        assert_eq!(Menu::new(Ctx::Title, false, true).items()[1], Item::Load);
+        let items = |m: &Menu| m.rows().into_iter().map(|r| match r { Row::Item(i) => i, _ => panic!() }).collect::<Vec<_>>();
+        assert_eq!(items(&m), [Item::Start, Item::Settings, Item::Controls, Item::Hof, Item::Quit]);
+        assert_eq!(items(&Menu::new(Ctx::Title, false, true))[1], Item::Load);
         assert_eq!(m.nav(Nav::Enter, &mut s), Some(Action::Start));
         m.sel = 3;
         m.nav(Nav::Enter, &mut s);
-        assert_eq!((m.page, m.items()), (Page::Hof, vec![Item::Back]));
+        assert_eq!((m.page, items(&m)), (Page::Hof, vec![Item::Back]));
         m.nav(Nav::Enter, &mut s);
         assert_eq!((m.page, m.sel), (Page::Main, 3));
         assert_eq!(m.title(), "MENU");
@@ -340,50 +682,224 @@ mod tests {
     #[test]
     fn settings_values_cycle_and_wrap() {
         let mut s = Settings::default();
-        let mut m = Menu::new(Ctx::Title, false, false);
-        m.page = Page::Settings;
+        let mut m = settings_menu();
+        focus_opt(&mut m, 0);
         assert_eq!(m.nav(Nav::Right, &mut s), Some(Action::Changed(0)));
         assert_eq!(s.render_mode, "enhanced");
-        m.nav(Nav::Enter, &mut s);
+        assert_eq!(m.nav(Nav::Right, &mut s), Some(Action::Changed(0)));
         assert_eq!(s.render_mode, "classic", "wraps");
         m.nav(Nav::Left, &mut s);
         assert_eq!(s.render_mode, "enhanced");
         // every option cycles through all its values and comes back, through Settings::parse
         for (i, o) in OPTS.iter().enumerate() {
+            if matches!(o.ctl, Ctl::Slider { .. }) {
+                continue;
+            }
             let start = value(&s, o.key);
-            let mut seen = vec![];
             let mut t = s.clone();
             for _ in 0..o.values.len() {
                 t = cycle(&t, i, 1);
-                seen.push(value(&t, o.key));
+                assert!(!value(&t, o.key).is_empty(), "{}", o.key);
             }
-            if o.key != "volume" {
+            if o.ctl != Ctl::Steps {
                 assert_eq!(value(&t, o.key), start, "{}", o.key);
-                assert_eq!(seen.len(), o.values.len());
             }
-            assert!(seen.iter().all(|v| !v.is_empty()), "{}", o.key);
         }
         // a value outside the list starts at an end; the rest of the settings stay
         let rt = with_value(&Settings::default(), "render_mode", "rt_experimental");
         assert_eq!(cycle(&rt, 0, 1).render_mode, "classic");
         assert_eq!(cycle(&rt, 0, 1).volume, rt.volume);
+        // every option is on exactly one tab; the first three tabs list them, Downloads lists the fonts
+        let mut m = settings_menu();
+        let n: usize = TABS[..3].iter().map(|&t| { m.tab = t; m.rows().iter().filter(|r| matches!(r, Row::Opt(_))).count() }).sum();
+        assert_eq!(n, OPTS.len());
+        m.tab = Tab::Downloads;
+        assert_eq!(m.rows(), [Row::Tabs, Row::Font(0), Row::Font(1), Row::Item(Item::Back)]);
     }
 
     #[test]
-    fn volume_steps_and_labels() {
+    fn slider_steps_clamps_and_mouse_sets() {
         let mut s = Settings::default();
+        let v = opt("volume");
         s.volume = 0.70000005;
-        let v = OPTS.iter().position(|o| o.key == "volume").unwrap();
-        assert!((cycle(&s, v, 1).volume - 0.8).abs() < 1e-6);
+        assert!((cycle(&s, v, 1).volume - 0.75).abs() < 1e-6, "5 % steps");
+        s.volume = 0.67;
+        assert!((cycle(&s, v, 1).volume - 0.70).abs() < 1e-6 && (cycle(&s, v, -1).volume - 0.65).abs() < 1e-6, "off-step values snap");
         s.volume = 1.0;
         assert_eq!(cycle(&s, v, 1).volume, 1.0, "stops at 100 %");
         s.volume = 0.0;
         assert_eq!(cycle(&s, v, -1).volume, 0.0);
-        let m = Menu::new(Ctx::Pause, false, false);
-        assert_eq!(m.label(Item::Opt(v), &Settings::default()), "Volume:  < 70% >");
-        let mute = OPTS.iter().position(|o| o.key == "muted").unwrap();
-        assert_eq!(m.label(Item::Opt(mute), &Settings::default()), "Mute:  < off >");
-        assert!(m.label(Item::Opt(7), &Settings::default()).ends_with("(after restart)"));
+        let mut m = settings_menu();
+        focus_opt(&mut m, v);
+        let idx = m.sel;
+        assert_eq!(m.slide(idx, 0.5, &mut s), Some(Action::Changed(v)));
+        assert_eq!(s.volume, 0.5);
+        assert_eq!(m.slide(idx, 0.5, &mut s), None, "no change, no action");
+        m.slide(idx, 2.0, &mut s);
+        assert_eq!(s.volume, 1.0, "drag past the end clamps");
+        m.slide(idx, 0.512, &mut s);
+        assert_eq!(s.volume, 0.5, "snaps to a 5 % step");
+        assert_eq!(frac(&s, v), 0.5);
+        assert_eq!(opt_value(&s, v), "50%");
+        // Left / Right on the slider row
+        assert_eq!(m.nav(Nav::Left, &mut s), Some(Action::Changed(v)));
+        assert!((s.volume - 0.45).abs() < 1e-6);
+        // the ordered shadow values: a slider over off / low / high that does not wrap
+        let sh = opt("shadow_quality");
+        focus_opt(&mut m, sh);
+        m.slide(m.sel, 0.0, &mut s);
+        assert_eq!(s.shadow_quality, "off");
+        m.nav(Nav::Left, &mut s);
+        assert_eq!(s.shadow_quality, "off", "stops at the end");
+        m.slide(m.sel, 0.5, &mut s);
+        assert_eq!((s.shadow_quality.as_str(), frac(&s, sh)), ("low", 0.5));
+    }
+
+    #[test]
+    fn checkbox_toggles() {
+        let mut s = Settings::default();
+        let mut m = settings_menu();
+        let mute = opt("muted");
+        focus_opt(&mut m, mute);
+        assert_eq!(opt_value(&s, mute), "off");
+        assert_eq!(m.nav(Nav::Enter, &mut s), Some(Action::Changed(mute)));
+        assert!(s.muted);
+        let idx = m.sel;
+        assert_eq!(m.press(idx, 0, &mut s), Some(Action::Changed(mute)), "a click toggles too");
+        assert!(!s.muted);
+        assert!(OPTS[opt("ssao")].ctl == Ctl::Checkbox && !OPTS[opt("ssao")].live);
+    }
+
+    #[test]
+    fn dropdown_opens_selects_wraps_and_closes() {
+        let mut s = Settings::default();
+        let mut m = settings_menu();
+        let snd = opt("sound");
+        focus_opt(&mut m, snd);
+        assert_eq!(m.nav(Nav::Enter, &mut s), None);
+        assert_eq!(m.open, Some(0), "opens on the current value (synth)");
+        m.nav(Nav::Up, &mut s);
+        assert_eq!(m.open, Some(3), "up wraps");
+        assert_eq!(m.nav(Nav::Left, &mut s), None, "Left / Right do nothing while open");
+        m.nav(Nav::Down, &mut s);
+        m.nav(Nav::Down, &mut s);
+        assert_eq!(m.nav(Nav::Enter, &mut s), Some(Action::Changed(snd)));
+        assert_eq!((s.sound.as_str(), m.open), ("original", None));
+        // Esc closes without changing and does not leave the page
+        m.nav(Nav::Enter, &mut s);
+        assert_eq!(m.open, Some(1));
+        assert_eq!(m.nav(Nav::Back, &mut s), None);
+        assert_eq!((m.open, m.page, s.sound.as_str()), (None, Page::Settings, "original"));
+        // a mouse pick of entry 2
+        m.press(m.sel, 0, &mut s);
+        assert_eq!(m.pick(2, &mut s), Some(Action::Changed(snd)));
+        assert_eq!(s.sound, "adlib");
+        // Left / Right change the closed drop-down and wrap
+        m.nav(Nav::Right, &mut s);
+        m.nav(Nav::Right, &mut s);
+        assert_eq!(s.sound, "synth");
+        assert!(!OPTS[snd].live && OPTS[opt("volume")].live, "the restart badge follows Opt.live");
+        assert_eq!(shown("sound", "adlib"), "Adlib");
+    }
+
+    #[test]
+    fn focus_moves_across_widgets_tabs_and_scrolls() {
+        let mut s = Settings::default();
+        let mut m = settings_menu();
+        assert_eq!(m.rows()[m.sel], Row::Tabs);
+        m.nav(Nav::Right, &mut s);
+        assert_eq!(m.tab, Tab::Audio);
+        m.nav(Nav::Left, &mut s);
+        m.nav(Nav::Left, &mut s);
+        assert_eq!(m.tab, Tab::Downloads, "tabs wrap");
+        m.nav(Nav::NextTab, &mut s);
+        assert_eq!(m.tab, Tab::Video, "Q / E, LB / RB");
+        m.nav(Nav::Down, &mut s);
+        assert_eq!(m.rows()[m.sel], Row::Opt(0));
+        for _ in 0..5 {
+            m.nav(Nav::Down, &mut s);
+        }
+        assert_eq!(m.rows()[m.sel], Row::Item(Item::Back), "Back is last");
+        m.nav(Nav::Down, &mut s);
+        assert_eq!(m.sel, 0, "down wraps to the tab strip");
+        m.nav(Nav::Up, &mut s);
+        assert_eq!(m.rows()[m.sel], Row::Item(Item::Back));
+        // hover / click focus; the wheel scrolls only when the list is longer than the pool
+        m.focus(2);
+        assert_eq!(m.sel, 2);
+        assert_eq!(m.slot_idx(0), Some(1));
+        assert_eq!(m.slot_idx(8), None);
+        m.scroll(3);
+        assert_eq!(m.top, 0, "everything fits");
+        assert_eq!(m.visible().len(), 6);
+        // a tab click focuses the strip
+        m.focus(0);
+        m.set_tab(2);
+        assert_eq!((m.tab, m.visible().len()), (Tab::Graphics, 8));
+    }
+
+    #[test]
+    fn download_rows_transitions() {
+        let _g = soundfont::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = Settings::default();
+        let mut m = settings_menu();
+        m.set_tab(3);
+        m.sel = 2; // Font(1)
+        debug_set(1, Status::Absent);
+        assert_eq!(font_buttons(&soundfont::status(1)), [FontBtn::Download]);
+        m.nav(Nav::Enter, &mut s);
+        assert_eq!(soundfont::status(1), Status::Confirm);
+        assert_eq!(font_buttons(&Status::Confirm), [FontBtn::Accept, FontBtn::Decline]);
+        // Esc closes the notice first, the page second
+        assert_eq!(m.nav(Nav::Back, &mut s), None);
+        assert_eq!((m.page, soundfont::status(1)), (Page::Settings, Status::Absent));
+        // accept: the caller starts the download
+        m.nav(Nav::Enter, &mut s);
+        assert_eq!(m.nav(Nav::Enter, &mut s), Some(Action::Download(1)));
+        // Right to Cancel declines
+        m.nav(Nav::Right, &mut s);
+        assert_eq!(m.sub, 1);
+        m.nav(Nav::Enter, &mut s);
+        assert_eq!(soundfont::status(1), Status::Absent);
+        // a running download has one Cancel button, progress and a percentage
+        let busy = Status::Busy { phase: "downloading", done: 54_000_000, total: 120_000_000 };
+        debug_set(1, busy.clone());
+        let info = font_info(1, &s, &busy);
+        assert_eq!((info.btns.clone(), info.bar), (vec![FontBtn::Abort], Some(0.45)));
+        assert_eq!(info.status, "54 / 120 MB  45%");
+        m.nav(Nav::Enter, &mut s); // Abort: sets the flag, the worker thread resets the state
+        assert!(matches!(soundfont::status(1), Status::Busy { .. }));
+        // delete asks first, "No" is the default; Esc keeps the font
+        let inst = Status::Installed;
+        debug_set(1, inst.clone());
+        m.nav(Nav::Enter, &mut s);
+        assert_eq!((soundfont::status(1), m.sub), (Status::ConfirmDelete, 1));
+        assert_eq!(font_buttons(&Status::ConfirmDelete), [FontBtn::Yes, FontBtn::No]);
+        m.nav(Nav::Enter, &mut s);
+        assert_ne!(soundfont::status(1), Status::ConfirmDelete, "No keeps it");
+        debug_set(1, Status::Installed);
+        m.nav(Nav::Enter, &mut s);
+        assert_eq!(m.nav(Nav::Back, &mut s), None);
+        assert_ne!(soundfont::status(1), Status::ConfirmDelete, "Esc keeps it");
+        // a failure offers Retry
+        assert_eq!(font_buttons(&Status::Failed("x".into())), [FontBtn::Retry]);
+        // the selected SoundFont missing or about to be deleted shows a warning, the setting stays
+        s.sound = "soundfont".into();
+        s.soundfont = "fluidr3".into();
+        let w = font_info(1, &s, &Status::Absent);
+        assert!(w.warn && w.sub.contains("missing"));
+        assert!(font_info(1, &s, &Status::ConfirmDelete).sub.contains("AdLib"));
+        assert!(!font_info(0, &s, &Status::Absent).warn);
+        assert!(deleted_note(1, &s).contains("AdLib") && !deleted_note(0, &s).contains("AdLib"));
+        soundfont::debug_clear(1);
+    }
+
+    #[test]
+    fn labels_and_hints() {
+        let s = Settings::default();
+        assert_eq!(opt_value(&s, opt("window")), "Windowed");
+        assert_eq!(Item::Back.label(), "Back");
+        assert!(settings_menu().hint().contains("tab"));
         assert!(controls(&Bindings::default())[0].contains("ArrowLeft"));
     }
 }

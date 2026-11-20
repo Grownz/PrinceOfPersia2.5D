@@ -59,12 +59,38 @@ Save, load, volume, mute and fullscreen stay on the keyboard (or the menus).
 
 ## Menus
 
-Up / down (arrows, numpad 8 / 2, d-pad) choose, Enter / Space / numpad 5 / A select, left / right (or Enter) change a
-setting, Esc / Backspace / B go back (on the first page: close the menu, resume the game); Start also goes back. The
-game stays frozen while the pause menu is open. Settings page: `render_mode` (classic / enhanced), `character_style`,
-`camera_scroll`, `motion_smoothing`, `window`, `volume`, `muted` apply at once; `sound`, `tile_textures`, `column_style`, `object_style`,
-`voxel_normals`, `voxel_shading`, `shadow_quality`, `ssao` are marked "(after restart)". Every change is written to
-settings.json at once (atomic). The Controls page lists the kid's keys from settings.json and the fixed keys.
+Menu pages: main / pause menu (Start, Load, Resume, Restart, Save, Settings, Controls, Hall of fame, Quit), Settings, Controls,
+Hall of fame. Settings has four tabs, each option a widget:
+
+| Tab | Widgets |
+|---|---|
+| Video | drop-downs: Rendering, Characters, Room change, Motion smoothing, Window mode |
+| Audio | slider Volume (0-100 %, 5 % steps), checkbox Mute, drop-downs Sound set and SoundFont |
+| Graphics | drop-downs Tile textures, Columns, Objects, Voxel normals, Voxel shading; slider Shadows (off / low / high); checkbox SSAO |
+| Downloads | one row per SoundFont: Download, licence confirmation, progress bar with Cancel, installed size with Delete, Retry |
+
+Options that only apply after a restart carry an "after restart" badge. Every change is written to settings.json at once
+(atomic); live options apply immediately.
+
+| Input | Does |
+|---|---|
+| Up / Down (arrows, numpad 8 / 2, d-pad) | move the focus ring through the rows (wraps) |
+| Left / Right (arrows, numpad 4 / 6, d-pad) | slider: step; drop-down: previous / next value; checkbox: toggle; tab strip: switch tab; download row: choose the button |
+| Enter / Space / numpad 5 / A | open a drop-down (Enter again picks the highlighted entry), toggle a checkbox, press a button |
+| Q / E, PgUp / PgDn, LB / RB | previous / next tab |
+| Esc / Backspace / B / Start | close an open drop-down, else close a download question, else go back (main page: close the menu, resume the game) |
+| Mouse move | the row under the cursor gets the focus (only while the mouse moves, so the keyboard keeps working) |
+| Mouse click | press a row, tab, button or drop-down entry; a click outside an open drop-down closes it |
+| Mouse drag | on a slider track: sets the value, snapped to the step |
+| Mouse wheel | scrolls a list longer than the panel |
+
+SoundFont downloads: Download shows the licence notice (the font is fetched from the source's server and you are responsible
+for respecting its licence) with Accept / Cancel; while it runs a progress bar shows MB done / total and the percentage and
+Cancel really aborts (curl or tar is killed, the partial file is removed, the font is back to "not installed"). An installed
+font shows its size on disk and Delete, which asks Yes / No (No is preselected) and then removes the SF2 and its licence text
+from `soundfonts/`. If the deleted font is the selected SoundFont, the setting stays and the row shows a warning: music uses
+AdLib at the next start until it is downloaded again. The game stays frozen while the pause menu is open. The Controls page
+lists the kid's keys from settings.json and the fixed keys.
 
 Hall of fame name entry (after the ending, when the time qualifies): type up to 24 characters, Backspace deletes,
 Enter / Esc confirm; on a controller A / Start confirms and an empty name becomes "PRINCE".

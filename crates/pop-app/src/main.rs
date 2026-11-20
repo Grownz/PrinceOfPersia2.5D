@@ -13,7 +13,7 @@
 //! F6 sprite / voxel characters,
 //! F7 (debug text on, or POP_DEBUG_CAM=1) a closer, turned camera on the kid (POP_CAM_ANGLE="degrees[,distance]").
 //! POP_CAMERA=smooth|flip overrides settings.json "camera_scroll" (camera.rs). POP_SET="start=ROOM:TILE,door=N,upside=1"
-//! (with POP_LEVEL; "gate=N" sets every gate's opening) changes the first world for screenshots (`debug_set`). POP_MENU = main, settings, controls, hof, name
+//! (with POP_LEVEL; "gate=N" sets every gate's opening) changes the first world for screenshots (`debug_set`). POP_MENU = main, settings (video, audio, graphics, downloads), controls, hof, name
 //! or attract opens a menu page or a hall-of-fame screen at once (`flow::debug_menu`).
 mod audio;
 mod camera;
@@ -211,7 +211,7 @@ fn main() {
             Update,
             (
                 kid::latch_keys.run_if(not(in_state(flow::Screen::Paused))), // menu keys must not reach the kid after resume
-                (menu_ui::input, flow::menu_action).chain(),
+                (menu_ui::input, menu_ui::mouse, flow::menu_action).chain(),
                 audio::keys.run_if(|f: Res<flow::Flow>| !f.typing()),
                 (flow::title, flow::name_entry).chain().run_if(in_state(flow::Screen::Title)),
                 (cutscene::latch, flow::cutscene_end).run_if(in_state(flow::Screen::Cutscene)),

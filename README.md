@@ -32,7 +32,7 @@ cargo test --workspace               # tests needing Original_data print "skippi
 Environment variables: `POP_DATA` (data folder), `POP_LEVEL` / `POP_ROOM` (skip the title), `POP_SOUND=original`
 (the game's own sounds), `POP_PERF=1` (log frame time and room rebuilds every 300 frames, vsync off),
 `POP_SHOT=file.png` (screenshot after `POP_SHOT_FRAME`, default 400 frames, or at logic tick `POP_SHOT_TICK`, then quit), `POP_SCRIPT` (scripted keys),
-`POP_MENU=main|settings|controls|hof|name|attract` (open a menu page or a hall-of-fame screen at once; the pause menu with `POP_LEVEL`), `POP_CUTSCENE=<level>|end|timeout|intro` (play that cutscene at once; `POP_REM_MIN` = minutes left for the hourglass), `POP_FPS=1` (frame-time overlay with GPU pass times; F9 toggles it), `POP_BENCH=<frames>` (benchmark: vsync off, warm-up, one `BENCH` log line, quit; with `POP_RES=WxH|full` and the `POP_FX` cost toggles; `tools/bench.ps1` runs a matrix, docs/enhanced_perf.md).
+`POP_MENU=main|settings|video|audio|graphics|downloads|controls|hof|name|attract` (open a menu page or a hall-of-fame screen at once; the pause menu with `POP_LEVEL`; `POP_MENU_SEL=<row>`, `POP_MENU_OPEN=1` opens its drop-down, `POP_MENU_FAKE=downloading:45|installed|confirm|delete|unpack` shows made-up SoundFont states without a download), `POP_CUTSCENE=<level>|end|timeout|intro` (play that cutscene at once; `POP_REM_MIN` = minutes left for the hourglass), `POP_FPS=1` (frame-time overlay with GPU pass times; F9 toggles it), `POP_BENCH=<frames>` (benchmark: vsync off, warm-up, one `BENCH` log line, quit; with `POP_RES=WxH|full` and the `POP_FX` cost toggles; `tools/bench.ps1` runs a matrix, docs/enhanced_perf.md).
 
 ## Controls
 
@@ -40,7 +40,7 @@ Arrow keys + Shift; Esc pause menu (resume, restart, save, settings, controls, q
 F3 debug; F5 classic / enhanced rendering; F6 sprite / voxel characters; F9 frame-time overlay. Controllers: d-pad/left stick, A = Shift, Start = pause, Back = restart. Full list and key rebinding:
 [docs/controls.md](docs/controls.md).
 
-Settings (window mode and size, volume, mute, sound mode, key bindings, data path, `render_mode`, `character_style`,
+The in-game Settings menu (Esc) has Video, Audio, Graphics and Downloads tabs with sliders, checkboxes and drop-down lists, works with keyboard, mouse and controller, and downloads or deletes the optional SoundFonts with a progress bar and a Cancel button (docs/controls.md). Settings (window mode and size, volume, mute, sound mode, key bindings, data path, `render_mode`, `character_style`,
 `shadow_quality`, `ssao`, `tile_textures`) live in `settings.json` next to the exe, created on the first run. `render_mode`: `classic`
 (default) or `enhanced` (torch and sun shadows, ambient occlusion, bloom; any GPU; F5; `shadow_quality` `off|low|high` and
 `ssao` `true|false` tune it), `rt_experimental` is reserved and falls back to classic; env `POP_RENDER`. `character_style`: `sprite` (default)

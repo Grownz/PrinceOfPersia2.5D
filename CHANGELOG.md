@@ -3,6 +3,26 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.5.0] - 2026-11-20
+
+### Changed
+- The settings menu is built from widgets: tabs Video / Audio / Graphics / Downloads, a volume slider (5 % steps), a slider
+  over the shadow quality, checkboxes (mute, SSAO), drop-down lists for the other options, a focus ring and "after restart"
+  badges. Mouse support (hover, click, slider drag, wheel) next to keyboard (Q / E or PgUp / PgDn switch tabs) and controller
+  (LB / RB switch tabs).
+- The SoundFonts page is the Downloads tab: a row per font with size, licence line, status and buttons.
+
+### Fixed
+- The cross bars of the voxel gates are horizontal, parallel to the floor and the ceiling above and below the gate and
+  perspectively correct: the oblique source drawing (rails rising 1 row per 2 columns) is un-sheared when the gate is voxelized
+  (docs/texture_inventory.md 21).
+
+### Added
+- SoundFont downloads show a progress bar (MB and percent) with a Cancel button that kills curl / tar and removes the partial
+  files; installed fonts can be deleted (SF2 and licence text, with a Yes / No question). Deleting the selected font keeps the
+  setting and warns that music uses AdLib until it is downloaded again.
+- Screenshot hooks `POP_MENU=video|audio|graphics|downloads`, `POP_MENU_SEL`, `POP_MENU_OPEN`, `POP_MENU_FAKE`.
+
 ## [0.4.6] - 2026-11-20
 
 ### Added

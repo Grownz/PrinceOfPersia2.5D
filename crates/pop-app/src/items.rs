@@ -76,27 +76,45 @@ pub fn gate_rise(modifier: u8) -> usize {
     (modifier.min(188) >> 2) as usize + 1
 }
 
+/// Rows the original's oblique drawing of the gate climbs per 2 image columns (rails and bar tips rise 1 row every 2 px).
+pub const GATE_SLOPE: usize = 2;
+
 /// The whole gate for rise `rise` as the original composes it (back pass, then the front tips on top): the 252 slices
-/// stacked upwards from the tips, the last one cut at 60 px over the floor line (the partial slices 253..259 are its lower
-/// rows), tips 251 and the front tips 250 (with the post stripe) at the bottom. Bottom edge `rise - 1` px above the floor
-/// line, 24 px wide: (w, h, pixels). One plane for all pieces, so they line up from every camera angle.
+/// stacked upwards from the tips, cut at 60 px over the floor line (the partial slices 253..259 are its lower rows), tips
+/// 251 and the front tips 250 (with the post stripe) at the bottom. The source is an oblique drawing (image x is the corridor
+/// depth, going right = back = up by 1 row per `GATE_SLOPE` px), so every column is moved down by x / GATE_SLOPE rows: the
+/// rails become horizontal and the bar tips end on one line. Bottom edge `rise - 1` px over the floor line, top edge 60 px:
+/// (w, h, pixels).
 pub fn gate_sprite(back: &image::Image, slice: &image::Image, front: &image::Image, rise: usize) -> (usize, usize, Vec<u8>) {
-    let (w, h) = (slice.width, (61usize.saturating_sub(rise)).max(front.height));
-    let mut px = vec![0u8; w * h];
-    let put = |px: &mut [u8], im: &image::Image, bottom: usize, over: bool| {
+    let w = slice.width;
+    let hc = 61usize.saturating_sub(rise).max(front.height);
+    let skew = w / GATE_SLOPE; // rows the last column drops (plus one for the tip line)
+    let he = hc + skew;
+    let mut e = vec![0u8; w * he];
+    let put = |e: &mut [u8], im: &image::Image, bottom: usize, over: bool| {
         for (i, &p) in im.pixels.iter().enumerate().filter(|(_, &p)| p != 0 || !over) {
-            px[(bottom - im.height + i / im.width) * w + i % im.width] = p;
+            e[(bottom - im.height + i / im.width) * w + i % im.width] = p;
         }
     };
-    put(&mut px, back, h - 2, false);
-    let mut top = h - front.height;
+    put(&mut e, back, he - 2, false);
+    let mut top = he - front.height;
     while top > 0 {
         let n = top.min(slice.height);
-        px[(top - n) * w..top * w].copy_from_slice(&slice.pixels[(slice.height - n) * w..slice.height * w]);
+        e[(top - n) * w..top * w].copy_from_slice(&slice.pixels[(slice.height - n) * w..slice.height * w]);
         top -= n;
     }
-    put(&mut px, front, h, true);
-    (w, h, px)
+    put(&mut e, front, he, true);
+    // the lowest tip (bar column 2, the nearest) ends on the last row; the post stripe's lower rows are cut
+    let mut px = vec![0u8; w * hc];
+    for j in 0..hc {
+        for x in 0..w {
+            let y = (j + skew) as isize - (x / GATE_SLOPE) as isize - 1;
+            if y >= 0 && (y as usize) < he {
+                px[j * w + x] = e[y as usize * w + x];
+            }
+        }
+    }
+    (w, hc, px)
 }
 
 /// Every 8-connected component of the image moved down until it touches the bottom row and stood upright (the 2D spikes
@@ -499,9 +517,31 @@ mod tests {
         for rise in [1, 12, 30, 48] {
             let (w, h, px) = gate_sprite(&back, &slice, &front, rise);
             assert_eq!((w, h), (24, 61 - rise), "bottom edge rise - 1, top edge 60");
-            assert!((h - 12..h).all(|y| px[y * w + 2] == 7), "front tips at the bottom");
-            let above = h - 12;
-            assert!((0..above).all(|y| px[y * w + 2] as usize == 8 - (above - 1 - y) % 8), "rise {rise}: slices contiguous");
+            assert!((0..h).all(|y| px[y * w] != 0), "column 0 filled to the top and bottom");
+            assert!((0..h).all(|y| px[y * w + 23] != 0), "last column filled to the top");
+        }
+    }
+
+    /// Un-sheared real gate: rails lie on constant rows across the depth (every 8 px), the bar tips on one line (skips
+    /// without Original_data).
+    #[test]
+    fn real_gate_rails_are_horizontal() {
+        let dir = format!("{}/../../Original_data", env!("CARGO_MANIFEST_DIR"));
+        for name in ["VDUNGEON.DAT", "VPALACE.DAT"] {
+            let Ok(d) = Dat::open(format!("{dir}/{name}")) else { return };
+            let get = |id| d.get(id).and_then(image::decode).unwrap();
+            let (w, h, px) = gate_sprite(&get(251), &get(252), &get(250), 1);
+            let bar = |x: usize| matches!(x, 2 | 3 | 8 | 9 | 14 | 15) || x >= 18;
+            let mut rows = std::collections::BTreeSet::new();
+            for y in 0..h - 12 {
+                for x in (0..18).filter(|&x| !bar(x)) {
+                    if px[y * w + x] != 0 { rows.insert(y % 8); }
+                }
+            }
+            assert!(rows.len() <= 3, "{name}: rail pixels on rows {rows:?} (mod 8)");
+            let tip = |x: usize| (0..h).rev().find(|&y| px[y * w + x] != 0);
+            let t = tip(2);
+            assert!(t >= Some(h - 2) && [tip(8), tip(14)] == [t; 2], "{name}: tips on one line (at the floor)");
         }
     }
 
