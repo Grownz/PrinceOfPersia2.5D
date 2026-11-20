@@ -1,61 +1,77 @@
 # Prince of Persia x64
 
-A Rust remake of the DOS Prince of Persia (1990) for Windows x64: a headless, tick-exact simulation (`crates/pop-core`)
-and a Bevy 0.20 app (`crates/pop-app`) with procedural 2.5D rooms and the original sprites read from your own copy.
+**The 1989 classic, rebuilt for modern PCs.** Run, jump, climb and fence through the sultan's dungeons and palace in the
+original's exact rhythm, now in 3D lighting with real shadows, smooth motion and the music the way it was meant to sound.
 
-![Screenshot: the prince fights a guard in the enhanced render mode with voxel characters](docs/images/screenshot.png)
+![The prince fights a guard in the enhanced render mode with voxel characters](docs/images/screenshot.png)
 
-**You need your own copy of the game.** The original data is copyrighted and is not in this repository or in any
-package. See [docs/PROVENANCE.md](docs/PROVENANCE.md). The VGA version this remake is based on is available at
-the Internet Archive: <https://archive.org/details/PERSIA_VGA> (check the rights situation for your country).
+## Why play it
 
-## Game data
+- **It plays like the original.** The game logic is a tick-exact port: every jump distance, every sword duel, every trap and
+  all 14 levels behave the way you remember, including the hourglass, the shadow and the finale.
+- **It looks like a new game.** Switch to the *enhanced* look and the dungeon gets torch-lit shadows, ambient occlusion and glow.
+  The prince and the guards can become 3D figures built from the original pixels, and walls, pillars, spikes, gates and
+  potions have real depth. Prefer the classic look? One key (F5) switches back.
+- **Smooth at any frame rate.** Figures move at your screen's refresh rate instead of the 12 steps per second of 1989, and the
+  camera glides from room to room.
+- **The music is back.** Play the original MIDI scores through an emulated AdLib sound card, or through a General MIDI
+  SoundFont you can download inside the game.
+- **Made for today.** Windows 10/11, windowed or fullscreen, keyboard, mouse-driven menus and controller support, saving,
+  loading and the hall of fame as in the original.
 
-Put the files of your DOS installation (`LEVELS.DAT`, `PRINCE.EXE`, `KID.DAT`, `GUARD*.DAT`, `PRINCE.DAT`, `TITLE.DAT`,
-sound `.DAT` files, ...) into a folder named `Original_data`. The app searches, in order:
+## Get started in three steps
 
-1. `POP_DATA` (environment variable)
-2. `Original_data` next to the exe
-3. `Original_data` in the current folder
-4. `"data_path"` in `settings.json`
-
-If none has the data, the window lists the folders it searched (also on stderr / in `pop.log`).
-
-## Build and run
-
-```
-cargo run -p pop-app                 # debug build (dependencies optimized)
-cargo run --release -p pop-app       # release build (no console; log in pop.log next to the exe)
-cargo test --workspace               # tests needing Original_data print "skipping" without it
-```
-
-Environment variables: `POP_DATA` (data folder), `POP_LEVEL` / `POP_ROOM` (skip the title), `POP_SOUND=original`
-(the game's own sounds), `POP_PERF=1` (log frame time and room rebuilds every 300 frames, vsync off),
-`POP_SHOT=file.png` (screenshot after `POP_SHOT_FRAME`, default 400 frames, or at logic tick `POP_SHOT_TICK`, then quit), `POP_SCRIPT` (scripted keys),
-`POP_MENU=main|settings|video|audio|graphics|downloads|controls|hof|name|attract` (open a menu page or a hall-of-fame screen at once; the pause menu with `POP_LEVEL`; `POP_MENU_SEL=<row>`, `POP_MENU_OPEN=1` opens its drop-down, `POP_MENU_FAKE=downloading:45|installed|confirm|delete|unpack` shows made-up SoundFont states without a download), `POP_CUTSCENE=<level>|end|timeout|intro` (play that cutscene at once; `POP_REM_MIN` = minutes left for the hourglass), `POP_FPS=1` (frame-time overlay with GPU pass times; F9 toggles it), `POP_BENCH=<frames>` (benchmark: vsync off, warm-up, one `BENCH` log line, quit; with `POP_RES=WxH|full` and the `POP_FX` cost toggles; `tools/bench.ps1` runs a matrix, docs/enhanced_perf.md).
+1. **Download** the latest `PrinceOfPersia-x64.zip` from the [Releases page](../../releases/latest) and unzip it anywhere.
+2. **Add your game files.** This is a remake of the engine, not a copy of the game: the original graphics, sounds and levels
+   are copyrighted and are not included. Copy the files of your DOS copy of *Prince of Persia* (`LEVELS.DAT`, `PRINCE.EXE`,
+   `KID.DAT`, `GUARD*.DAT`, `PRINCE.DAT`, `TITLE.DAT`, the sound `.DAT` files and the rest) into a folder named
+   `Original_data` next to `PrinceOfPersia.exe`. The VGA version it is built for can be found at the Internet Archive:
+   <https://archive.org/details/PERSIA_VGA> (check the rights situation for your country).
+3. **Start `PrinceOfPersia.exe`** and press any key. If the files are missing, the window tells you where it looked.
 
 ## Controls
 
-Arrow keys + Shift; Esc pause menu (resume, restart, save, settings, controls, quit) and title menu; P pause; Ctrl+A restart; Ctrl+G save; Ctrl+L load; M mute; - / = volume; F11 fullscreen;
-F3 debug; F5 classic / enhanced rendering; F6 sprite / voxel characters; F9 frame-time overlay. Controllers: d-pad/left stick, A = Shift, Start = pause, Back = restart. Full list and key rebinding:
+| | |
+|---|---|
+| Move | Arrow keys (up = jump, down = crouch) |
+| Action | Shift: grab a ledge, careful step, drink, strike |
+| Pause and menu | Esc or P |
+| Save / load | Ctrl+G (levels 3 to 13) / Ctrl+L on the title screen |
+| Restart level | Ctrl+A |
+| Look | F5 classic / enhanced, F6 sprite / 3D figures, F11 fullscreen |
+| Sound | M mute, - and = volume |
+
+Controllers work too: d-pad or left stick, A as Shift, Start to pause. The full list and key rebinding are in
 [docs/controls.md](docs/controls.md).
 
-The in-game Settings menu (Esc) has Video, Audio, Graphics and Downloads tabs with sliders, checkboxes and drop-down lists, works with keyboard, mouse and controller, and downloads or deletes the optional SoundFonts with a progress bar and a Cancel button (docs/controls.md). Settings (window mode and size, volume, mute, sound mode, key bindings, data path, `render_mode`, `character_style`,
-`shadow_quality`, `ssao`, `tile_textures`) live in `settings.json` next to the exe, created on the first run. `render_mode`: `classic`
-(default) or `enhanced` (torch and sun shadows, ambient occlusion, bloom; any GPU; F5; `shadow_quality` `off|low|high` and
-`ssao` `true|false` tune it), `rt_experimental` is reserved and falls back to classic; env `POP_RENDER`. `character_style`: `sprite` (default)
-or `voxel` (3D voxel figures built at runtime from your own sprite files, nothing is written to disk), env `POP_CHARS`, F6. `tile_textures`: `original` (default: the tile images of your VDUNGEON.DAT / VPALACE.DAT on the room pieces, decoded at runtime; walls, chompers, spikes, exit doors, torches, balconies and lattices included, docs/texture_inventory.md 13) or `procedural` (plain coloured boxes), env `POP_TILES`. With `original`, the skeleton floor and the potions are voxel models built at runtime from the skeleton tile images and the PRINCE.DAT bottle and bubble images (independent of `character_style`; there is no separate item setting), bubbles glow in the potion's colour; `procedural` keeps simple boxes. `column_style`: `voxel` (default with `original`: pillars, big pillars and door posts as round voxel columns revolved from their images, the dungeon pillar as a square stone block, docs/texture_inventory.md 14) or `flat` (the image on a box), env `POP_COLUMNS`. `object_style`: `voxel` (default with `original`: spikes, chompers, exit doors, torch flames and debris as (animated) voxel objects, docs/texture_inventory.md 15) or `flat` (the flat images and boxes), env `POP_OBJECTS`. Voxel characters: `voxel_normals` `smooth` (default, rounded shading) or `flat` (per cube face), env `POP_VOXEL_NORMALS`; `voxel_shading` `lit` (default) or `unlit` (palette colours only, closest to the sprites), env `POP_VOXEL_SHADING`. `camera_scroll`: `smooth` (default: a short eased pan to the next room, neighbours visible at the margins) or `flip` (the original's hard cut), env `POP_CAMERA`. `motion_smoothing`: `position` (default: kid and guard drawn between the last two logic frames, 60 Hz motion, one logic frame / 83 ms of display delay) or `off` (the original's 12 Hz motion), env `POP_SMOOTH`.
+## Settings
 
-## Package
+Press Esc and open **Settings**: sliders, checkboxes and drop-down lists for video, audio and graphics, usable with mouse,
+keyboard or controller. Changes to the look and the volume apply immediately. The **Downloads** tab fetches the optional
+SoundFonts (MuseScore_General or FluidR3_GM, both MIT licensed) with a progress bar; you can cancel a download or delete a
+font at any time. Please respect the licences of the sources you download from.
 
-```
-powershell -ExecutionPolicy Bypass -File tools/package.ps1
-```
+## Questions
 
-Builds the release exe and creates `dist/PrinceOfPersia-x64/` (exe + README.txt) and `dist/PrinceOfPersia-x64.zip`.
-It never copies `Original_data` or any game file.
+**Do I need the original game?** Yes. Only the engine is rebuilt here; you supply the graphics, sounds and levels from your own
+copy.
 
-## Docs
+**Will it run on my PC?** The classic look runs on any graphics card with Vulkan or DirectX 12. The enhanced look needs a bit
+more; the settings let you turn shadows and ambient occlusion down.
 
-[ROADMAP.md](ROADMAP.md), `docs/` (mechanics, edge cases, collisions, combat, tiles, audio, controls, provenance).
-Licence: see [LICENSE](LICENSE).
+**Is it finished?** All 14 levels, the cutscenes, the hall of fame and saving work. See the [roadmap](ROADMAP.md) for what is
+next and the [changelog](CHANGELOG.md) for what changed.
+
+**Something looks wrong or you found a bug.** Please [open an issue](../../issues) and tell us the level and room.
+
+## For developers
+
+Rust and [Bevy](https://bevy.org): a headless simulation (`crates/pop-core`) kept separate from the app (`crates/pop-app`).
+Building, debugging switches and every setting are in [docs/DEVELOPING.md](docs/DEVELOPING.md); how the original works is
+written down in `docs/` (mechanics, tiles, audio, cutscenes). Where the code comes from and what it does not contain:
+[docs/PROVENANCE.md](docs/PROVENANCE.md).
+
+## Licence
+
+The code and documentation are under the [MIT licence](LICENSE). *Prince of Persia* itself belongs to its owners and is not part
+of this project.
