@@ -48,9 +48,13 @@ pub struct Settings {
     /// room change: "smooth" (a short eased pan to the new room, the neighbours visible at the margins) or "flip" (the
     /// original's hard cut); POP_CAMERA overrides
     pub camera_scroll: String,
+    /// "position" (kid and guard are drawn between the last two logic frames, 60 Hz motion at the cost of one logic frame,
+    /// 83 ms, of delay) or "off" (the original's 12 Hz motion); POP_SMOOTH overrides
+    pub motion_smoothing: String,
 }
 
 pub const CAMERA_SCROLLS: [&str; 2] = ["smooth", "flip"];
+pub const MOTION_SMOOTHINGS: [&str; 2] = ["position", "off"];
 pub const RENDER_MODES: [&str; 3] = ["classic", "enhanced", "rt_experimental"];
 pub const CHARACTER_STYLES: [&str; 2] = ["sprite", "voxel"];
 pub const SHADOW_QUALITIES: [&str; 3] = ["off", "low", "high"];
@@ -136,7 +140,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into() }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into() }
     }
 }
 
@@ -180,6 +184,7 @@ impl Settings {
             voxel_normals: field(&o, "voxel_normals", d.voxel_normals, |s| VOXEL_NORMALS.contains(&s.as_str())),
             voxel_shading: field(&o, "voxel_shading", d.voxel_shading, |s| VOXEL_SHADINGS.contains(&s.as_str())),
             camera_scroll: field(&o, "camera_scroll", d.camera_scroll, |s| CAMERA_SCROLLS.contains(&s.as_str())),
+            motion_smoothing: field(&o, "motion_smoothing", d.motion_smoothing, |s| MOTION_SMOOTHINGS.contains(&s.as_str())),
         }
     }
 
@@ -217,6 +222,11 @@ impl Settings {
     /// Smooth camera pan on a room change (settings plus POP_CAMERA; only "flip" means the hard cut).
     pub fn smooth_scroll(&self) -> bool {
         smooth_scroll(&self.camera_scroll, std::env::var("POP_CAMERA").ok().as_deref())
+    }
+
+    /// Interpolated kid / guard motion (settings plus POP_SMOOTH; only "off" means the 12 Hz motion).
+    pub fn smooth_motion(&self) -> bool {
+        smooth_motion(&self.motion_smoothing, std::env::var("POP_SMOOTH").ok().as_deref())
     }
 
     pub fn to_json(&self) -> String {
@@ -285,6 +295,10 @@ pub fn unlit(setting: &str, env: Option<&str>) -> bool {
 
 pub fn smooth_scroll(setting: &str, env: Option<&str>) -> bool {
     env.unwrap_or(setting) != "flip"
+}
+
+pub fn smooth_motion(setting: &str, env: Option<&str>) -> bool {
+    env.unwrap_or(setting) != "off"
 }
 
 /// One field of a settings object: its value if present, well-typed and `ok`, else the default.
@@ -456,6 +470,18 @@ mod tests {
         // POP_CAMERA wins over the file
         assert!(smooth_scroll("smooth", None) && !smooth_scroll("flip", None));
         assert!(!smooth_scroll("smooth", Some("flip")) && smooth_scroll("flip", Some("smooth")));
+    }
+
+    #[test]
+    fn motion_smoothing_parse_env_and_fall_back() {
+        assert_eq!(Settings::default().motion_smoothing, "position");
+        let s = Settings::parse(r#"{"motion_smoothing": "off"}"#);
+        assert_eq!(s.motion_smoothing, "off");
+        assert_eq!(Settings::parse(&s.to_json()), s);
+        let s = Settings::parse(r#"{"motion_smoothing": "full", "volume": 0.5}"#);
+        assert_eq!((s.motion_smoothing.as_str(), s.volume), ("position", 0.5));
+        assert!(smooth_motion("position", None) && !smooth_motion("off", None));
+        assert!(!smooth_motion("position", Some("off")) && smooth_motion("off", Some("position")));
     }
 
     #[test]

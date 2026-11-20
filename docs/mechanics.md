@@ -420,6 +420,17 @@ facing right: `wall_dist_from_left[wt] + tile_left - char_x_right_coll`. **It us
 re-read the tile at the char. Called from check_on_floor (tile at char is wall; afterwards the normal floor test runs on the new tile),
 from do_fall (landing column is a wall) and from start_fall.
 
+### Display interpolation (not in the original)
+
+The sim runs at 12 Hz (5 steps of a 60 Hz FixedUpdate, 6 with the sword). The app draws kid, guard and shadow between the screen
+positions at the start and end of the last logic frame (`kid.rs` `lerps`), so the picture is one logic frame (83 ms) behind the sim.
+The interpolated quantity is the drawn centre of the image (world_pos anchor, `hang_dx` and the image offset), not the sim anchor,
+so a frame change that swaps the image and its offset (the climb's Dy(-63)) moves the picture continuously; `ease_z` (wall-clock,
+z only) and the voxel hang rows (per frame) are not touched. No interpolation (the figure jumps like in the original) on a room
+change, a mirror flip (turn) or a drawn step over 40 px on an axis; free fall moves 33 px per logic frame and stays interpolated.
+Over scripted random runs on levels 0..13 98 % of the ticks are interpolated, the ledge poses 100 % except turns and room changes.
+Setting `motion_smoothing` = off draws the current state only.
+
 ## 10. Room change (VERIFIED)
 
 exit_room `0000:3ABB` is called from the main loop (`0000:0948`), after the kid's tick. If exit_room_timer `[5CE8]` != 0 it only decrements it.

@@ -644,3 +644,20 @@ needs `demo_index` beside `demo_time` (both reset as described). Share `do_auto_
 
 UNVERIFIED in this round: sound lengths (they gate the death counter, the next-level exit and the feather), the meaning of `[4360]`
 == 5, `0C83:7198` in the blinking text, the cutscene script contents, `0C89` after the ending, the third argument of `322D`.
+
+---
+
+## 7. A running kid and a closed gate at the right room edge (VERIFIED, original behaviour, no pop-core deviation)
+
+A kid running right on row r towards a closed gate (modifier 0/60, `can_bump_into_gate` 0000:59FF: (mod >> 2) + 6 < kid height) in
+column 9 enters the next room instead of stopping; walking with Shift stops at x = 185..188, and a gate in the middle of a room
+stops a runner (bump seq 47 at x = 155..159 for column 6). Cause, all from verified code: the gate's left face is
+`tile_left + 7 + wall_dist_from_left[1] = 58 + 14*9 + 7 + 10 = 201` (collisions.md, get_row_collision_data 0000:552D) and the
+room-change test (mechanics.md 10, leave_room 0000:3BF8, facing right) fires at `char_x_right >= 201`. A run step (frames 10/11 of
+seq 1/43, +4..+5 per tick) takes the box from < 201 to >= 201 in one tick, `lw < right_coll` is false on that tick, so the room
+change comes first. The overlap bit turns on on the first tick in the new room, where the same column index is stored with the
+same room (collisions.md vector J, arrays survive room changes), so bump_col_left fires there: the kid is pushed back to the
+gate's face (x = 57..61 in the new room, seq 47, sound 8) and stands on the first tile of the next room, i.e. visually past the
+gate. Headless trace (throwaway test, L1 room 7 tile 9, L3 room 2 tile 9, L4 rooms 1 and 8 tile 19): run: room change at x = 196..200
+-> room + 1, x = 57..61, seq 47; Shift: stops at x = 185..188 in the old room. Palace L4 room 6 tile 19 has modifier 188 (open), so
+the kid just runs through there.

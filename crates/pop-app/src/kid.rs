@@ -268,8 +268,8 @@ pub fn start(g: &mut Game, a: &KidAssets, p: Progress) {
     g.gen = g.gen.wrapping_add(1);
     g.room = g.world.kid.room as usize;
     let env = mk_env(&a.data, &g.world.level, g.world.guard_type);
-    g.kid_prev = (world_pos(&g.world.kid, &env), g.world.kid.room);
-    g.guard_prev = g.world.guard.as_ref().map_or((Vec2::ZERO, 0), |k| (world_pos(k, &env), k.room));
+    g.kid_prev = Snap::of(&g.world.kid, &env);
+    g.guard_prev = g.world.guard.as_ref().map_or_else(Snap::default, |k| Snap::of(k, &env));
 }
 
 /// Restart keys; with the debug text on (F3) also the sequence viewer and respawn keys. Exits are handled in `flow::playing`.
@@ -321,8 +321,8 @@ pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: Keys) {
     }
     if g.world.next_is_tick() {
         let env = mk_env(&a.data, &g.world.level, g.world.guard_type);
-        g.kid_prev = (world_pos(&g.world.kid, &env), g.world.kid.room);
-        g.guard_prev = g.world.guard.as_ref().map_or((Vec2::ZERO, 0), |k| (world_pos(k, &env), k.room));
+        g.kid_prev = Snap::of(&g.world.kid, &env);
+        g.guard_prev = g.world.guard.as_ref().map_or_else(Snap::default, |k| Snap::of(k, &env));
     }
     let mut keys = latch.0;
     if let Some(sc) = script() {
@@ -333,23 +333,53 @@ pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: Keys) {
         g.banner.0 = g.banner.0.saturating_sub(1);
         if g.world.kid.controlled {
             // follow the kid when he changes rooms (a room picked with POP_ROOM or Ctrl+arrows stays until then)
-            if g.world.kid.room != g.kid_prev.1 && (1..=pop_core::level::ROOMS as u8).contains(&g.world.kid.room) {
+            if g.world.kid.room != g.kid_prev.room && (1..=pop_core::level::ROOMS as u8).contains(&g.world.kid.room) {
                 g.room = g.world.kid.room as usize; // room 0 = outside the level: keep showing the last room
             }
         } else if g.world.kid.x < 20 || g.world.kid.x > 200 {
             g.world.kid.x = 100; // sequence viewer: keep the kid in view
             let env = mk_env(&a.data, &g.world.level, g.world.guard_type);
-            g.kid_prev.0.x = world_pos(&g.world.kid, &env).x;
+            g.kid_prev = Snap::of(&g.world.kid, &env);
         }
     }
+}
+
+/// A character at the start of a logic tick: the DRAWN centre of its image (world units: world_pos anchor, `hang_dx` and the
+/// image offset included), room, mirroring, frame. Room 0 = none. Interpolating the centre keeps the picture continuous when
+/// the frame (and with it the image and its anchor) changes, as in the climb's Dy(-63).
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Snap {
+    pub pos: Vec2,
+    pub room: u8,
+    pub left: bool,
+    pub frame: u8,
+}
+
+impl Snap {
+    fn of(k: &Kid, env: &Env) -> Snap {
+        let (h, w) = env.size_of(&env.frame_of(k.charid, k.frame));
+        let (a, sw, sh) = (world_pos(k, env), w as f32 / 32.0, h as f32 * crate::room::TILE_H / TILE_H_PX as f32);
+        Snap { pos: Vec2::new(if k.facing_left { a.x + sw / 2.0 } else { a.x - sw / 2.0 }, a.y + sh / 2.0), room: k.room, left: k.facing_left, frame: k.frame }
+    }
+}
+
+/// Largest per-axis step (screen px) of the drawn centre still drawn as motion; see `interpolation_measurement`.
+pub const MAX_LERP_PX: f32 = 40.0;
+
+/// Whether the figure is drawn between `prev` and `cur` (interpolation) or at `cur`: not across a room change, a mirror flip
+/// or a step of the drawn centre over `MAX_LERP_PX` on an axis (a teleport, not motion). The ledge poses are interpolated too.
+pub fn lerps(prev: &Snap, cur: &Snap) -> bool {
+    let (dx, dy) = ((cur.pos.x - prev.pos.x) * 32.0, (cur.pos.y - prev.pos.y) * TILE_H_PX as f32 / crate::room::TILE_H);
+    prev.room == cur.room && prev.left == cur.left && dx.abs() <= MAX_LERP_PX && dy.abs() <= MAX_LERP_PX
 }
 
 /// Place a character sprite: `prev` is the position at the start of the last logic tick (interpolation).
 #[allow(clippy::too_many_arguments)]
 fn draw_char(
     k: &Kid,
-    prev: (Vec2, u8),
+    prev: Snap,
     alpha: f32,
+    smooth: bool,
     a: &mut KidAssets,
     level: &pop_core::level::Level,
     gtype: i8,
@@ -375,9 +405,10 @@ fn draw_char(
         return None;
     };
     *vis = Visibility::Inherited;
-    let cur = world_pos(k, &env);
-    let p = if prev.1 == k.room { prev.0.lerp(cur, alpha) } else { cur };
     let (sw, sh) = (w / 32.0, h * crate::room::TILE_H / TILE_H_PX as f32);
+    let cur = Snap::of(k, &env);
+    let c = if smooth && lerps(&prev, &cur) { prev.pos.lerp(cur.pos, alpha) } else { cur.pos };
+    let p = Vec2::new(if k.facing_left { c.x - sw / 2.0 } else { c.x + sw / 2.0 }, c.y - sh / 2.0); // the anchor
     // facing left: p.x is the left edge, image as stored; facing right: p.x is the right edge and the image is mirrored
     let (cx, flip) = if k.facing_left { (p.x + sw / 2.0, 1.0) } else { (p.x - sw / 2.0, -1.0) };
     let vz = settle_z(&mut a.voxel_zs[slot], k.frame, k.action, dt);
@@ -547,12 +578,16 @@ pub fn render(
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     style: Res<CharacterStyle>,
+    set: Res<crate::settings::Settings>,
     mut q: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d), (With<KidSprite>, Without<GuardSprite>)>,
     mut qg: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d), (With<GuardSprite>, Without<KidSprite>)>,
     mut qs: Query<(&SwordSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d), (Without<KidSprite>, Without<GuardSprite>)>,
 ) {
     let mut a = a;
     let dt = time.delta_secs();
+    let smooth = set.smooth_motion();
+    // test hook: POP_SHOT_ALPHA=0.5 draws the frozen POP_SHOT_TICK world at that point of its last logic frame
+    let alpha = std::env::var("POP_SHOT_ALPHA").ok().and_then(|v| v.parse().ok()).unwrap_or_else(|| g.world.alpha());
     let w = &g.world;
     let mut kid_body = None;
     let mut guard_body = None;
@@ -563,12 +598,12 @@ pub fn render(
         if !kid_here {
             *vis = Visibility::Hidden;
         } else {
-            kid_body = draw_char(&w.kid, g.kid_prev, w.alpha(), &mut a, &w.level, w.guard_type, w.level_no, (0, dt), &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh);
+            kid_body = draw_char(&w.kid, g.kid_prev, alpha, smooth, &mut a, &w.level, w.guard_type, w.level_no, (0, dt), &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh);
         }
     }
     if let Ok((mut t, mut vis, mut mat, mut mesh)) = qg.single_mut() {
         match &w.guard {
-            Some(gd) if gd.room as usize == g.room => guard_body = draw_char(gd, g.guard_prev, w.alpha(), &mut a, &w.level, w.guard_type, w.level_no, (1, dt), &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh),
+            Some(gd) if gd.room as usize == g.room => guard_body = draw_char(gd, g.guard_prev, alpha, smooth, &mut a, &w.level, w.guard_type, w.level_no, (1, dt), &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh),
             _ => *vis = Visibility::Hidden,
         }
     }
@@ -600,6 +635,79 @@ fn script() -> Option<&'static Vec<Keys>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Replays scripted runs on the shipped levels (random key holds: running, turning, jumping, climbing, falling, the demo
+    /// and guard fights) and counts per logic tick whether `lerps` draws the figure between the two snapshots; `--nocapture`
+    /// lists the counts. The interpolated steps never exceed the bound, turns and ledge poses are never interpolated.
+    #[test]
+    fn interpolation_measurement() {
+        let dir = format!("{}/../../Original_data", env!("CARGO_MANIFEST_DIR"));
+        if Exe::open(format!("{dir}/PRINCE.EXE")).is_err() {
+            return;
+        }
+        let a = KidAssets::load(&dir);
+        let lv = Dat::open(format!("{dir}/LEVELS.DAT")).unwrap();
+        let mut seed = 12345u32;
+        let mut rnd = move || { seed = seed.wrapping_mul(1664525).wrapping_add(1013904223); seed >> 16 };
+        let px = |p: Vec2, q: Vec2| ((q.x - p.x).abs() * 32.0, (q.y - p.y).abs() * TILE_H_PX as f32 / crate::room::TILE_H);
+        // [lerped, room, turn, jump]; the same for the ledge poses (67..=99, 135..=149) alone
+        let (mut n, mut climb, mut max_lerped, mut max_turn) = ([0usize; 4], [0usize; 4], 0f32, 0f32);
+        let mut jumps = std::collections::BTreeMap::new();
+        for level in 0..=13usize {
+            let mut w = World::new(a.data.clone(), pop_core::level::Level::parse(lv.get(2000 + level as u16).unwrap()).unwrap(), level);
+            let mut keys = Keys::default();
+            for t in 0..3000 {
+                if t % 12 == 0 && w.kid.controlled && level > 0 {
+                    let r = rnd();
+                    keys = Keys { left: r & 3 == 0, right: r & 3 == 1 || r & 12 == 8, up: r & 16 != 0, down: r & 96 == 96, shift: r & 128 != 0 };
+                }
+                let env = mk_env(&a.data, &w.level, w.guard_type);
+                let before = [Some(Snap::of(&w.kid, &env)), w.guard.as_ref().map(|k| Snap::of(k, &env))];
+                while !w.step(keys) {}
+                let env = mk_env(&a.data, &w.level, w.guard_type);
+                for (b, k) in before.into_iter().zip([Some(&w.kid), w.guard.as_ref()]) {
+                    let (Some(b), Some(k)) = (b, k) else { continue };
+                    let c = Snap::of(k, &env);
+                    let (dx, dy) = px(b.pos, c.pos);
+                    let i = if lerps(&b, &c) { 0 } else if b.room != c.room { 1 } else if b.left != c.left { 2 } else { 3 };
+                    n[i] += 1;
+                    if matches!(b.frame, 67..=99 | 135..=149) || matches!(c.frame, 67..=99 | 135..=149) {
+                        climb[i] += 1;
+                    }
+                    match i {
+                        0 => {
+                            max_lerped = max_lerped.max(dx).max(dy);
+                            assert!(dx <= MAX_LERP_PX && dy <= MAX_LERP_PX);
+                        }
+                        2 => max_turn = max_turn.max(dx).max(dy),
+                        3 => *jumps.entry((b.frame, c.frame)).or_insert(0) += 1,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let total: usize = n.iter().sum();
+        let mut top: Vec<_> = jumps.into_iter().collect();
+        top.sort_by_key(|j| std::cmp::Reverse(j.1));
+        println!("ticks {total}: lerped {} skipped: room {} turn {} jump>{MAX_LERP_PX}px {}; ledge poses: lerped {} skipped {:?}", n[0], n[1], n[2], n[3], climb[0], &climb[1..]);
+        println!("max lerped step {max_lerped:.1} px, max drawn step on a turn {max_turn:.1} px, jumps (frame pair, count) {:?}", &top[..top.len().min(8)]);
+        assert!(n[0] * 100 > total * 95, "nearly all ticks stay smooth");
+        assert!(climb[0] * 100 > climb.iter().sum::<usize>() * 95, "the climb is smooth");
+        assert!(max_lerped <= MAX_LERP_PX);
+    }
+
+    /// The decision on the drawn centre: motion up to the bound (running, hang / climb steps) is interpolated, turns, rooms
+    /// and teleports are not.
+    #[test]
+    fn lerp_decision() {
+        let s = |x: f32, y: f32, left: bool, room: u8| Snap { pos: Vec2::new(x / 32.0, y * crate::room::TILE_H / TILE_H_PX as f32), room, left, frame: 0 };
+        assert!(lerps(&s(0.0, 0.0, false, 1), &s(16.0, 0.0, false, 1)), "running");
+        assert!(lerps(&s(0.0, 0.0, true, 1), &s(0.0, 0.0, true, 1)), "standing");
+        assert!(lerps(&s(0.0, 0.0, false, 1), &s(3.0, -33.0, false, 1)), "climb / free fall (33 px per tick)");
+        assert!(!lerps(&s(0.0, 0.0, true, 1), &s(2.0, 0.0, false, 1)), "turn");
+        assert!(!lerps(&s(0.0, 0.0, false, 1), &s(41.0, 0.0, false, 1)) && !lerps(&s(0.0, 0.0, false, 1), &s(0.0, 41.0, false, 1)), "teleport");
+        assert!(!lerps(&s(0.0, 0.0, false, 1), &s(1.0, 0.0, false, 2)), "room change");
+    }
 
     /// Every frame from the grab (78; 67..77 is the plain jump-up rise) on in the grab / hang / climb sequences (8, 9, 10, 16, 24, 25, 68, 73) is drawn in front of the blocks' front face (z 0.5).
     #[test]

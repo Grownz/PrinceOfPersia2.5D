@@ -77,10 +77,11 @@ pub struct Opt {
 const ON_OFF: &[&str] = &["true", "false"];
 const VOLUMES: &[&str] = &["0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1"];
 
-pub const OPTS: [Opt; 15] = [
+pub const OPTS: [Opt; 16] = [
     Opt { key: "render_mode", label: "Rendering", values: &["classic", "enhanced"], live: true },
     Opt { key: "character_style", label: "Characters", values: &settings::CHARACTER_STYLES, live: true },
     Opt { key: "camera_scroll", label: "Room change", values: &settings::CAMERA_SCROLLS, live: true },
+    Opt { key: "motion_smoothing", label: "Motion smoothing", values: &settings::MOTION_SMOOTHINGS, live: true },
     Opt { key: "window", label: "Window", values: &["windowed", "borderless"], live: true },
     Opt { key: "volume", label: "Volume", values: VOLUMES, live: true },
     Opt { key: "muted", label: "Mute", values: ON_OFF, live: true },

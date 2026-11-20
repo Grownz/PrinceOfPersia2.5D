@@ -3,6 +3,19 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.4.6] - 2026-11-20
+
+### Added
+- Setting `motion_smoothing` = `position` (default) / `off` (the original's 12 Hz motion), env `POP_SMOOTH`, in the settings menu
+  ("Motion smoothing", applies at once).
+
+### Fixed
+- Figures no longer slide on turns, climbs and landings: the 60 Hz interpolation of kid, guard and shadow works on the drawn
+  centre of the image (so the climb, hang and drop are smooth too) and is skipped on a room change, a mirror flip (turn) or a
+  jump of the drawn centre over 40 px.
+- docs/edge_cases.md 7: a runner passes a closed gate at the room edge because the room change comes before the gate's bump (verified
+  original behaviour, not a bug).
+
 ## [0.4.5] - 2026-11-20
 
 ### Changed

@@ -62,7 +62,7 @@ Save, load, volume, mute and fullscreen stay on the keyboard (or the menus).
 Up / down (arrows, numpad 8 / 2, d-pad) choose, Enter / Space / numpad 5 / A select, left / right (or Enter) change a
 setting, Esc / Backspace / B go back (on the first page: close the menu, resume the game); Start also goes back. The
 game stays frozen while the pause menu is open. Settings page: `render_mode` (classic / enhanced), `character_style`,
-`camera_scroll`, `window`, `volume`, `muted` apply at once; `sound`, `tile_textures`, `column_style`, `object_style`,
+`camera_scroll`, `motion_smoothing`, `window`, `volume`, `muted` apply at once; `sound`, `tile_textures`, `column_style`, `object_style`,
 `voxel_normals`, `voxel_shading`, `shadow_quality`, `ssao` are marked "(after restart)". Every change is written to
 settings.json at once (atomic). The Controls page lists the kid's keys from settings.json and the fixed keys.
 
@@ -89,13 +89,17 @@ Created next to the exe on the first run; unknown keys are ignored, missing ones
   "ssao": true,
   "voxel_normals": "smooth",
   "voxel_shading": "lit",
-  "camera_scroll": "smooth"
+  "camera_scroll": "smooth",
+  "motion_smoothing": "position"
 }
 ```
 
 `camera_scroll`: `smooth` (default: on a room change the camera pans to the new room in 0.3 s, eased, frame rate
 independent, the neighbouring rooms visible at the margins) or `flip` (the original's hard cut to the new room); env
 `POP_CAMERA=smooth|flip` overrides. Level changes, restarts and jumps to a room that is not a neighbour always cut.
+`motion_smoothing`: `position` (default: kid, guard and shadow are drawn between the last two 12 Hz logic frames, so they move at
+60 Hz) or `off` (the original's 12 Hz motion); env `POP_SMOOTH=off|position` overrides. Costs one logic frame (83 ms) of
+display delay; see "Display interpolation" in docs/mechanics.md.
 Upside-down (the invert potion; in the shipped levels raw potion modifier 4 sits in level 9 rooms 7 and 10, INFERRED kind 4): the picture is mirrored top to bottom as in the original; the hit points and
 texts stay upright and the controls are not swapped (original: display only, docs/edge_cases.md 5.1).
 

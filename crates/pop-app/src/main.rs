@@ -51,9 +51,9 @@ struct Game {
     level: usize,
     /// 1-based
     room: usize,
-    /// kid position (world units) and room at the start of the last logic tick, for interpolation
-    kid_prev: (Vec2, u8),
-    guard_prev: (Vec2, u8),
+    /// kid / guard at the start of the last logic tick, for interpolation (kid.rs `lerps`)
+    kid_prev: kid::Snap,
+    guard_prev: kid::Snap,
     kid_respawn: bool,
     /// HUD message ("LEVEL N", "GAME SAVED"): (logic ticks left, text)
     banner: (u32, String),
@@ -184,7 +184,7 @@ fn main() {
         .add_plugins((audio::plugin, enhanced::light_shadow_views_plugin))
         .insert_resource(ClearColor(BACKGROUND))
         .insert_resource(Time::<Fixed>::from_hz(sim::STEP_HZ))
-        .insert_resource(Game { world, levels, level, room, kid_prev: (Vec2::ZERO, 0), guard_prev: (Vec2::ZERO, 0), kid_respawn: false, banner: (0, String::new()), debug: false, gen: 0 })
+        .insert_resource(Game { world, levels, level, room, kid_prev: kid::Snap::default(), guard_prev: kid::Snap::default(), kid_respawn: false, banner: (0, String::new()), debug: false, gen: 0 })
         .insert_resource(kid::Latch::default())
         .insert_resource(assets)
         .init_resource::<flow::Flow>()

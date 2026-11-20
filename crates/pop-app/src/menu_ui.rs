@@ -168,7 +168,7 @@ fn apply(
             (audio.volume, audio.muted) = (set.volume, set.muted);
             crate::audio::apply_gain(audio, sinks, pending);
         }
-        _ => {} // camera_scroll is read on every room change; the rest after a restart
+        _ => {} // camera_scroll is read on every room change, motion_smoothing every frame; the rest after a restart
     }
 }
 
