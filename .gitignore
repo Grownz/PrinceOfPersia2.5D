@@ -20,3 +20,6 @@ tools/rt_probe/
 
 # the maintainer's local texture inventory sheet embeds original game graphics: never committed
 docs/texture_mapping.xlsx
+
+# local music recordings of the original (copyrighted, never committed)
+Music_rec/
