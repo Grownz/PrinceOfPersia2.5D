@@ -7,7 +7,7 @@
 //! later start. Only a released `PrinceOfPersia.exe` updates itself (a `cargo run` build never asks). Switch off with
 //! `"update_check": false` in settings.json or the environment variable `POP_SKIP_UPDATE`; `POP_UPDATE_AS=0.5.0` pretends
 //! to be that version (tests).
-use crate::soundfont::{curl, run, sys, CANCELLED};
+use crate::soundfont::{curl, run, CANCELLED};
 use bevy::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -149,7 +149,7 @@ fn fetch(o: &Offer, part: &Path, tmp: &Path, exe: &Path, dir: &Path) -> Result<(
         return Err("unexpected file size".into());
     }
     if let Some(want) = &o.sha256 {
-        let out = Command::new(sys("certutil.exe")).arg("-hashfile").arg(part).arg("SHA256").output().map_err(|e| format!("cannot run certutil.exe: {e}"))?;
+        let out = crate::soundfont::cmd("certutil.exe").stdout(std::process::Stdio::piped()).arg("-hashfile").arg(part).arg("SHA256").output().map_err(|e| format!("cannot run certutil.exe: {e}"))?;
         let got = String::from_utf8_lossy(&out.stdout).lines().nth(1).unwrap_or("").replace(' ', "").to_lowercase();
         if &got != want {
             return Err("the download does not match GitHub's checksum".into());
@@ -158,7 +158,7 @@ fn fetch(o: &Offer, part: &Path, tmp: &Path, exe: &Path, dir: &Path) -> Result<(
     set(Status::Busy { phase: "installing", done: 0, total: 0 });
     let _ = std::fs::remove_dir_all(tmp);
     std::fs::create_dir_all(tmp).map_err(|e| e.to_string())?;
-    let mut tar = Command::new(sys("tar.exe"));
+    let mut tar = crate::soundfont::cmd("tar.exe");
     tar.arg("-xf").arg(part).arg("-C").arg(tmp);
     run(&mut tar, &CANCEL)?;
     let src = find_exe_dir(tmp).ok_or("the release has no PrinceOfPersia.exe")?;
@@ -250,6 +250,7 @@ fn shape(s: &Status) -> (String, Option<f32>, Vec<&'static str>) {
 #[allow(clippy::type_complexity)]
 fn ui(
     k: Res<ButtonInput<KeyCode>>,
+    mut typed: MessageReader<bevy::input::keyboard::KeyboardInput>,
     mut exit: MessageWriter<AppExit>,
     mut msg: Single<&mut Text, (With<Msg>, Without<BtnText>)>,
     mut bar: Single<&mut Node, (With<Bar>, Without<BarFill>, Without<Btn>)>,
@@ -270,8 +271,10 @@ fn ui(
             }
         }
     }
-    let yes = k.just_pressed(KeyCode::KeyY) || k.just_pressed(KeyCode::Enter);
-    let no = k.just_pressed(KeyCode::KeyN) || k.just_pressed(KeyCode::Escape);
+    // Y and N by the letter on the key, not its position (a German keyboard has Y where a US one has Z)
+    let letters: Vec<String> = typed.read().filter(|e| e.state.is_pressed()).filter_map(|e| match &e.logical_key { bevy::input::keyboard::Key::Character(c) => Some(c.to_lowercase()), _ => None }).collect();
+    let yes = letters.iter().any(|c| c == "y") || k.just_pressed(KeyCode::Enter);
+    let no = letters.iter().any(|c| c == "n") || k.just_pressed(KeyCode::Escape);
     match &st {
         Status::Offer(o) => {
             if press == Some(0) || yes {

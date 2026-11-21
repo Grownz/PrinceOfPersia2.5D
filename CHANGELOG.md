@@ -3,6 +3,19 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.6.2] - 2026-11-21
+
+### Added
+- Settings, Video: "External Terminal" checkbox (`external_terminal`, off by default) opens a console window with the log at run time and closes it again. Without it no console window ever shows: curl, tar and certutil (downloads, updates) run without one too. Closing the console window with its X button ends the game.
+
+### Changed
+- New defaults for a fresh install (an existing `settings.json` keeps its values): rendering enhanced, characters voxel, volume 50 %, sound set AdLib (clips the AdLib set cannot make fall back to the synth), sun light low.
+
+### Fixed
+- Enter did nothing on the menu entries that start a game action (Start game, Quit game, Restart level, Save game, Quit to title, the version line, the SoundFont download button), and the note "GAME SAVED" vanished at once: the mouse handler overwrote the pending action every frame.
+- The released exe (no console) could not start any download or update (curl failed with "invalid handle"): the helper programs now get explicit null handles.
+- The update window reads Y and N by the letter on the key, not the key position (on a German keyboard Y did nothing).
+
 ## [0.6.1] - 2026-11-21
 
 ### Added

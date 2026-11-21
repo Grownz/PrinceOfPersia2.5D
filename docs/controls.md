@@ -131,12 +131,12 @@ texts stay upright and the controls are not swapped (original: display only, doc
 
 `window`: `windowed` or `borderless` (F11 saves it). `sound`: `synth` (generated effects) or `original` (the game's own
 sounds; the environment variable `POP_SOUND=original` overrides). Volume, mute and F11 are saved when changed.
-`render_mode`: `classic` (default, the original look), `enhanced` (shadow maps from the nearest torches and a soft sun
+`render_mode`: `classic` (the original look), `enhanced` (default; shadow maps from the nearest torches and a soft sun
 light, screen-space ambient occlusion, bloom on the flames, a brighter fill light; any GPU, F5 toggles and saves it) or
 `rt_experimental` (reserved, accepted but run as `classic` with a log line); `POP_RENDER` overrides. Enhanced only:
 `shadow_quality` `off`, `low` (2 torch shadows, small maps) or `high` (default, 4 torch shadows), `ssao` `true` (default;
 turns MSAA off and uses SMAA) or `false`. If enhanced is too slow after its warm-up (p95 frame time of 300-frame
-windows over 1.25 refresh periods, at most 60 Hz counted, i.e. 20.8 ms; three windows in a row, window focused), it falls back to classic for the session with a log line (not saved). `character_style`: `sprite` (default) or `voxel` (F6 toggles
+windows over 1.25 refresh periods, at most 60 Hz counted, i.e. 20.8 ms; three windows in a row, window focused), it falls back to classic for the session with a log line (not saved). `character_style`: `sprite` or `voxel` (default; F6 toggles
 and saves it, `POP_CHARS` overrides). Voxel characters only: `voxel_normals` `smooth` (default: normals from the voxel
 surface, rounded shading) or `flat` (one normal per cube face, the blocky look), env `POP_VOXEL_NORMALS`; `voxel_shading`
 `lit` (default: torches, sun and ambient shade the figures, they cast shadows in enhanced) or `unlit` (the palette colours

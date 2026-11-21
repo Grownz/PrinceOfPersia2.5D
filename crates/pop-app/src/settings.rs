@@ -22,6 +22,8 @@ pub struct Settings {
     pub data_path: Option<String>,
     /// ask GitHub for a newer release at every start (released exe only; POP_SKIP_UPDATE skips it)
     pub update_check: bool,
+    /// a console window for the log (Windows; off by default, Settings > Video > External Terminal)
+    pub external_terminal: bool,
     /// "classic" (the original look), "enhanced" (shadows, SSAO, bloom) or "rt_experimental" (Bevy Solari, only in builds
     /// with the `solari` feature, else run as classic with a log line); POP_RENDER overrides, F5 cycles classic / enhanced
     /// (/ rt_experimental when the game started in it)
@@ -146,7 +148,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "high".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into() }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.5, muted: false, sound: "adlib".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, external_terminal: false, render_mode: "enhanced".into(), character_style: "voxel".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "low".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into() }
     }
 }
 
@@ -181,6 +183,7 @@ impl Settings {
             keys,
             data_path: field(&o, "data_path", d.data_path, |_| true),
             update_check: field(&o, "update_check", d.update_check, |_| true),
+            external_terminal: field(&o, "external_terminal", d.external_terminal, |_| true),
             render_mode: field(&o, "render_mode", d.render_mode, |m| RENDER_MODES.contains(&m.as_str())),
             character_style: field(&o, "character_style", d.character_style, |s| CHARACTER_STYLES.contains(&s.as_str())),
             shadow_quality: field(&o, "shadow_quality", d.shadow_quality, |s| SHADOW_QUALITIES.contains(&s.as_str())),
@@ -374,7 +377,7 @@ mod tests {
     #[test]
     fn render_settings_parse_and_fall_back() {
         let d = Settings::default();
-        assert_eq!((d.render_mode.as_str(), d.character_style.as_str()), ("classic", "sprite"));
+        assert_eq!((d.render_mode.as_str(), d.character_style.as_str()), ("enhanced", "voxel"));
         let s = Settings::parse(r#"{"render_mode": "rt_experimental", "character_style": "voxel"}"#);
         assert_eq!((s.render_mode.as_str(), s.character_style.as_str()), ("rt_experimental", "voxel"));
         assert_eq!(Settings::parse(&s.to_json()), s);

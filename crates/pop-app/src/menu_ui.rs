@@ -233,6 +233,7 @@ impl Live<'_, '_> {
                     w.mode = if set.borderless() { WindowMode::BorderlessFullscreen(MonitorSelection::Current) } else { WindowMode::Windowed };
                 }
             }
+            "external_terminal" => crate::flow::console(set.external_terminal),
             "volume" | "muted" => {
                 (self.audio.volume, self.audio.muted) = (set.volume, set.muted);
                 crate::audio::apply_gain(&self.audio, &mut self.sinks, &mut self.pending);
@@ -244,9 +245,11 @@ impl Live<'_, '_> {
 
 /// Carries out what a menu step returned (keys and mouse alike).
 fn dispatch(act: Option<Action>, ui: &mut MenuUi, set: &mut Settings, live: &mut Live, next: &mut NextState<Screen>) {
+    // `mouse` runs after `input` every frame, usually with nothing to do: it must not wipe the action or note `input` just set
+    let Some(act) = act else { return };
     let Some(ctx) = ui.menu.as_ref().map(|m| m.ctx) else { return };
     ui.note.clear();
-    match act {
+    match Some(act) {
         Some(Action::Close) => {
             ui.menu = None;
             if ctx == Ctx::Pause {

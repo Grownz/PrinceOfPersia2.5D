@@ -126,6 +126,9 @@ fn main() {
         std::panic::set_hook(Box::new(|info| report(&format!("panic: {info}"))));
     }
     let set = Settings::load();
+    if set.external_terminal && !cfg!(debug_assertions) {
+        flow::console(true);
+    }
     // before any game data is touched: is there a newer release?
     if let Some(offer) = update::check(set.update_check) {
         return update::window(offer);

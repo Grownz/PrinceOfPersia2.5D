@@ -3,9 +3,8 @@
 //! archive crates), a worker thread, a cancel flag, state in a static for the window to read. Nothing is bundled or
 //! fetched without the user confirming the licence sentence. The zip is checked (size and SHA-1) and unpacked into a
 //! temporary folder first; only the `.DAT` files and PRINCE.EXE are copied to `Original_data` (existing files stay).
-use crate::soundfont::{curl, run, sys, CANCELLED};
+use crate::soundfont::{curl, run, CANCELLED};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -116,7 +115,7 @@ fn fetch(part: &Path, tmp: &Path, dest: &Path) -> Result<(), String> {
     set(Status::Busy { phase: "unpacking", done: 0 });
     let _ = std::fs::remove_dir_all(tmp);
     std::fs::create_dir_all(tmp).map_err(|e| e.to_string())?;
-    let mut tar = Command::new(sys("tar.exe"));
+    let mut tar = crate::soundfont::cmd("tar.exe");
     tar.arg("-xf").arg(part).arg("-C").arg(tmp);
     run(&mut tar, &CANCEL)?;
     std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
@@ -134,7 +133,7 @@ fn fetch(part: &Path, tmp: &Path, dest: &Path) -> Result<(), String> {
 
 /// SHA-1 of a file with Windows' `certutil` (lower-case hex).
 fn sha1(f: &Path) -> Result<String, String> {
-    let out = Command::new(sys("certutil.exe")).arg("-hashfile").arg(f).arg("SHA1").output().map_err(|e| format!("cannot run certutil.exe: {e}"))?;
+    let out = crate::soundfont::cmd("certutil.exe").stdout(std::process::Stdio::piped()).arg("-hashfile").arg(f).arg("SHA1").output().map_err(|e| format!("cannot run certutil.exe: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout);
     Ok(text.lines().nth(1).unwrap_or("").replace(' ', "").to_ascii_lowercase())
 }

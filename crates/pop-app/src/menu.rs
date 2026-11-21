@@ -148,12 +148,13 @@ pub struct Opt {
 const ON_OFF: &[&str] = &["true", "false"];
 const PERCENT: Ctl = Ctl::Slider { min: 0, max: 100, step: 5 };
 
-pub const OPTS: [Opt; 17] = [
+pub const OPTS: [Opt; 18] = [
     Opt { key: "render_mode", label: "Rendering", values: &["classic", "enhanced"], live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "character_style", label: "Characters", values: &settings::CHARACTER_STYLES, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "camera_scroll", label: "Room change", values: &settings::CAMERA_SCROLLS, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "motion_smoothing", label: "Motion smoothing", values: &settings::MOTION_SMOOTHINGS, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "window", label: "Window mode", values: &["windowed", "borderless"], live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
+    Opt { key: "external_terminal", label: "External Terminal", values: ON_OFF, live: true, tab: Tab::Video, ctl: Ctl::Checkbox },
     Opt { key: "volume", label: "Volume", values: &[], live: true, tab: Tab::Audio, ctl: PERCENT },
     Opt { key: "muted", label: "Mute", values: ON_OFF, live: true, tab: Tab::Audio, ctl: Ctl::Checkbox },
     Opt { key: "sound", label: "Sound set", values: &["synth", "original", "adlib", "soundfont"], live: true, tab: Tab::Audio, ctl: Ctl::Dropdown },
@@ -679,7 +680,7 @@ mod tests {
         // a step row (sun light) steps on and wraps from the last value to the first
         let i = opt("sun_brightness");
         focus_opt(&mut m, i);
-        assert_eq!(s.sun_brightness, "high");
+        s.sun_brightness = "high".into();
         assert_eq!(m.nav(Nav::Enter, &mut s), Some(Action::Changed(i)));
         assert_eq!(s.sun_brightness, "dim");
         // a slider (volume) steps on and wraps too
@@ -745,6 +746,7 @@ mod tests {
         soundfont::debug_set(0, Status::Installed); // the font sound sets need one installed font
         let mut s = Settings::default();
         let mut m = settings_menu();
+        s.render_mode = "classic".into();
         focus_opt(&mut m, 0);
         assert_eq!(m.nav(Nav::Right, &mut s), Some(Action::Changed(0)));
         assert_eq!(s.render_mode, "enhanced");
@@ -866,6 +868,7 @@ mod tests {
         soundfont::debug_set(0, Status::Installed); // the font sound sets need one installed font
         let mut s = Settings::default();
         let mut m = settings_menu();
+        s.sound = "synth".into();
         let snd = opt("sound");
         focus_opt(&mut m, snd);
         assert_eq!(m.nav(Nav::Enter, &mut s), None);
@@ -908,7 +911,7 @@ mod tests {
         assert_eq!(m.tab, Tab::Video, "Q / E, LB / RB");
         m.nav(Nav::Down, &mut s);
         assert_eq!(m.rows()[m.sel], Row::Opt(0));
-        for _ in 0..5 {
+        for _ in 0..6 {
             m.nav(Nav::Down, &mut s);
         }
         assert_eq!(m.rows()[m.sel], Row::Item(Item::Back), "Back is last");
@@ -923,7 +926,7 @@ mod tests {
         assert_eq!(m.slot_idx(8), None);
         m.scroll(3);
         assert_eq!(m.top, 0, "everything fits");
-        assert_eq!(m.visible().len(), 6);
+        assert_eq!(m.visible().len(), 7);
         // a tab click focuses the strip
         m.focus(0);
         m.set_tab(2);

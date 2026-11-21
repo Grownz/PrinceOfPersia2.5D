@@ -55,14 +55,15 @@ once; the pause menu with `POP_LEVEL`; `POP_MENU_SEL=<row>`, `POP_MENU_OPEN=1` o
 Created on the first run next to the exe; unknown keys are ignored and missing ones take their defaults. Most keys are in the
 in-game Settings menu (Esc), see [controls.md](controls.md).
 
+- `external_terminal` (`false` by default): a console window with the log (Settings > Video > External Terminal, applies at once).
 - `update_check` (`true` by default): ask GitHub for a newer release at every start (released `PrinceOfPersia.exe` only), see `update.rs`.
 - Window mode and size, `volume`, `muted`, key bindings, `data_path`.
 - `sound`: `synth` (procedural effects, the original melodies from the MIDI files through the AdLib driver), `original` (the
   game's own digitized effects and PC-speaker tunes), `adlib` (original effects and music through the AdLib driver and an OPL2
   emulation) or `soundfont` (music through a downloaded SoundFont, `soundfont` = `musescore` or `fluidr3`); env `POP_SOUND`.
-- `render_mode`: `classic` (default) or `enhanced` (torch and sun shadows, ambient occlusion, bloom; any GPU; F5; `shadow_quality`
-  `off|low|high` and `ssao` `true|false` and `sun_brightness` `dim|low|medium|high` tune it); `rt_experimental` is reserved and falls back to classic; env `POP_RENDER`.
-- `character_style`: `sprite` (default) or `voxel` (3D voxel figures built at runtime from your own sprite files, nothing is
+- `render_mode`: `classic` or `enhanced` (default; torch and sun shadows, ambient occlusion, bloom; any GPU; F5; `shadow_quality`
+  `off|low|high` and `ssao` `true|false` and `sun_brightness` `dim|low|medium|high`, default `low`, tune it); `rt_experimental` is reserved and falls back to classic; env `POP_RENDER`.
+- `character_style`: `sprite` or `voxel` (default; 3D voxel figures built at runtime from your own sprite files, nothing is
   written to disk); env `POP_CHARS`, F6. `voxel_normals` `smooth|flat` (`POP_VOXEL_NORMALS`), `voxel_shading` `lit|unlit`
   (`POP_VOXEL_SHADING`).
 - `tile_textures`: `original` (default: the tile images of your VDUNGEON.DAT / VPALACE.DAT on the room pieces, decoded at runtime;

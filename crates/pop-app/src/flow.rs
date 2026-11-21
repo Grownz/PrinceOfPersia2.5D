@@ -831,3 +831,25 @@ mod tests {
         assert_eq!(count(&run(true, false, Some(2)), Pic::Hof), 2);
     }
 }
+
+/// Windows: opens (`on`) or closes the console window of the log. The release exe has none (a GUI program); curl, tar and the
+/// other helpers never open one (`soundfont::cmd`). Closing the window with its X button ends the game.
+pub fn console(on: bool) {
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn AllocConsole() -> i32;
+            fn FreeConsole() -> i32;
+        }
+        // SAFETY: plain kernel32 calls without arguments; a failure (already / not attached) is harmless
+        unsafe {
+            if on {
+                AllocConsole();
+            } else {
+                FreeConsole();
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = on;
+}

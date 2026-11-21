@@ -183,6 +183,16 @@ pub fn start(i: usize) {
     });
 }
 
+/// A system program as a command that never opens a console window (the game is a GUI program: a console child would flash one).
+pub(crate) fn cmd(exe: &str) -> Command {
+    let mut c = Command::new(sys(exe));
+    // the release exe has no console, so no standard handles: a child that inherits them fails with "invalid handle"
+    c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut c, 0x0800_0000); // CREATE_NO_WINDOW
+    c
+}
+
 pub(crate) fn sys(exe: &str) -> PathBuf {
     let root = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
     root.join("System32").join(exe)
@@ -209,7 +219,7 @@ pub(crate) fn run(cmd: &mut Command, cancel: &AtomicBool) -> Result<(), String> 
 }
 
 pub(crate) fn curl(url: &str, to: &std::path::Path) -> Command {
-    let mut c = Command::new(sys("curl.exe"));
+    let mut c = cmd("curl.exe");
     c.args(["-L", "--fail", "--silent", "--show-error", "--proto", "=https", "--max-redirs", "5", "-o"]).arg(to).arg(url);
     c
 }
@@ -277,7 +287,7 @@ fn download(i: usize) -> Result<(), String> {
 /// A .deb is an `ar` archive holding `data.tar.*`; Windows' bsdtar reads both. Returns (the SF2, the copyright file if found).
 fn unpack_deb(deb: &std::path::Path, tmp: &std::path::Path, name: &str, cancel: &AtomicBool) -> Result<(PathBuf, Option<PathBuf>), String> {
     let tar = |a: &std::path::Path| {
-        let mut c = Command::new(sys("tar.exe"));
+        let mut c = cmd("tar.exe");
         c.arg("-xf").arg(a).arg("-C").arg(tmp);
         run(&mut c, cancel)
     };
