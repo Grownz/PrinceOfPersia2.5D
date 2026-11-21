@@ -88,7 +88,7 @@ const BLACK: Color = Color::BLACK;
 
 /// The menu font: Fixedsys, as a fallback Consolas and any monospace. Fixedsys itself is a Windows bitmap font that Bevy cannot
 /// read; it is used when a vector font of that name (e.g. Fixedsys Excelsior) is installed.
-fn font(size: f32) -> TextFont {
+pub(crate) fn font(size: f32) -> TextFont {
     TextFont { font: FontSource::Families("Fixedsys, Fixedsys Excelsior, Consolas, monospace".into()), font_size: FontSize::VMin(size), ..default() }
 }
 
@@ -126,6 +126,7 @@ pub fn setup(mut cmds: Commands) {
                     });
                 }
             });
+            crate::controls_art::spawn(p);
             for i in 0..INFO {
                 p.spawn((Text::new(""), font(2.6), TextColor(GREY), TextLayout::justify(Justify::Center), MenuLine(i)));
             }
@@ -354,7 +355,7 @@ pub fn mouse(
     let valid = |p: Part| -> bool {
         let row = m.slot_idx(p.0).and_then(|i| rows.get(i).copied());
         match p.1 {
-            P::Tab => m.page == Page::Settings,
+            P::Tab => m.has_tabs() && p.0 < m.tabs().len(),
             P::Row => row.is_some(),
             P::Track => matches!(row, Some(Row::Opt(i)) if matches!(OPTS[i].ctl, Ctl::Slider { .. } | Ctl::Steps)),
             P::Btn(b) => matches!(row, Some(Row::Font(i)) if b < menu::font_buttons(&soundfont::status(i)).len()),
@@ -526,7 +527,6 @@ pub fn draw(
     let Some(m) = m else { return };
     // info lines (Controls, Hall of fame)
     let info: Vec<String> = match m.page {
-        Page::Controls => menu::controls(&set.keys),
         Page::Hof if hof.entries.is_empty() => vec!["No entries yet: finish the game to get one.".into()],
         Page::Hof => hof.entries.iter().enumerate().map(|(i, e)| format!("{}.  {}   {}", i + 1, e.name, e.time_text())).collect(),
         _ => vec![],
@@ -539,7 +539,8 @@ pub fn draw(
         }
     }
     let views: Vec<View> = m.visible().into_iter().map(|(idx, row)| view(m, idx, row, &set)).collect();
-    let on_tabs = m.page == Page::Settings;
+    let on_tabs = m.has_tabs();
+    let tabs = m.tabs();
     let tabs_focus = on_tabs && m.sel == 0;
     let width = CARD_W;
     let hint = ui.note.clone();
@@ -560,11 +561,15 @@ pub fn draw(
             }
             P::TabBar => disp(&mut n, on_tabs),
             P::Tab => {
-                let active = TABS[slot] == m.tab;
+                disp(&mut n, slot < tabs.len());
+                let active = tabs.get(slot) == Some(&m.tab);
                 set_bg = Some(if active { GOLD } else { BTN_BG });
                 set_border = Some(if tabs_focus && active { Color::WHITE } else if active { GOLD } else { Color::NONE });
             }
-            P::TabText => set_col = Some(if TABS[slot] == m.tab { BLACK } else { GREY }),
+            P::TabText => {
+                set_text = tabs.get(slot).map(|t| t.name().to_string());
+                set_col = Some(if tabs.get(slot) == Some(&m.tab) { BLACK } else { GREY });
+            }
             P::Row => {
                 disp(&mut n, v.is_some());
                 let v = v.cloned().unwrap_or_default();

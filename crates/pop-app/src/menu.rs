@@ -5,7 +5,7 @@
 //! Model: a page is a list of `Row`s; `sel` is the focused row, `sub` the focused button inside a download row, `open` the
 //! highlighted entry of an open drop-down. The Settings page has a tab row (row 0) and one tab of option rows each; every
 //! option (`Opt`) is drawn as a slider, a checkbox or a drop-down (`Ctl`).
-use crate::settings::{self, Bindings, Settings};
+use crate::settings::{self, Settings};
 use crate::soundfont::{self, Status};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -28,9 +28,13 @@ pub enum Tab {
     Audio,
     Graphics,
     Downloads,
+    /// the tabs of the Controls page
+    Keyboard,
+    Controller,
 }
 
 pub const TABS: [Tab; 4] = [Tab::Video, Tab::Audio, Tab::Graphics, Tab::Downloads];
+pub const CONTROL_TABS: [Tab; 2] = [Tab::Keyboard, Tab::Controller];
 
 impl Tab {
     pub fn name(self) -> &'static str {
@@ -39,6 +43,8 @@ impl Tab {
             Tab::Audio => "Audio",
             Tab::Graphics => "Graphics",
             Tab::Downloads => "Downloads",
+            Tab::Keyboard => "Keyboard",
+            Tab::Controller => "Controller",
         }
     }
 }
@@ -410,7 +416,8 @@ impl Menu {
                 let body: Vec<Row> = if self.tab == Tab::Downloads { (0..soundfont::FONTS.len()).map(Row::Font).collect() } else { (0..OPTS.len()).filter(|&i| OPTS[i].tab == self.tab).map(Row::Opt).collect() };
                 [Row::Tabs].into_iter().chain(body).chain([Row::Item(Back)]).collect()
             }
-            (Page::Controls | Page::Hof, _) => items(&[Back]),
+            (Page::Controls, _) => [Row::Tabs].into_iter().chain(items(&[Back])).collect(),
+            (Page::Hof, _) => items(&[Back]),
         }
     }
 
@@ -420,7 +427,17 @@ impl Menu {
     }
 
     fn first(&self) -> usize {
-        (self.page == Page::Settings) as usize
+        self.has_tabs() as usize
+    }
+
+    /// Settings and Controls have a tab strip.
+    pub fn has_tabs(&self) -> bool {
+        matches!(self.page, Page::Settings | Page::Controls)
+    }
+
+    /// The tabs of this page.
+    pub fn tabs(&self) -> &'static [Tab] {
+        if self.page == Page::Controls { &CONTROL_TABS } else { &TABS }
     }
 
     fn keep_visible(&mut self) {
@@ -438,7 +455,7 @@ impl Menu {
 
     /// Select the tab `k` (strip click, Q / E).
     pub fn set_tab(&mut self, k: usize) {
-        self.tab = TABS[k % TABS.len()];
+        self.tab = self.tabs()[k % self.tabs().len()];
         (self.top, self.sub, self.open) = (0, 0, None);
         self.sel = self.sel.min(self.rows().len() - 1);
     }
@@ -508,6 +525,11 @@ impl Menu {
 
     fn open_page(&mut self, p: Page) {
         (self.page, self.sel, self.sub, self.top, self.open) = (p, 0, 0, 0, None);
+        match p {
+            Page::Controls => self.tab = Tab::Keyboard,
+            Page::Settings if !TABS.contains(&self.tab) => self.tab = Tab::Video,
+            _ => {}
+        }
     }
 
     fn font_press(&mut self, i: usize) -> Option<Action> {
@@ -564,9 +586,9 @@ impl Menu {
         match (n, row) {
             (Nav::Up, _) => (self.sel, self.sub) = ((self.sel + count - 1) % count, 0),
             (Nav::Down, _) => (self.sel, self.sub) = ((self.sel + 1) % count, 0),
-            (Nav::PrevTab | Nav::NextTab, _) if self.page == Page::Settings => self.set_tab((TABS.iter().position(|&t| t == self.tab).unwrap_or(0) + if n == Nav::NextTab { 1 } else { TABS.len() - 1 }) % TABS.len()),
+            (Nav::PrevTab | Nav::NextTab, _) if self.has_tabs() => self.set_tab((self.tabs().iter().position(|&t| t == self.tab).unwrap_or(0) + if n == Nav::NextTab { 1 } else { self.tabs().len() - 1 }) % self.tabs().len()),
             (Nav::PrevTab | Nav::NextTab, _) => {}
-            (Nav::Left | Nav::Right, Row::Tabs) => self.set_tab((TABS.iter().position(|&t| t == self.tab).unwrap_or(0) + if n == Nav::Right { 1 } else { TABS.len() - 1 }) % TABS.len()),
+            (Nav::Left | Nav::Right, Row::Tabs) => self.set_tab((self.tabs().iter().position(|&t| t == self.tab).unwrap_or(0) + if n == Nav::Right { 1 } else { self.tabs().len() - 1 }) % self.tabs().len()),
             (Nav::Left | Nav::Right, Row::Opt(i)) => {
                 *s = cycle(s, i, if n == Nav::Left { -1 } else { 1 });
                 return Some(Action::Changed(i));
@@ -635,30 +657,6 @@ pub fn deleted_note(i: usize, s: &Settings) -> String {
     }
 }
 
-/// The Controls page: the kid's keys from settings.json, then the fixed ones (docs/controls.md).
-pub fn controls(k: &Bindings) -> Vec<String> {
-    let j = |v: &[String]| v.join(", ");
-    let mut v = vec![
-        format!("Left: {}   Right: {}", j(&k.left), j(&k.right)),
-        format!("Up / jump: {}   Down / crouch: {}", j(&k.up), j(&k.down)),
-        format!("Action (grab, strike, drink): {}", j(&k.shift)),
-    ];
-    v.extend(
-        [
-            "Numpad 7 8 9 / 4 5 6 / 2: move (7 / 9 running jump)",
-            "Esc / P: pause menu   Ctrl+A: restart level",
-            "Ctrl+G: save (levels 3-13)   Ctrl+L: load (title, demo)",
-            "M: mute   - / =: volume   F11: fullscreen",
-            "F5: classic / enhanced   F6: sprite / voxel   F9: frame times",
-            "Controller: d-pad / stick move, A / X action,",
-            "Start pause, Back restart; menus: A ok, B back",
-            "Menus: mouse; Q / E, PgUp / PgDn: tab",
-        ]
-        .map(String::from),
-    );
-    v
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,6 +687,25 @@ mod tests {
         s.volume = 1.0;
         assert_eq!(m.nav(Nav::Enter, &mut s), Some(Action::Changed(v)));
         assert_eq!(s.volume, 0.0);
+    }
+
+    #[test]
+    fn controls_page_has_keyboard_and_controller_tabs() {
+        let mut s = Settings::default();
+        let mut m = Menu::new(Ctx::Title, false, false);
+        m.sel = m.rows().iter().position(|&r| r == Row::Item(Item::Controls)).unwrap();
+        m.nav(Nav::Enter, &mut s);
+        assert_eq!((m.page, m.tab, m.sel), (Page::Controls, Tab::Keyboard, 0));
+        assert_eq!(m.rows(), [Row::Tabs, Row::Item(Item::Back)]);
+        m.nav(Nav::Right, &mut s);
+        assert_eq!(m.tab, Tab::Controller);
+        m.nav(Nav::NextTab, &mut s);
+        assert_eq!(m.tab, Tab::Keyboard, "the two tabs wrap");
+        // Settings after Controls starts on a Settings tab again
+        m.nav(Nav::Back, &mut s);
+        m.sel = m.rows().iter().position(|&r| r == Row::Item(Item::Settings)).unwrap();
+        m.nav(Nav::Enter, &mut s);
+        assert_eq!((m.page, m.tab), (Page::Settings, Tab::Video));
     }
 
     fn opt(key: &str) -> usize {
@@ -994,6 +1011,5 @@ mod tests {
         let s = Settings::default();
         assert_eq!(opt_value(&s, opt("window")), "Windowed");
         assert_eq!(Item::Back.label(), "Back");
-        assert!(controls(&Bindings::default())[0].contains("ArrowLeft"));
     }
 }

@@ -3,6 +3,11 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.6.3] - 2026-11-21
+
+### Changed
+- Controls page redone as pictures with two tabs: Keyboard (the actions on the left, their key caps on the right, following the bindings of `settings.json`) and Controller (the project's own schematic drawing of an Xbox and a PlayStation pad, embedded in the exe from `crates/pop-app/assets/`, with the parts the game uses outlined in the colour of their action and named by callouts with leader lines). The drawing matches the connected controller (by USB vendor or name; Xbox when none is connected). Keys read as "←", "Shift", "Num 7" instead of Bevy's key names.
+
 ## [0.6.2] - 2026-11-21
 
 ### Added

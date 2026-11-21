@@ -663,7 +663,7 @@ pub fn debug_menu(mut ui: ResMut<MenuUi>, mut f: ResMut<Flow>, mut hof: ResMut<H
             use crate::menu::Tab;
             m.page = match page {
                 "settings" | "video" | "audio" | "graphics" | "downloads" => Page::Settings,
-                "controls" => Page::Controls,
+                "controls" | "controller" => Page::Controls,
                 "hof" => Page::Hof,
                 _ => Page::Main,
             };
@@ -671,6 +671,8 @@ pub fn debug_menu(mut ui: ResMut<MenuUi>, mut f: ResMut<Flow>, mut hof: ResMut<H
                 "audio" => Tab::Audio,
                 "graphics" => Tab::Graphics,
                 "downloads" => Tab::Downloads,
+                "controls" => Tab::Keyboard,
+                "controller" => Tab::Controller,
                 _ => Tab::Video,
             };
             // POP_MENU_SEL = focused row, POP_MENU_OPEN = open its drop-down, POP_MENU_FAKE = made-up download states

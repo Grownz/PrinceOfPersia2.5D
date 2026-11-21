@@ -42,11 +42,11 @@ If none has the data, the window lists the folders it searched (also on stderr /
 `POP_DATA` (data folder), `POP_LEVEL` / `POP_ROOM` (skip the title), `POP_SOUND=synth|original|adlib|soundfont` (sound set),
 `POP_PERF=1` (log frame time and room rebuilds every 300 frames, vsync off), `POP_SHOT=file.png` (screenshot after
 `POP_SHOT_FRAME`, default 400 frames, or at logic tick `POP_SHOT_TICK`, then quit), `POP_SCRIPT` (scripted keys),
-`POP_MENU=main|settings|video|audio|graphics|downloads|controls|hof|name|attract` (open a menu page or a hall-of-fame screen at
+`POP_MENU=main|settings|video|audio|graphics|downloads|controls|controller|hof|name|attract` (open a menu page or a hall-of-fame screen at
 once; the pause menu with `POP_LEVEL`; `POP_MENU_SEL=<row>`, `POP_MENU_OPEN=1` opens its drop-down,
 `POP_MENU_FAKE=downloading:45|installed|confirm|delete|unpack` shows made-up SoundFont states without a download),
 `POP_CUTSCENE=<level>|end|timeout|intro` (play that cutscene at once; `POP_REM_MIN` = minutes left for the hourglass),
-`POP_SKIP_UPDATE=1` (no update check), `POP_UPDATE_AS=0.5.0` (pretend to be that version: offers the newest release, for testing), `POP_PALETTE_TTL=<seconds>` (how long an unused tile palette stays cached, default 300), `POP_FPS=1` (frame-time overlay with GPU pass times; F9 toggles it), `POP_BENCH=<frames>` (benchmark: vsync off, warm-up, one
+`POP_SKIP_UPDATE=1` (no update check), `POP_UPDATE_AS=0.5.0` (pretend to be that version: offers the newest release, for testing), `POP_PAD=xbox|ps` (force the pad drawing on the Controls page, for screenshots), `POP_PALETTE_TTL=<seconds>` (how long an unused tile palette stays cached, default 300), `POP_FPS=1` (frame-time overlay with GPU pass times; F9 toggles it), `POP_BENCH=<frames>` (benchmark: vsync off, warm-up, one
 `BENCH` log line, quit; with `POP_RES=WxH|full` and the `POP_FX` cost toggles; `tools/bench.ps1` runs a matrix,
 [enhanced_perf.md](enhanced_perf.md)).
 

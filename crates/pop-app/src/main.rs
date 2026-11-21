@@ -17,6 +17,7 @@
 //! or attract opens a menu page or a hall-of-fame screen at once (`flow::debug_menu`).
 mod audio;
 mod camera;
+mod controls_art;
 mod cutscene;
 mod enhanced;
 mod flow;
@@ -233,7 +234,7 @@ fn main() {
                 kid::render,
                 flash,
                 (camera::follow, cutscene::render, debug_camera, camera::mirror).chain(),
-                (flow::overlay, menu_ui::draw),
+                (flow::overlay, menu_ui::draw, controls_art::draw, controls_art::load),
                 debug_text,
                 fullscreen,
                 char_style_key,
