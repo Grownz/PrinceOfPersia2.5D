@@ -21,17 +21,19 @@ https://github.com/user-attachments/assets/498f5ae6-aa68-4cbb-ad87-2fd131e3076d
 - **Made for today.** Windows 10/11, windowed or fullscreen, keyboard, mouse-driven menus and controller support, saving,
   loading and the hall of fame as in the original.
 
-## Get started in three steps
+## Get started in two steps
 
 1. **Download** the latest `PrinceOfPersia-x64.zip` from the [Releases page](../../releases/latest) and unzip it anywhere.
-2. **Add your game files.** This is a remake of the engine, not a copy of the game: the original graphics, sounds and levels
-   are copyrighted and are not included. Copy the files of your DOS copy of *Prince of Persia* (`LEVELS.DAT`, `PRINCE.EXE`,
-   `KID.DAT`, `GUARD*.DAT`, `PRINCE.DAT`, `TITLE.DAT`, the sound `.DAT` files and the rest) into a folder named
-   `Original_data` next to `PrinceOfPersia.exe`. The VGA version it is built for can be found at the Internet Archive:
-   <https://archive.org/details/PERSIA_VGA> (check the rights situation for your country).
-3. **Start `PrinceOfPersia.exe`** and press any key. If the files are missing, the window tells you where it looked and offers
-   to download them from the Internet Archive: press D, confirm the licence sentence with Enter, and the game restarts by itself
-   once the files are in `Original_data` (Windows 10/11 only, it uses the built-in `curl` and `tar`).
+2. **Start `PrinceOfPersia.exe`** and press any key. This is a remake of the engine, not a copy of the game: the original
+   graphics, sounds and levels are copyrighted and are not included, so on the first start the window tells you the game files
+   are missing and offers to download them from the Internet Archive ([PERSIA_VGA](https://archive.org/details/PERSIA_VGA)).
+   Press D, confirm the licence sentence with Enter, and the game unpacks the files into `Original_data` next to the exe and
+   starts by itself. Please check the rights situation for your country first.
+
+Prefer to do it by hand? Copy the files of your own DOS copy of *Prince of Persia* (`LEVELS.DAT`, `PRINCE.EXE`, `KID.DAT`,
+`GUARD*.DAT`, `PRINCE.DAT`, `TITLE.DAT`, the sound `.DAT` files and the rest) into a folder named `Original_data` next to
+`PrinceOfPersia.exe`. The download and the updates use Windows' built-in `curl` and `tar`, so they need Windows 10 or 11 and an
+internet connection.
 
 ## Controls
 
@@ -45,17 +47,22 @@ https://github.com/user-attachments/assets/498f5ae6-aa68-4cbb-ad87-2fd131e3076d
 | Look | F5 classic / enhanced, F6 sprite / 3D figures, F11 fullscreen |
 | Sound | M mute, - and = volume |
 
-The game checks for a newer release at every start (released exe, needs internet) and offers to download and install it; switch it off with `"update_check": false` in `settings.json`.
-
 Controllers work too: d-pad or left stick, A as Shift, Start to pause. The full list and key rebinding are in
 [docs/controls.md](docs/controls.md).
 
 ## Settings
 
 Press Esc and open **Settings**: sliders, checkboxes and drop-down lists for video, audio and graphics, usable with mouse,
-keyboard or controller. Changes to the look and the volume apply immediately. The **Downloads** tab fetches the optional
+keyboard or controller. Every change applies immediately. The **Downloads** tab fetches the optional
 SoundFonts (MuseScore_General or FluidR3_GM, both MIT licensed) with a progress bar; you can cancel a download or delete a
 font at any time. Please respect the licences of the sources you download from.
+
+## Updates
+
+At every start the game asks GitHub whether a newer release exists. If so, a window offers it: press Y to download it (with a
+progress bar and a Cancel button), unpack it, replace the old files and restart, or N to play on. Your settings, saved game and
+`Original_data` are never touched. The version number is shown at the bottom of the main menu; click it to open the release
+page. To switch the check off, set `"update_check": false` in `settings.json`.
 
 ## Questions
 
