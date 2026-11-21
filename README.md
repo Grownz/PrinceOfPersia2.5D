@@ -29,7 +29,9 @@ https://github.com/user-attachments/assets/498f5ae6-aa68-4cbb-ad87-2fd131e3076d
    `KID.DAT`, `GUARD*.DAT`, `PRINCE.DAT`, `TITLE.DAT`, the sound `.DAT` files and the rest) into a folder named
    `Original_data` next to `PrinceOfPersia.exe`. The VGA version it is built for can be found at the Internet Archive:
    <https://archive.org/details/PERSIA_VGA> (check the rights situation for your country).
-3. **Start `PrinceOfPersia.exe`** and press any key. If the files are missing, the window tells you where it looked.
+3. **Start `PrinceOfPersia.exe`** and press any key. If the files are missing, the window tells you where it looked and offers
+   to download them from the Internet Archive: press D, confirm the licence sentence with Enter, and the game restarts by itself
+   once the files are in `Original_data` (Windows 10/11 only, it uses the built-in `curl` and `tar`).
 
 ## Controls
 
@@ -42,6 +44,8 @@ https://github.com/user-attachments/assets/498f5ae6-aa68-4cbb-ad87-2fd131e3076d
 | Restart level | Ctrl+A |
 | Look | F5 classic / enhanced, F6 sprite / 3D figures, F11 fullscreen |
 | Sound | M mute, - and = volume |
+
+The game checks for a newer release at every start (released exe, needs internet) and offers to download and install it; switch it off with `"update_check": false` in `settings.json`.
 
 Controllers work too: d-pad or left stick, A as Shift, Start to pause. The full list and key rebinding are in
 [docs/controls.md](docs/controls.md).

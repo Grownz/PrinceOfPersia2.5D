@@ -3,6 +3,17 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.6.1] - 2026-11-21
+
+### Added
+- Auto-update: at every start, before the game data is loaded, the app asks GitHub for the latest release. If a newer one exists, a window offers it (Y / N or the buttons). A yes downloads the zip with a progress bar and a Cancel button, checks it (size and, when GitHub gives one, the SHA-256), unpacks it, replaces the exe (the old one is renamed to `.exe.old` and removed at a later start) and the other released files, and starts the new version. Silent when offline or when the check fails. Only the released `PrinceOfPersia.exe` asks (not a `cargo run` build). Off with `"update_check": false` in settings.json or the environment variable `POP_SKIP_UPDATE`.
+- No game data at start: the window offers to download the original files from the Internet Archive (https://archive.org/details/PERSIA_VGA). D asks, Enter confirms the licence sentence ("User confirms that they will comply with the licenses in accordance with the laws of their country."), Esc cancels. The archive is checked (size and SHA-1), unpacked, the game's `.DAT` files and PRINCE.EXE are copied to `Original_data` next to the exe, and the game restarts. Uses Windows' own `curl.exe`, `tar.exe` and `certutil.exe`.
+
+### Changed
+- Menus: the key hints at the bottom of every tab are gone, the panel has one fixed size (that of the Graphics tab, the largest), the "v" of a drop-down sits at the right edge of its field, and the font is Fixedsys when a vector font of that name is installed (Windows' own Fixedsys is a bitmap font that Bevy cannot draw), else Consolas or any monospace font.
+- Menus: the main and pause menu entries are centered, and the last line shows the installed version; clicking it or pressing Enter opens the GitHub release page in the default browser.
+- Menus: Enter confirms on every row: on the tab strip it goes into the tab, on a step or slider row it steps on (from the last value back to the first).
+
 ## [0.6.0] - 2026-11-20
 
 ### Added

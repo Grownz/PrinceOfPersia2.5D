@@ -37,4 +37,7 @@ The character sprites and the title picture shown in the app are decoded at run 
 Copy the files of your own DOS installation into a folder named `Original_data` next to the exe (or in the current
 folder), or point `POP_DATA` or `"data_path"` in `settings.json` at the folder. Required: `LEVELS.DAT`, `PRINCE.EXE`,
 `KID.DAT`; the guard, title and sound files are needed for the full game. Without the data the app shows a message
-listing the folders it searched instead of starting.
+listing the folders it searched instead of starting, and offers to download the files from the Internet Archive
+(<https://archive.org/details/PERSIA_VGA>) into `Original_data` next to the exe. That only happens after the user confirms the
+licence sentence, and the app fetches nothing else. The code requires `LEVELS.DAT`, `PRINCE.EXE`, `KID.DAT`, `PRINCE.DAT`,
+`GUARD.DAT`, `GUARD1.DAT`, `GUARD2.DAT`, `FAT.DAT`, `SKEL.DAT`, `VIZIER.DAT` and `SHADOW.DAT` (`REQUIRED` in `main.rs`).

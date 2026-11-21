@@ -520,6 +520,9 @@ pub fn menu_action(mut ui: ResMut<MenuUi>, mut g: ResMut<Game>, a: Res<KidAssets
             exit.write(AppExit::Success);
         }
         Action::Download(i) => crate::soundfont::start(i),
+        Action::Releases => {
+            let _ = std::process::Command::new("explorer.exe").arg(crate::update::RELEASES).spawn(); // the default browser
+        }
         Action::Close | Action::Changed(_) | Action::Deleted(_) => {}
     }
 }

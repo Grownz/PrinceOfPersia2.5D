@@ -46,7 +46,7 @@ If none has the data, the window lists the folders it searched (also on stderr /
 once; the pause menu with `POP_LEVEL`; `POP_MENU_SEL=<row>`, `POP_MENU_OPEN=1` opens its drop-down,
 `POP_MENU_FAKE=downloading:45|installed|confirm|delete|unpack` shows made-up SoundFont states without a download),
 `POP_CUTSCENE=<level>|end|timeout|intro` (play that cutscene at once; `POP_REM_MIN` = minutes left for the hourglass),
-`POP_PALETTE_TTL=<seconds>` (how long an unused tile palette stays cached, default 300), `POP_FPS=1` (frame-time overlay with GPU pass times; F9 toggles it), `POP_BENCH=<frames>` (benchmark: vsync off, warm-up, one
+`POP_SKIP_UPDATE=1` (no update check), `POP_UPDATE_AS=0.5.0` (pretend to be that version: offers the newest release, for testing), `POP_PALETTE_TTL=<seconds>` (how long an unused tile palette stays cached, default 300), `POP_FPS=1` (frame-time overlay with GPU pass times; F9 toggles it), `POP_BENCH=<frames>` (benchmark: vsync off, warm-up, one
 `BENCH` log line, quit; with `POP_RES=WxH|full` and the `POP_FX` cost toggles; `tools/bench.ps1` runs a matrix,
 [enhanced_perf.md](enhanced_perf.md)).
 
@@ -55,6 +55,7 @@ once; the pause menu with `POP_LEVEL`; `POP_MENU_SEL=<row>`, `POP_MENU_OPEN=1` o
 Created on the first run next to the exe; unknown keys are ignored and missing ones take their defaults. Most keys are in the
 in-game Settings menu (Esc), see [controls.md](controls.md).
 
+- `update_check` (`true` by default): ask GitHub for a newer release at every start (released `PrinceOfPersia.exe` only), see `update.rs`.
 - Window mode and size, `volume`, `muted`, key bindings, `data_path`.
 - `sound`: `synth` (procedural effects, the original melodies from the MIDI files through the AdLib driver), `original` (the
   game's own digitized effects and PC-speaker tunes), `adlib` (original effects and music through the AdLib driver and an OPL2

@@ -20,6 +20,7 @@ mod camera;
 mod cutscene;
 mod enhanced;
 mod flow;
+mod getdata;
 mod hof;
 mod items;
 mod kid;
@@ -36,6 +37,7 @@ mod soundfont;
 mod solari;
 mod synth;
 mod tiles;
+mod update;
 mod voxel;
 
 use bevy::prelude::*;
@@ -124,6 +126,10 @@ fn main() {
         std::panic::set_hook(Box::new(|info| report(&format!("panic: {info}"))));
     }
     let set = Settings::load();
+    // before any game data is touched: is there a newer release?
+    if let Some(offer) = update::check(set.update_check) {
+        return update::window(offer);
+    }
     let candidates = data_candidates(&set);
     let Some(dir) = find_data(&candidates) else {
         let tried: Vec<String> = candidates
@@ -239,16 +245,64 @@ fn main() {
         .run();
 }
 
-/// No game data: a window with the instructions instead of a panic.
+/// No game data: a window with the instructions, and the offer to download the files from the Internet Archive (`getdata`).
 fn missing_data(msg: String) {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: "Prince of Persia x64 - game data missing".into(), ..default() }), ..default() }).set(bevy::log::LogPlugin { custom_layer: log_file_layer, ..default() }))
-        .add_systems(Startup, move |mut cmds: Commands| {
+        .insert_resource(DataMsg(msg))
+        .add_systems(Startup, |mut cmds: Commands| {
             cmds.spawn(Camera2d);
-            cmds.spawn((Text::new(msg.clone()), TextFont::from_font_size(18.0), Node { margin: UiRect::all(Val::Px(24.0)), ..default() }));
+            cmds.spawn((Text::new(""), TextFont::from_font_size(18.0), Node { margin: UiRect::all(Val::Px(24.0)), ..default() }));
         })
-        .add_systems(Update, screenshot_and_quit)
+        .add_systems(Update, (data_ui, screenshot_and_quit))
         .run();
+}
+
+#[derive(Resource)]
+struct DataMsg(String);
+
+/// The missing-data window: D asks, Enter confirms the licence sentence and downloads, Esc goes back / cancels / quits.
+/// When the files are in place the app starts itself again.
+fn data_ui(k: Res<ButtonInput<KeyCode>>, msg: Res<DataMsg>, mut text: Single<&mut Text>, mut exit: MessageWriter<AppExit>) {
+    use getdata::Status;
+    let st = getdata::status();
+    if k.just_pressed(KeyCode::Escape) {
+        match st {
+            Status::Confirm => getdata::back(),
+            Status::Busy { .. } => getdata::cancel(),
+            _ => {
+                exit.write(AppExit::Success);
+            }
+        }
+    }
+    if k.just_pressed(KeyCode::KeyD) {
+        getdata::ask();
+    }
+    if k.just_pressed(KeyCode::Enter) {
+        getdata::start(flow::exe_dir().join("Original_data"));
+    }
+    if st == Status::Done {
+        if let Ok(exe) = std::env::current_exe() {
+            let _ = std::process::Command::new(exe).spawn();
+        }
+        exit.write(AppExit::Success);
+    }
+    text.0 = match st {
+        Status::Idle | Status::Done => format!("{}
+
+Press D to download the game files from the Internet Archive ({}), Esc to quit.", msg.0, getdata::PAGE),
+        Status::Confirm => format!("{}
+
+Enter = confirm and download, Esc = back.", getdata::LICENCE),
+        Status::Busy { phase, done } => format!("{phase}... {} KB
+
+Esc = cancel.", done / 1000),
+        Status::Failed(e) => format!("Download failed: {e}
+
+{}
+
+Press D to try again, Esc to quit.", msg.0),
+    };
 }
 
 /// F11: windowed <-> borderless fullscreen, remembered in settings.json.

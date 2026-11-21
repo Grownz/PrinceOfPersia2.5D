@@ -72,7 +72,7 @@ pub enum Status {
     ConfirmDelete,
 }
 
-const CANCELLED: &str = "cancelled";
+pub(crate) const CANCELLED: &str = "cancelled";
 static CANCEL: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
 
 /// `None` = derive from the files on disk.
@@ -183,13 +183,13 @@ pub fn start(i: usize) {
     });
 }
 
-fn sys(exe: &str) -> PathBuf {
+pub(crate) fn sys(exe: &str) -> PathBuf {
     let root = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
     root.join("System32").join(exe)
 }
 
 /// Run a child to the end; `cancel` kills it (Err(CANCELLED)). Only the last stderr line is kept (small outputs, no pipe stall).
-fn run(cmd: &mut Command, cancel: &AtomicBool) -> Result<(), String> {
+pub(crate) fn run(cmd: &mut Command, cancel: &AtomicBool) -> Result<(), String> {
     let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(|e| format!("cannot run {:?}: {e}", cmd.get_program()))?;
     loop {
         if let Some(st) = child.try_wait().map_err(|e| e.to_string())? {
@@ -208,7 +208,7 @@ fn run(cmd: &mut Command, cancel: &AtomicBool) -> Result<(), String> {
     }
 }
 
-fn curl(url: &str, to: &std::path::Path) -> Command {
+pub(crate) fn curl(url: &str, to: &std::path::Path) -> Command {
     let mut c = Command::new(sys("curl.exe"));
     c.args(["-L", "--fail", "--silent", "--show-error", "--proto", "=https", "--max-redirs", "5", "-o"]).arg(to).arg(url);
     c

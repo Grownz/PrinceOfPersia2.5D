@@ -20,6 +20,8 @@ pub struct Settings {
     pub keys: Bindings,
     /// folder with the user's own game files (LEVELS.DAT, PRINCE.EXE, ...); tried after POP_DATA, exe dir and cwd
     pub data_path: Option<String>,
+    /// ask GitHub for a newer release at every start (released exe only; POP_SKIP_UPDATE skips it)
+    pub update_check: bool,
     /// "classic" (the original look), "enhanced" (shadows, SSAO, bloom) or "rt_experimental" (Bevy Solari, only in builds
     /// with the `solari` feature, else run as classic with a log line); POP_RENDER overrides, F5 cycles classic / enhanced
     /// (/ rt_experimental when the game started in it)
@@ -144,7 +146,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "high".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into() }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.7, muted: false, sound: "synth".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, render_mode: "classic".into(), character_style: "sprite".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "high".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into() }
     }
 }
 
@@ -178,6 +180,7 @@ impl Settings {
             soundfont: field(&o, "soundfont", d.soundfont, |s| crate::soundfont::index_of(s).is_some()),
             keys,
             data_path: field(&o, "data_path", d.data_path, |_| true),
+            update_check: field(&o, "update_check", d.update_check, |_| true),
             render_mode: field(&o, "render_mode", d.render_mode, |m| RENDER_MODES.contains(&m.as_str())),
             character_style: field(&o, "character_style", d.character_style, |s| CHARACTER_STYLES.contains(&s.as_str())),
             shadow_quality: field(&o, "shadow_quality", d.shadow_quality, |s| SHADOW_QUALITIES.contains(&s.as_str())),

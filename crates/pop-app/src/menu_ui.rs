@@ -14,7 +14,7 @@ use crate::Game;
 use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
-use bevy::text::FontSize;
+use bevy::text::{FontSize, FontSource};
 use bevy::window::{MonitorSelection, PrimaryWindow, WindowMode};
 
 #[derive(Resource, Default)]
@@ -56,7 +56,9 @@ pub enum P {
     Label,
     Sub,
     Badge,
+    Field,
     Value,
+    Caret,
     Track,
     Fill,
     Thumb,
@@ -71,6 +73,9 @@ pub enum P {
     OptText(usize),
 }
 
+/// The panel has one fixed size, that of the largest page.
+const CARD_W: f32 = 112.0;
+const CARD_H: f32 = 85.9; // the Graphics tab (measured: 618 px at 720 px window height)
 const INFO: usize = 16;
 const GOLD: Color = Color::srgb(1.0, 0.85, 0.5);
 const GREY: Color = Color::srgb(0.8, 0.8, 0.85);
@@ -81,8 +86,14 @@ const BTN_BG: Color = Color::srgba(1.0, 1.0, 1.0, 0.10);
 const POPUP_BG: Color = Color::srgb(0.07, 0.07, 0.1);
 const BLACK: Color = Color::BLACK;
 
+/// The menu font: Fixedsys, as a fallback Consolas and any monospace. Fixedsys itself is a Windows bitmap font that Bevy cannot
+/// read; it is used when a vector font of that name (e.g. Fixedsys Excelsior) is installed.
+fn font(size: f32) -> TextFont {
+    TextFont { font: FontSource::Families("Fixedsys, Fixedsys Excelsior, Consolas, monospace".into()), font_size: FontSize::VMin(size), ..default() }
+}
+
 fn txt(p: &mut ChildSpawnerCommands, part: Part, size: f32, col: Color, node: Node) {
-    p.spawn((Text::new(""), TextFont::from_font_size(FontSize::VMin(size)), TextColor(col), BorderColor::all(Color::NONE), if matches!(part.1, P::Value | P::Badge | P::BtnText(_) | P::OptText(_)) { TextLayout::no_wrap() } else { TextLayout::default() }, node, part));
+    p.spawn((Text::new(""), font(size), TextColor(col), BorderColor::all(Color::NONE), if matches!(part.1, P::Value | P::Caret | P::Badge | P::BtnText(_) | P::OptText(_)) { TextLayout::no_wrap() } else { TextLayout::default() }, node, part));
 }
 
 fn boxed(part: Part, node: Node, bg: Color) -> impl Bundle {
@@ -100,7 +111,7 @@ pub fn setup(mut cmds: Commands) {
     ))
     .with_children(|p| {
         p.spawn((
-            Node { flex_direction: FlexDirection::Column, width: vm(60.0), max_width: Val::Percent(96.0), padding: UiRect::axes(vm(3.0), vm(2.2)), row_gap: vm(0.7), border: UiRect::all(Val::Px(2.0)), ..default() },
+            Node { flex_direction: FlexDirection::Column, width: vm(CARD_W), height: vm(CARD_H), max_width: Val::Percent(96.0), padding: UiRect::axes(vm(3.0), vm(2.2)), row_gap: vm(0.7), border: UiRect::all(Val::Px(2.0)), ..default() },
             BackgroundColor(Color::srgba(0.02, 0.02, 0.04, 0.88)),
             BorderColor::all(Color::srgba(1.0, 0.85, 0.5, 0.35)),
             Part(0, P::Card),
@@ -111,12 +122,12 @@ pub fn setup(mut cmds: Commands) {
             p.spawn((Node { flex_direction: FlexDirection::Row, justify_content: JustifyContent::Center, column_gap: vm(1.0), margin: UiRect::bottom(vm(0.8)), ..default() }, Part(0, P::TabBar))).with_children(|p| {
                 for (k, t) in TABS.iter().enumerate() {
                     p.spawn(boxed(Part(k, P::Tab), Node { padding: UiRect::axes(vm(2.2), vm(0.8)), border: UiRect::all(Val::Px(2.0)), ..default() }, BTN_BG)).with_children(|p| {
-                        p.spawn((Text::new(t.name()), TextFont::from_font_size(FontSize::VMin(3.0)), TextColor(GREY), Part(k, P::TabText)));
+                        p.spawn((Text::new(t.name()), font(3.0), TextColor(GREY), Part(k, P::TabText)));
                     });
                 }
             });
             for i in 0..INFO {
-                p.spawn((Text::new(""), TextFont::from_font_size(FontSize::VMin(2.6)), TextColor(GREY), TextLayout::justify(Justify::Center), MenuLine(i)));
+                p.spawn((Text::new(""), font(2.6), TextColor(GREY), TextLayout::justify(Justify::Center), MenuLine(i)));
             }
             for slot in 0..ROWS {
                 p.spawn((
@@ -140,7 +151,11 @@ pub fn setup(mut cmds: Commands) {
                         p.spawn(boxed(Part(slot, P::Check), Node { width: vm(3.2), height: vm(3.2), border: UiRect::all(Val::Px(2.0)), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, TRACK_BG)).with_children(|p| {
                             p.spawn(boxed(Part(slot, P::Tick), Node { width: vm(1.9), height: vm(1.9), ..default() }, GOLD));
                         });
-                        txt(p, Part(slot, P::Value), 3.0, Color::WHITE, Node { min_width: vm(9.0), padding: UiRect::axes(vm(1.2), vm(0.4)), border: UiRect::all(Val::Px(2.0)), ..default() });
+                        // value box: the text left, the drop-down's "v" at the right edge
+                        p.spawn((Node { min_width: vm(9.0), padding: UiRect::axes(vm(1.2), vm(0.4)), border: UiRect::all(Val::Px(2.0)), justify_content: JustifyContent::SpaceBetween, column_gap: vm(1.2), ..default() }, BorderColor::all(Color::NONE), Part(slot, P::Field))).with_children(|p| {
+                            txt(p, Part(slot, P::Value), 3.0, Color::WHITE, Node::default());
+                            txt(p, Part(slot, P::Caret), 3.0, Color::WHITE, Node::default());
+                        });
                         for b in 0..2 {
                             p.spawn(boxed(Part(slot, P::Btn(b)), Node { padding: UiRect::axes(vm(1.8), vm(0.6)), border: UiRect::all(Val::Px(2.0)), ..default() }, BTN_BG)).with_children(|p| {
                                 txt(p, Part(slot, P::BtnText(b)), 2.8, Color::WHITE, Node::default());
@@ -432,6 +447,8 @@ struct View {
     label: String,
     sub: String,
     sub_warn: bool,
+    /// the version line: quieter than the buttons
+    dim: bool,
     badge: bool,
     value: String,
     /// the value is a drop-down box
@@ -450,7 +467,7 @@ struct View {
 fn view(m: &Menu, idx: usize, row: Row, set: &Settings) -> View {
     let focus = idx == m.sel;
     match row {
-        Row::Item(it) => View { focus, centered: true, label: it.label().into(), ..default() },
+        Row::Item(it) => View { focus, centered: true, dim: it == menu::Item::Version, label: it.label().into(), ..default() },
         Row::Tabs => View::default(),
         Row::Opt(i) => {
             let o = &OPTS[i];
@@ -461,7 +478,6 @@ fn view(m: &Menu, idx: usize, row: Row, set: &Settings) -> View {
                 Ctl::Checkbox => (v.check, v.value) = (Some(cur == "true"), String::new()),
                 Ctl::Dropdown => {
                     v.drop = true;
-                    v.value += "  v";
                     if let (true, Some(h)) = (focus, m.open) {
                         v.popup = Some((o.values.iter().map(|x| menu::entry_label(o.key, x)).collect(), h, o.values.iter().position(|x| *x == cur).unwrap_or(usize::MAX)));
                     }
@@ -522,13 +538,8 @@ pub fn draw(
     let views: Vec<View> = m.visible().into_iter().map(|(idx, row)| view(m, idx, row, &set)).collect();
     let on_tabs = m.page == Page::Settings;
     let tabs_focus = on_tabs && m.sel == 0;
-    let width = match m.page {
-        Page::Settings => 112.0,
-        Page::Controls => 100.0,
-        Page::Hof => 70.0,
-        Page::Main => 58.0,
-    };
-    let hint = if ui.note.is_empty() { m.hint().to_string() } else { ui.note.clone() };
+    let width = CARD_W;
+    let hint = ui.note.clone();
     for (&Part(slot, p), mut n, bg, border, text, tcol, z) in &mut parts {
         let v = views.get(slot);
         let (mut set_bg, mut set_border, mut set_text, mut set_col) = (None, None, None, None);
@@ -540,7 +551,10 @@ pub fn draw(
                 }
             }
             P::Title => set_text = Some(m.title().to_string()),
-            P::Hint => (set_text, set_col) = (Some(hint.clone()), Some(if ui.note.is_empty() { GREY } else { GOLD })),
+            P::Hint => {
+                disp(&mut n, !ui.note.is_empty()); // the key hints are gone; only notes ("GAME SAVED") show
+                (set_text, set_col) = (Some(hint.clone()), Some(GOLD));
+            }
             P::TabBar => disp(&mut n, on_tabs),
             P::Tab => {
                 let active = TABS[slot] == m.tab;
@@ -568,12 +582,16 @@ pub fn draw(
                 let Some(v) = v else { continue };
                 match p {
                     P::Left => {
-                        let w = if v.centered { Val::Auto } else { Val::Percent(if v.wide { 36.0 } else { 44.0 }) };
+                        let w = if v.centered { Val::Percent(100.0) } else { Val::Percent(if v.wide { 36.0 } else { 44.0 }) };
                         if n.width != w {
                             n.width = w;
                         }
+                        let a = if v.centered { AlignItems::Center } else { AlignItems::Stretch };
+                        if n.align_items != a {
+                            n.align_items = a;
+                        }
                     }
-                    P::Label => (set_text, set_col) = (Some(v.label.clone()), Some(if v.focus { GOLD } else { Color::WHITE })),
+                    P::Label => (set_text, set_col) = (Some(v.label.clone()), Some(if v.focus { GOLD } else if v.dim { GREY } else { Color::WHITE })),
                     P::Sub => {
                         disp(&mut n, !v.sub.is_empty());
                         (set_text, set_col) = (Some(v.sub.clone()), Some(if v.sub_warn { GOLD } else { GREY }));
@@ -582,13 +600,18 @@ pub fn draw(
                         disp(&mut n, v.badge);
                         (set_text, set_border) = (Some("after restart".into()), Some(DIM));
                     }
-                    P::Value => {
+                    P::Field => {
                         disp(&mut n, !v.value.is_empty());
                         let w = Val::VMin(if v.drop { 24.0 } else { 9.0 });
                         if n.min_width != w {
                             n.min_width = w;
                         }
-                        (set_text, set_col, set_border) = (Some(v.value.clone()), Some(if v.focus { GOLD } else { Color::WHITE }), Some(if v.drop { if v.focus { GOLD } else { DIM } } else { Color::NONE }));
+                        set_border = Some(if v.drop { if v.focus { GOLD } else { DIM } } else { Color::NONE });
+                    }
+                    P::Value => (set_text, set_col) = (Some(v.value.clone()), Some(if v.focus { GOLD } else { Color::WHITE })),
+                    P::Caret => {
+                        disp(&mut n, v.drop);
+                        (set_text, set_col) = (Some("v".into()), Some(if v.focus { GOLD } else { Color::WHITE }));
                     }
                     P::Track => {
                         disp(&mut n, v.frac.is_some());

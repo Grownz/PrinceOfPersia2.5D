@@ -57,6 +57,8 @@ pub enum Item {
     QuitTitle,
     Quit,
     Back,
+    /// the installed version at the bottom of the main menu; opens the GitHub release page
+    Version,
 }
 
 impl Item {
@@ -73,6 +75,7 @@ impl Item {
             Item::QuitTitle => "Quit to title",
             Item::Quit => "Quit game",
             Item::Back => "Back",
+            Item::Version => concat!("Version ", env!("CARGO_PKG_VERSION")),
         }
     }
 }
@@ -117,6 +120,8 @@ pub enum Action {
     Download(usize),
     /// soundfont::FONTS[i] was deleted
     Deleted(usize),
+    /// open the project's release page in the browser
+    Releases,
 }
 
 /// How an option is edited.
@@ -398,8 +403,8 @@ impl Menu {
         use Item::*;
         let items = |v: &[Item]| v.iter().copied().map(Row::Item).collect::<Vec<_>>();
         match (self.page, self.ctx) {
-            (Page::Main, Ctx::Title) => items(&[Start, Load, Settings, Controls, Hof, Quit]).into_iter().filter(|&r| r != Row::Item(Load) || self.has_save).collect(),
-            (Page::Main, Ctx::Pause) => items(&[Resume, Restart, Save, Settings, Controls, QuitTitle, Quit]).into_iter().filter(|&r| r != Row::Item(Save) || self.can_save).collect(),
+            (Page::Main, Ctx::Title) => items(&[Start, Load, Settings, Controls, Hof, Quit, Version]).into_iter().filter(|&r| r != Row::Item(Load) || self.has_save).collect(),
+            (Page::Main, Ctx::Pause) => items(&[Resume, Restart, Save, Settings, Controls, QuitTitle, Quit, Version]).into_iter().filter(|&r| r != Row::Item(Save) || self.can_save).collect(),
             (Page::Settings, _) => {
                 let body: Vec<Row> = if self.tab == Tab::Downloads { (0..soundfont::FONTS.len()).map(Row::Font).collect() } else { (0..OPTS.len()).filter(|&i| OPTS[i].tab == self.tab).map(Row::Opt).collect() };
                 [Row::Tabs].into_iter().chain(body).chain([Row::Item(Back)]).collect()
@@ -427,15 +432,6 @@ impl Menu {
             } else if p >= self.top + ROWS {
                 self.top = p + 1 - ROWS;
             }
-        }
-    }
-
-    pub fn hint(&self) -> &'static str {
-        match (self.page, self.rows().get(self.sel)) {
-            _ if self.open.is_some() => "Up / Down: choose   Enter: select   Esc: close   Mouse: click",
-            (Page::Settings, Some(Row::Tabs)) => "Left / Right: tab   Up / Down: choose   Esc / B: back",
-            (Page::Settings, _) => "Up / Down: choose   Left / Right: change   Enter: open, toggle   Q / E, LB / RB: tab   Esc / B: back",
-            _ => "Up / Down / d-pad: choose   Enter / A: select   Esc / B: back   Mouse: click, wheel",
         }
     }
 
@@ -578,14 +574,28 @@ impl Menu {
                 let k = font_buttons(&soundfont::status(i)).len();
                 self.sub = if n == Nav::Right { (self.sub + 1).min(k - 1) } else { self.sub.saturating_sub(1) };
             }
-            (Nav::Left | Nav::Right, _) | (Nav::Enter, Row::Tabs) => {}
+            (Nav::Left | Nav::Right, _) => {}
+            (Nav::Enter, Row::Tabs) => self.sel = (self.sel + 1).min(count - 1), // into the options of the tab
             (Nav::Enter, Row::Opt(i)) => match OPTS[i].ctl {
                 Ctl::Checkbox => {
                     *s = cycle(s, i, 1);
                     return Some(Action::Changed(i));
                 }
                 Ctl::Dropdown => self.open = Some(pos(s, i).unwrap_or(0)),
-                _ => {}
+                // Enter steps a slider or step row on, from the last value back to the first
+                _ => {
+                    let mut next = cycle(s, i, 1);
+                    if next == *s {
+                        next = match OPTS[i].ctl {
+                            Ctl::Slider { min, .. } => set_percent(s, i, min),
+                            _ => with_value(s, OPTS[i].key, OPTS[i].values[0]),
+                        };
+                    }
+                    if next != *s {
+                        *s = next;
+                        return Some(Action::Changed(i));
+                    }
+                }
             },
             (Nav::Enter, Row::Font(i)) => return self.font_press(i),
             (Nav::Back, _) if self.page == Page::Settings && confirming_any() => soundfont::cancel_all(),
@@ -606,6 +616,7 @@ impl Menu {
                 Item::Save => return Some(Action::Save),
                 Item::QuitTitle => return Some(Action::QuitTitle),
                 Item::Quit => return Some(Action::Quit),
+                Item::Version => return Some(Action::Releases),
                 Item::Back => {}
             },
         }
@@ -658,6 +669,27 @@ mod tests {
         m
     }
 
+    #[test]
+    fn enter_confirms_on_every_row_type() {
+        let mut s = Settings::default();
+        let mut m = settings_menu();
+        assert_eq!(m.rows()[m.sel], Row::Tabs);
+        m.nav(Nav::Enter, &mut s);
+        assert_eq!(m.sel, 1, "Enter on the tab strip goes into the tab");
+        // a step row (sun light) steps on and wraps from the last value to the first
+        let i = opt("sun_brightness");
+        focus_opt(&mut m, i);
+        assert_eq!(s.sun_brightness, "high");
+        assert_eq!(m.nav(Nav::Enter, &mut s), Some(Action::Changed(i)));
+        assert_eq!(s.sun_brightness, "dim");
+        // a slider (volume) steps on and wraps too
+        let v = opt("volume");
+        focus_opt(&mut m, v);
+        s.volume = 1.0;
+        assert_eq!(m.nav(Nav::Enter, &mut s), Some(Action::Changed(v)));
+        assert_eq!(s.volume, 0.0);
+    }
+
     fn opt(key: &str) -> usize {
         OPTS.iter().position(|o| o.key == key).unwrap()
     }
@@ -675,7 +707,7 @@ mod tests {
         let mut m = Menu::new(Ctx::Pause, false, false);
         assert!(!m.rows().contains(&Row::Item(Item::Save)), "no save outside levels 3..13");
         assert_eq!(m.nav(Nav::Up, &mut s), None);
-        assert_eq!(m.rows()[m.sel], Row::Item(Item::Quit), "up wraps to the bottom");
+        assert_eq!(m.rows()[m.sel], Row::Item(Item::Version), "up wraps to the bottom");
         assert_eq!(m.nav(Nav::Down, &mut s), None);
         assert_eq!(m.nav(Nav::Enter, &mut s), Some(Action::Close), "Resume");
         m.sel = 1;
@@ -696,7 +728,7 @@ mod tests {
         let mut s = Settings::default();
         let mut m = Menu::new(Ctx::Title, false, false);
         let items = |m: &Menu| m.rows().into_iter().map(|r| match r { Row::Item(i) => i, _ => panic!() }).collect::<Vec<_>>();
-        assert_eq!(items(&m), [Item::Start, Item::Settings, Item::Controls, Item::Hof, Item::Quit]);
+        assert_eq!(items(&m), [Item::Start, Item::Settings, Item::Controls, Item::Hof, Item::Quit, Item::Version]);
         assert_eq!(items(&Menu::new(Ctx::Title, false, true))[1], Item::Load);
         assert_eq!(m.nav(Nav::Enter, &mut s), Some(Action::Start));
         m.sel = 3;
@@ -959,7 +991,6 @@ mod tests {
         let s = Settings::default();
         assert_eq!(opt_value(&s, opt("window")), "Windowed");
         assert_eq!(Item::Back.label(), "Back");
-        assert!(settings_menu().hint().contains("tab"));
         assert!(controls(&Bindings::default())[0].contains("ArrowLeft"));
     }
 }
