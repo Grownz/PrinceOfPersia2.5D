@@ -28,6 +28,32 @@ Package: `powershell -ExecutionPolicy Bypass -File tools/package.ps1` builds the
 `dist/PrinceOfPersia-x64/` (exe + README.txt) and `dist/PrinceOfPersia-x64.zip`. It never copies `Original_data` or any game
 file. Release notes come from `CHANGELOG.md` (`tools/release_notes.ps1 v0.5.0 notes.md`).
 
+## Checking the levels against the original
+
+* `cargo test -p pop-core level_` (needs `Original_data`): `crates/pop-core/src/level_audit.rs` holds the invariants every
+  regular level keeps (`hard`: links in range, guards and start valid, buttons hit gates or exits, every level has an exit),
+  a printed report of oddities the shipped data itself has (`level_audit_report -- --nocapture`: one-way room links, rooms no
+  link leads to), and golden hashes per level room in `level_golden.txt` (hashes only). A deliberate parser change updates them
+  with `POP_BLESS=1 cargo test -p pop-core level_golden`. The hashes catch changes, not a mistake that was already there.
+* `tools/level_ram/level_ram.py` compares the parsed levels with the original's RAM: it starts `PRINCE.EXE megahit N` in
+  DOSBox 0.74-3, reads the emulated RAM of the DOSBox process (the level array sits at a fixed offset of the 16 MB RAM block,
+  found once by a scan of level 1), freezes the process (`NtSuspendProcess`) as soon as the load-time conversion is done and
+  before the first tick, and compares every tile type and every modifier (gates, buttons, loose floors, torches, swords, potions,
+  spikes, exit doors, chompers, walls), the room links and the start position. Wall drawing bits are recomputed from the
+  original's rule (`0000:B6DE`; `ds:3035` is 5 in all levels). Run `cargo run -p pop-core --example level_dump -- Original_data <dir>`
+  first, then `python tools/level_ram/level_ram.py <Original_data> <dir> [levels]`.
+  Accepted as the game's own start-up work (docs/tiles.md): torch flame frames 0..8, the potion bubble frame (low bits), the
+  first exit door of the start room at 43 (`start_level_door`, or still 0 a moment earlier), and on level 13 the random fall
+  delays of the floors above rooms 23/16 (`check_fall_flo`). Result: levels 1..14 match, two runs in a row.
+* `tools/room_shots/all_rooms.py` takes a screenshot of every non-empty room of levels 1..14 from the original in DOSBox
+  (`dosbox_shot.py` captures the window with `PrintWindow`, no focus or keys needed; the start room in a copy of `LEVELS.DAT`
+  is set to the room, start tile = a floor tile, so rooms without floor are skipped). Output `tools/room_shots/out/L<level>_R<room>.png`
+  at 320x200 (git-ignored, it is game imagery): the reference for a room-by-room picture comparison. The engine draws rooms as a
+  3D scene, so a whole-room pixel comparison needs a flat 2D reference renderer first; that does not exist yet. Instead
+  `learn.py` (with `tile_export`, `tiles_lib.py`, `calib.py`) finds where the original draws each image of each tile type; the result
+  and the differences to the port are in [level_render_check.md](level_render_check.md).
+  DOSBox leaves empty `stdout.txt` / `stderr.txt` in the working directory; delete them.
+
 ## Where the game data is searched
 
 1. `POP_DATA` (environment variable)

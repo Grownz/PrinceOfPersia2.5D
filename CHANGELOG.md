@@ -3,6 +3,14 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [Unreleased]
+
+### Added
+- Level checks against the original: invariants, golden hashes per room (`crates/pop-core/src/level_audit.rs`) and a comparison with the
+  RAM of the original running in DOSBox, frozen before its first tick (`tools/level_ram`). Levels 1..14 match the original's level
+  arrays: all tile types and modifiers (gates, buttons, loose floors, torches, swords, potions, spikes, exit doors, chompers, wall
+  drawing bits), room links and start. See `docs/DEVELOPING.md`.
+
 ## [0.6.3] - 2026-11-21
 
 ### Changed

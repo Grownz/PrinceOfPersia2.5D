@@ -7,6 +7,8 @@ pub mod exe;
 pub mod image;
 pub mod kid;
 pub mod level;
+#[cfg(test)]
+mod level_audit;
 pub mod midi;
 pub mod sim;
 #[cfg(test)]

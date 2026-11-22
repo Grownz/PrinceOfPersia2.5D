@@ -23,3 +23,5 @@ docs/texture_mapping.xlsx
 
 # local music recordings of the original (copyrighted, never committed)
 Music_rec/
+tools/room_shots/out/
+tools/room_shots/std*.txt
