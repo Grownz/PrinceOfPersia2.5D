@@ -1251,6 +1251,13 @@ impl World {
     pub(crate) fn set_tile_for_test(&mut self, room: u8, idx: u8, t: Tile) {
         self.set_tile(room, idx, t);
     }
+    /// Sets the prandom state (the original's seed at ds:40C4/40C6), for tools/tick_trace.
+    pub(crate) fn set_seed_for_test(&mut self, seed: u32) {
+        self.rng = crate::kid::Rng(seed);
+    }
+    pub(crate) fn seed_for_test(&self) -> u32 {
+        self.rng.0
+    }
     pub(crate) fn seeded_for_test(data: Arc<Data>, level: Level, progress: Progress, seed: u32) -> World {
         World::seeded(data, level, progress, seed)
     }

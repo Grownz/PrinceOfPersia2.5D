@@ -3,14 +3,21 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
-## [Unreleased]
+## [0.6.4] - 2026-11-22
 
 ### Fixed
+- Potions and swords: with Shift (shift2) the kid reaches the item in front of him, also from standing (check_get_item `0000:655C`: step next
+  to it, crouch, take it); the sim only looked for an item under a crouching kid, so a kid standing next to a potion did something else
+  (found by the tick-trace comparison, test `shift_next_to_a_potion_picks_it_up`).
+- Guards and the kid fell through the lattice pillars (tile type 25) of palace rooms such as level 4 room 2: `tile_is_floor` listed types 25..=28 as
+  not floor instead of the original's 26..=29. Type 25 is floor again, type 29 (lattice right) is not; test `tile_is_floor_table_of_the_original`.
 - Palace walls: the speckle strips are drawn in the dark tan the original shows (192, 152, 80), not the light cream of palette colour 6.
 - Torches: holder, flame and light sit one column to the right of the torch's tile, as in the original's picture (found by comparing
   the original's room pixels, `docs/level_render_check.md`).
 
 ### Added
+- `tools/tick_trace`: the original in DOSBox against the sim, tick by tick, with injected keys (`docs/DEVELOPING.md`); 38 of 39 random runs over
+  13 levels match.
 - Level checks against the original: invariants, golden hashes per room (`crates/pop-core/src/level_audit.rs`) and a comparison with the
   RAM of the original running in DOSBox, frozen before its first tick (`tools/level_ram`). Levels 1..14 match the original's level
   arrays: all tile types and modifiers (gates, buttons, loose floors, torches, swords, potions, spikes, exit doors, chompers, wall

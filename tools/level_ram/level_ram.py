@@ -86,11 +86,12 @@ def compare(exp, got, raw, style, level=0, load_only=False):
     if tuple(exp[1536:1539]) != tuple(got[2112:2115]): out.append(('start', 0, 0, tuple(exp[1536:1539]), tuple(got[2112:2115])))
     return out
 
-def launch(level, orig):
+def launch(level, orig, levels_dat=None):
     tmp = tempfile.mkdtemp(prefix='popram')
     run_dir = os.path.join(tmp, 'c'); shutil.copytree(orig, run_dir)
+    if levels_dat: shutil.copy(levels_dat, os.path.join(run_dir, 'LEVELS.DAT'))      # e.g. a copy with another start room (tools/room_shots/all_rooms.patched)
     cf = os.path.join(tmp, 'dosbox.conf')
-    open(cf, 'w').write(f"[sdl]\nfullscreen=false\nwindowresolution=original\noutput=surface\nautolock=false\n[dosbox]\nmachine=vgaonly\n[cpu]\ncycles=max\n[sblaster]\nsbtype=none\n[midi]\nmpu401=none\n[speaker]\npcspeaker=false\n[autoexec]\n@echo off\nmount c \"{run_dir}\"\nc:\nprince megahit {level}\nexit\n")
+    open(cf, 'w').write(f"[sdl]\nfullscreen=false\nwindowresolution=original\noutput=surface\nautolock=false\n[dosbox]\nmachine=vgaonly\n[cpu]\ncycles=max\n[sblaster]\nsbtype=none\n[midi]\nmpu401=none\n[speaker]\npcspeaker=false\n[joystick]\njoysticktype=none\n[autoexec]\n@echo off\nmount c \"{run_dir}\"\nc:\nprince megahit {level}\nexit\n")
     p = subprocess.Popen([DOSBOX, '-conf', cf, '-noconsole'])
     return p, k.OpenProcess(0x0410 | 0x0800, False, p.pid), tmp
 

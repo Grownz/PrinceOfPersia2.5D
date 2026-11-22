@@ -56,6 +56,29 @@ file. Release notes come from `CHANGELOG.md` (`tools/release_notes.ps1 v0.5.0 no
   results are in the document) and report how many screenshot pixels it explains per level and which rooms stay below 95 %.
   DOSBox leaves empty `stdout.txt` / `stderr.txt` in the working directory; delete them.
 
+## Tick-trace comparison with the original (kid)
+
+`tools/tick_trace` runs the original in DOSBox 0.74 tick by tick and replays the same keys in the sim. The original's data segment is
+read from the DOSBox process (`ramlib.py`, same offset as `tools/level_ram`): the 60 Hz timer is `ds:3374` (a logic tick every 5
+counts), the kid record `ds:4396`, the guard record `ds:431C`, the edge-triggered control flags `ds:42E8 / 40C8 / 4362 / 40DA / 4644`,
+the prandom seed `ds:40C4`. Keys are injected by writing the key table (`ds:28A0 + scancode`; Shift through the BIOS flag at physical
+`0040:0017`, MemBase = block + 0x20) at tick-aligned moments, so no focus or real key is needed (DOSBox's joystick is switched off:
+a connected gamepad otherwise steers the kid).
+
+* `record.py <Original_data> <level> "R:6,-:4,RU:1" out.json`: the kid stands (frame 15, action 0) after the level's start, then the
+  script (segments of `KEYS:TICKS`, keys from `L R U D S`, `-` none) runs; every counter's kid / guard / seed / flags is stored.
+* `compare.py out.json`: runs the ignored test `world_tests::trace_replay` (the sim is run to its first stand frame, its prandom state
+  set to the original's after the stand tick, then the same keys) and compares frame, x, y, direction, row, action, room, fall,
+  alive, sword and, with `GUARD`, the guard per tick. `run.py <level> <seed>` = seeded random script + record + compare,
+  `batch.py <levels> <seeds>`, `run_guard.py <level> <guard> <seed>` (the kid starts in the guard's room, patched `LEVELS.DAT`),
+  `show.py out.json <from> <to>` side by side with control flags. `POP_TRACE_ALIGN=ticks` uses the observed tick instants and keys
+  (for a run with a slow tick: a room change can take longer than 5 counts in the emulation).
+* Result: 38 of 39 runs (levels 1..6 and 8..14, three seeds of 150 ticks each: runs, jumps, safe steps, crouching, falls, room
+  changes, picking up potions) match the original tick by tick. Known limits: level 7 starts with the kid falling to his death (no
+  stand frame); level 13's loose floors get random delays at the level start from the original's clock seed (one run differs); the
+  original restarts the level after the kid's death, the sim does not (the comparison stops there); guard fights: the first fight
+  (level 2 room 4) diverges at tick 15 (the original's guard draws two more random numbers than the sim's), not resolved.
+
 ## Where the game data is searched
 
 1. `POP_DATA` (environment variable)

@@ -33,7 +33,7 @@ def shot(level, orig, seconds, levels_dat=None):
     tmp = tempfile.mkdtemp(prefix='popshot'); run = os.path.join(tmp, 'c'); shutil.copytree(orig, run)
     if levels_dat: shutil.copy(levels_dat, os.path.join(run, 'LEVELS.DAT'))
     cf = os.path.join(tmp, 'dosbox.conf')
-    open(cf, 'w').write(f"[sdl]\nfullscreen=false\nwindowresolution=original\noutput=surface\nautolock=false\n[dosbox]\nmachine=vgaonly\n[cpu]\ncycles=max\n[sblaster]\nsbtype=none\n[midi]\nmpu401=none\n[speaker]\npcspeaker=false\n[autoexec]\n@echo off\nmount c \"{run}\"\nc:\nprince megahit {level}\nexit\n")
+    open(cf, 'w').write(f"[sdl]\nfullscreen=false\nwindowresolution=original\noutput=surface\nautolock=false\n[dosbox]\nmachine=vgaonly\n[cpu]\ncycles=max\n[sblaster]\nsbtype=none\n[midi]\nmpu401=none\n[speaker]\npcspeaker=false\n[joystick]\njoysticktype=none\n[autoexec]\n@echo off\nmount c \"{run}\"\nc:\nprince megahit {level}\nexit\n")
     p = subprocess.Popen([DOSBOX, '-conf', cf, '-noconsole'])
     try:
         t0 = time.time(); h = None

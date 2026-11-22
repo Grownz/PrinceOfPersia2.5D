@@ -835,3 +835,74 @@ fn united_with_shadow_cue_41() {
     }
     assert_eq!(at, [2], "5 -> 4 -> 3 -> 2 on the third tick");
 }
+
+/// tile_is_floor (0000:7364): types 0, 9, 12, 20 and 26..=29 are not floor, everything else is; the lattice pillar (25) is floor, the
+/// lattice arches (26..=29, `LatticeSupport` .. `LatticeRight`) are not. (An off-by-one here let guards and the kid fall through the
+/// pillar tiles of palace rooms such as level 4 room 2.)
+#[test]
+fn tile_is_floor_table_of_the_original() {
+    use crate::level::Tile;
+    for b in 0u8..32 {
+        let want = !matches!(b, 0 | 9 | 12 | 20 | 26..=29);
+        assert_eq!(crate::kid::is_floor(Tile::from_u8(b)), want, "tile type {b}");
+    }
+}
+
+/// Tick-trace replay for tools/tick_trace (needs the game files; run by `compare.py`): `POP_TRACE_LEVEL` = level, `POP_TRACE_IN` = a file with
+/// one line of keys per tick (letters L R U D S, `-` = none), `POP_TRACE_OUT` = where the kid's state after every tick goes. The world runs
+/// without keys until the kid first stands (frame 15, action 0, as the original's trace does), then the keys; the first output line is the
+/// stand tick. Fields: frame x y direction(0 right, 255 left) row action room fall_x fall_y alive(255/0) sword seq (the sim's current sequence number) seed (its prandom state), for debugging.
+#[test]
+#[ignore]
+fn trace_replay() {
+    let (Ok(inp), Ok(out), Ok(lv)) = (std::env::var("POP_TRACE_IN"), std::env::var("POP_TRACE_OUT"), std::env::var("POP_TRACE_LEVEL")) else { return };
+    let n: usize = lv.parse().unwrap();
+    let levels = Dat::open(std::env::var("POP_TRACE_LEVELS").unwrap_or(format!("{DIR}LEVELS.DAT"))).unwrap(); // a copy with another start room, if given
+    let level = Level::parse(levels.get(2000 + n as u16).unwrap()).unwrap();
+    let mut w = match std::env::var("POP_TRACE_START_SEED").ok().and_then(|v| v.parse::<u32>().ok()) {
+        Some(seed) => World::seeded_for_test(data(), level, crate::sim::Progress::new_game(n), seed), // the seed the original was given at the start
+        None => World::new(data(), level, n),
+    };
+    let state = |w: &World| {
+        let k = &w.kid;
+        let guard = match &w.guard {
+            Some(g) => format!("{} {} {} {} {} {} {} {} {}", g.frame, g.x, g.y, if g.facing_left { 255 } else { 0 }, g.row, g.action, g.room, g.sword, if g.alive { 255 } else { 0 }),
+            None => "0 0 0 0 0 0 0 0 0".to_string(),
+        };
+        format!("{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}
+", k.frame, k.x, k.y, if k.facing_left { 255 } else { 0 }, k.row, k.action, k.room, k.fall_x, k.fall_y, if k.alive { 255 } else { 0 }, k.sword, k.seq, w.seed_for_test(), k.trace_flags()[0], k.trace_flags()[1], k.trace_flags()[2], k.trace_flags()[3], k.trace_flags()[4], guard)
+    };
+    let mut s = String::new();
+    let mut ticks = 0;
+    s += &format!("pre 0 {}
+", w.seed_for_test());
+    while !(w.kid.frame == 15 && w.kid.action == 0) {
+        tick(&mut w, NONE, 1);
+        ticks += 1;
+        s += &format!("pre {ticks} {}
+", w.seed_for_test());
+        assert!(ticks < 2000, "the kid never stands");
+    }
+    if let Some(seed) = std::env::var("POP_TRACE_SEED").ok().and_then(|v| v.parse::<u32>().ok()) {
+        w.set_seed_for_test(seed); // the original's prandom state after its stand tick
+    }
+    s += &format!("stand_tick {ticks}\n");
+    s += &state(&w);
+    for line in std::fs::read_to_string(inp).unwrap().lines() {
+        let k = Keys { left: line.contains('L'), right: line.contains('R'), up: line.contains('U'), down: line.contains('D'), shift: line.contains('S') };
+        tick(&mut w, k, 1);
+        s += &state(&w);
+    }
+    std::fs::write(out, s).unwrap();
+}
+
+/// check_get_item (0000:655C): a standing kid next to a potion presses Shift: he steps next to it, crouches and takes it (found by
+/// tools/tick_trace: the sim only looked for items under a crouching kid).
+#[test]
+fn shift_next_to_a_potion_picks_it_up() {
+    let mut w = world(4, &[(3, 1, 10)], &[]); // the kid at column 4 faces left (start_dir 255), the potion is in front of him
+    tick(&mut w, NONE, 12);
+    assert_eq!(w.level.tile_at(1, 13).kind, Tile::Potion);
+    tick(&mut w, Keys { shift: true, ..NONE }, 30);
+    assert_ne!(w.level.tile_at(1, 13).kind, Tile::Potion, "the potion is gone");
+}

@@ -257,10 +257,10 @@ fn gate_bumpable(modifier: u8, height: i32) -> bool {
     (modifier as i32 >> 2) + 6 < height
 }
 
-/// tile_is_floor (0000:7364)
+/// tile_is_floor (0000:7364): not floor are types 0, 9, 12, 20 and 26..=29 (the lattice arches); type 25, the lattice pillar, is floor.
 pub(crate) fn is_floor(t: Tile) -> bool {
     use Tile::*;
-    !matches!(t, Empty | BigPillarTop | Doortop | Wall | LatticePillar | LatticeSupport | SmallLattice | LatticeLeft)
+    !matches!(t, Empty | BigPillarTop | Doortop | Wall | LatticeSupport | SmallLattice | LatticeLeft | LatticeRight)
 }
 
 /// wall_type (0000:7D0B): 0 = not wall-like
@@ -619,6 +619,11 @@ impl Kid {
         }
     }
 
+    /// The edge-triggered control flags (left = ds:42E8, right = ds:40C8, up = ds:4362, down = ds:40DA, shift2 = ds:4644), for tools/tick_trace.
+    pub fn trace_flags(&self) -> [i8; 5] {
+        [self.left_f, self.right_f, self.up_f, self.down_f, self.shift2_f]
+    }
+
     fn control_input(&mut self, env: &Env, input: Input) {
         let k = match input {
             Input::Moves(mut c) => {
@@ -696,7 +701,51 @@ impl Kid {
         }
     }
 
+    /// check_get_item (0000:655C), the standing kid: with Shift and the shift2 edge an item under the kid or in front of him is reached: an
+    /// item under him first moves him back 14 (if the tile behind is floor); an item in front of him (potion or sword) makes him step
+    /// next to it and crouch (get_item 0000:65AA), the pick-up itself happens in `control_crouched`. True = this tick's control is done.
+    fn check_get_item(&mut self, env: &Env, c: &mut Ctrl) -> bool {
+        let item = |t: Tile| matches!(t, Tile::Potion | Tile::Sword);
+        let (col, row, d) = (self.col(env), self.row, self.dir());
+        if item(self.tile(env, col, row)) {
+            if !is_floor(self.tile(env, col - d, row)) {
+                return false;
+            }
+            self.forward(-14);
+        }
+        let col = self.col(env);
+        let front = self.tile(env, col + d, row);
+        if !item(front) {
+            return false;
+        }
+        if self.frame == 109 {
+            // get_item (0000:65AA) crouched: the item is in front of the kid; a sword is taken (seq 91), a potion drunk (seq 78, its kind in the modifier)
+            let (seq, kind) = if front == Tile::Sword { (91, -1) } else { (78, (self.tile_mod(env, col + d, row) >> 5) as i8) };
+            if let Some((room, tilepos)) = self.locate(env, col + d, row) {
+                self.events.push(Event::Pickup { room, tilepos });
+            }
+            self.pickup = kind;
+            c.shift2 = 1;
+            self.start_seq(env, seq);
+            return true;
+        }
+        // get_item (0000:65AA), not crouched
+        let (edge_type, dist, _) = self.edge_distance(env);
+        if edge_type != 2 {
+            self.forward(dist);
+        }
+        if !self.facing_left {
+            self.forward(if front == Tile::Potion { 1 } else { 0 } - 2);
+        }
+        c.down = c.release_arrows(); // crouch (0000:6419)
+        self.start_seq(env, 50);
+        true
+    }
+
     fn control_standing(&mut self, env: &Env, c: &mut Ctrl) {
+        if c.shift2 == -1 && c.shift < 0 && self.check_get_item(env, c) {
+            return;
+        }
         if self.charid != 0 && c.down == -1 && c.fwd == -1 {
             self.draw_sword(env, c); // shadow and guards draw on down + forward (0000:61E3)
             return;
@@ -987,23 +1036,9 @@ impl Kid {
             return;
         }
         self.sh.level1_music = 0;
-        // pick up a sword or drink a potion under the kid (get_item, 0000:65AA): Shift while crouching
-        if c.shift2 == -1 {
-            let (col, row) = (self.col(env), self.row);
-            let item = match self.tile(env, col, row) {
-                Tile::Sword => Some((-1, 91)),
-                Tile::Potion => Some(((self.tile_mod(env, col, row) >> 5) as i8, 78)), // do_pickup(mod >> 5)
-                _ => None,
-            };
-            if let Some((kind, seq)) = item {
-                if let Some((room, tilepos)) = self.locate(env, col, row) {
-                    self.events.push(Event::Pickup { room, tilepos });
-                }
-                self.pickup = kind;
-                c.shift2 = 1;
-                self.start_seq(env, seq);
-                return;
-            }
+        // pick up a sword or drink a potion in front of the kid: Shift (shift2) while crouching, check_get_item (0000:655C)
+        if c.shift2 == -1 && self.check_get_item(env, c) {
+            return;
         }
         if c.y != 1 {
             self.start_seq(env, 49);

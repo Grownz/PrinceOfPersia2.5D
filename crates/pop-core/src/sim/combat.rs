@@ -662,6 +662,33 @@ mod tests {
         assert_eq!(guard_hp(4, 4), 4, "skill 4 gets one extra hit point");
     }
 
+    /// Every guard of the shipped levels, put into play by enter_guard in its own room, stays on its floor for 30 ticks (a wrong
+    /// `tile_is_floor` once dropped the guard of level 4 room 2, which stands between lattice pillars, down two rows).
+    #[test]
+    fn no_guard_falls_in_any_level() {
+        if crate::no_game_data() { return; }
+        let lv = Dat::open(format!("{DIR}LEVELS.DAT")).unwrap();
+        let d = data();
+        let mut n = 0;
+        for level_no in 1..=14usize {
+            let level = crate::level::Level::parse(lv.get(2000 + level_no as u16).unwrap()).unwrap();
+            for gd in level.guards.clone() {
+                let mut w = World::new(d.clone(), level.clone(), level_no);
+                w.kid.room = gd.room;
+                w.shared.drawn_room = gd.room;
+                w.enter_guard(gd.room);
+                let Some(g) = w.guard.as_ref() else { continue };
+                let (room, row) = (g.room, g.row);
+                tick(&mut w, NONE, 30);
+                if let Some(g) = w.guard.as_ref() {
+                    assert!(g.room == room && g.row == row && g.fall_y == 0, "level {level_no} room {} tile {}: guard moved to room {} row {} (fall_y {})", gd.room, gd.tile, g.room, g.row, g.fall_y);
+                }
+                n += 1;
+            }
+        }
+        assert!(n >= 30, "only {n} guards checked");
+    }
+
     #[test]
     fn debug_draw_trace() {
         if crate::no_game_data() { return; }
