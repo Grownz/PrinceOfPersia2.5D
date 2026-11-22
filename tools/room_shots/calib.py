@@ -14,7 +14,7 @@ def calibrate(kind, ids, levels, win=(-12, 12, -40, 12), min_frac=0.98, limit=40
         set_ = 'VPALACE' if lv in PALACE else 'VDUNGEON'; p = pal(set_, 200); fg = fg_of(lv)
         for room in range(1, 25):
             f = os.path.join(SHOTS, f'L{lv}_R{room}.png')
-            if not os.path.exists(f): continue
+            if not have(lv, room): continue
             img = shot(lv, room)
             for idx in range(30):
                 if fg[(room - 1) * 30 + idx] & 31 != kind: continue

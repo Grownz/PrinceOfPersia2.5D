@@ -1,16 +1,16 @@
 //! cargo run -p pop-core --example tile_export -- <Original_data dir> <outdir>
-//! Writes every decodable image of VDUNGEON.DAT / VPALACE.DAT as <set>_<id>.bin (u16 width, u16 height, u8 bpp, one palette
-//! index per pixel) and palettes 200 and 360 as <set>_pal<id>.txt (one "r g b" per line, 8-bit), for tools/room_shots/compare.py.
+//! Writes every decodable image of VDUNGEON.DAT / VPALACE.DAT / PRINCE.DAT as <set>_<id>.bin (u16 width, u16 height, u8 bpp, one palette
+//! index per pixel) and palettes 200 and 360 (PRINCE: 150) as <set>_pal<id>.txt (one "r g b" per line, 8-bit), for tools/room_shots/compare.py.
 use pop_core::{dat::Dat, image};
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     std::fs::create_dir_all(&a[2]).unwrap();
-    for set in ["VDUNGEON", "VPALACE"] {
+    for set in ["VDUNGEON", "VPALACE", "PRINCE"] {
         let d = Dat::open(format!("{}/{set}.DAT", a[1])).unwrap();
         for id in d.ids() {
             let r = d.get(id).unwrap();
-            if (id == 200 || id == 360) && r.len() < 200 {
+            if (id == 200 || id == 360 || id == 150) && r.len() < 200 {
                 let p = image::palette(r).unwrap();
                 let t: String = p.iter().map(|c| format!("{} {} {}\n", c[0], c[1], c[2])).collect();
                 std::fs::write(format!("{}/{set}_pal{id}.txt", a[2]), t).unwrap();

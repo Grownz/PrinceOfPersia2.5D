@@ -51,7 +51,9 @@ file. Release notes come from `CHANGELOG.md` (`tools/release_notes.ps1 v0.5.0 no
   at 320x200 (git-ignored, it is game imagery): the reference for a room-by-room picture comparison. The engine draws rooms as a
   3D scene, so a whole-room pixel comparison needs a flat 2D reference renderer first; that does not exist yet. Instead
   `learn.py` (with `tile_export`, `tiles_lib.py`, `calib.py`) finds where the original draws each image of each tile type; the result
-  and the differences to the port are in [level_render_check.md](level_render_check.md).
+  and the differences to the port are in [level_render_check.md](level_render_check.md). `render2d.py` / `compare2d.py` are a 2D model of
+  the room drawing built on that (plus `learn_pieces.py`, `learn_textures.py`, `palette_learn.py`, `which_room.py`; the order and the
+  results are in the document) and report how many screenshot pixels it explains per level and which rooms stay below 95 %.
   DOSBox leaves empty `stdout.txt` / `stderr.txt` in the working directory; delete them.
 
 ## Where the game data is searched

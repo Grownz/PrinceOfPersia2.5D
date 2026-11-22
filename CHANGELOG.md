@@ -5,6 +5,11 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## [Unreleased]
 
+### Fixed
+- Palace walls: the speckle strips are drawn in the dark tan the original shows (192, 152, 80), not the light cream of palette colour 6.
+- Torches: holder, flame and light sit one column to the right of the torch's tile, as in the original's picture (found by comparing
+  the original's room pixels, `docs/level_render_check.md`).
+
 ### Added
 - Level checks against the original: invariants, golden hashes per room (`crates/pop-core/src/level_audit.rs`) and a comparison with the
   RAM of the original running in DOSBox, frozen before its first tick (`tools/level_ram`). Levels 1..14 match the original's level

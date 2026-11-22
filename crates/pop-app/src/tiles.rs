@@ -483,7 +483,9 @@ impl TileSet {
                 set.imgs.insert(id, Tex { mat, w: im.width as f32, h: im.height as f32 });
             }
         } else {
-            let mono = [p360.clone(), vec![p200.get(6).copied().unwrap_or([255, 255, 255])]].concat();
+            // the speckle strips are a dark tan on the original's screen (192, 152, 80 in 21 palace rooms measured against the
+            // DOSBox pictures, docs/level_render_check.md), not palette 200's colour 6 (light cream); 6-bit 48 / 38 / 20 scaled
+            let mono = [p360.clone(), vec![[194, 154, 81]]].concat();
             let (w, h) = PALACE_WALL;
             let pats: Vec<_> = (0..=24).map(palace_pattern).collect();
             for room in 0..=24usize {

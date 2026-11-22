@@ -853,6 +853,9 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             } else {
                 floor(b, &fl);
             }
+            // the original draws a torch's holder and flame in the next column (its right piece, docs/level_render_check.md:
+            // holder 346 at x + 32 px of the torch's cell, 6 of 6 torches in two rooms)
+            let x = x + TORCH_DX;
             let top = Vec3::new(x + 0.5, y + TILE_H * 0.65, -0.8);
             // voxel objects: the holder as a revolved rod near the back wall, the flame (9 frames) standing on its cup
             if let Some((items, h, axis)) = b.objects().filter(|(i, _)| !i.flames.is_empty()).and_then(|(i, o)| Some((i, o.ids.get(&346)?.clone(), o.holder_axis))) {
@@ -878,6 +881,9 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
         Unknown31 => floor(b, &p.blue),
     }
 }
+
+/// A torch sits one column right of its tile in the original's picture (tiles to the right, in units of a tile).
+const TORCH_DX: f32 = 1.0;
 
 /// Depth of the voxel items' sprite plane: the skeleton behind the figures (VOXEL_Z 0.25), the bottle in front of them.
 const SKELETON_Z: f32 = -0.1;

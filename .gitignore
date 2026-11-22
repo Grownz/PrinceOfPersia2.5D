@@ -25,3 +25,7 @@ docs/texture_mapping.xlsx
 Music_rec/
 tools/room_shots/out/
 tools/room_shots/std*.txt
+tools/room_shots/out_old/
+tools/room_shots/textures_*.npz
+tools/room_shots/__pycache__/
+tools/room_shots/out2/
