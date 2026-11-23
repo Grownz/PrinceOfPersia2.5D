@@ -3,6 +3,13 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.6.5] - 2026-11-23
+
+### Fixed
+- Level exit doors sat one column too far left: the original draws the frame, lintel, panel and stairs one column to the right of the
+  exit cell (pixel evidence in `docs/level_render_check.md`).
+- The dark doorway box of the exit doors now reaches back to the back wall, so no light passes between door frame and wall.
+
 ## [0.6.4] - 2026-11-22
 
 ### Fixed

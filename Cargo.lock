@@ -3900,7 +3900,7 @@ dependencies = [
 
 [[package]]
 name = "pop-app"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "bevy",
  "oplon",
@@ -3912,7 +3912,7 @@ dependencies = [
 
 [[package]]
 name = "pop-core"
-version = "0.6.4"
+version = "0.6.5"
 
 [[package]]
 name = "portable-atomic"

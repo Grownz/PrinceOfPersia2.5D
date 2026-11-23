@@ -777,16 +777,17 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
         }
         ExitLeft | ExitRight if ex.is_some() && b.objects().is_some_and(|(_, o)| o.exit[(t.kind == ExitRight) as usize].is_some()) => {
             floor(b, &fl);
-            exit_voxel(b, x, y, t, ex.as_ref().unwrap());
+            exit_voxel(b, x + 1.0, y, t, ex.as_ref().unwrap());      // the original draws the frame one column to the right (docs/level_render_check.md)
         }
         ExitLeft | ExitRight => {
             floor(b, &fl);
+            let x = x + 1.0;
             match &ex {
                 // the frame image (without its floor rows) in front of the dark doorway, the lintel image above it
                 Some(f) => {
                     let (w, h) = (px_w(f.w), px_h(f.h));
                     // layers inside the doorway, back to front: dark box, stairs, door panel, frame
-                    b.put(&dark, Vec3::new(x, y, -0.5), Vec3::new(x + w, y + h, -0.33));
+                    b.put(&dark, Vec3::new(x, y, BACK_WALL.1), Vec3::new(x + w, y + h, -0.33));      // back to the wall: no gap for light
                     if let (Some(gap), true) = (b.tiles.and_then(|s| s.exit_gap), t.kind == ExitLeft) {
                         let mid = x + px_w((gap.0 + gap.1) / 2.0);
                         if let Some(s) = piece(Role::Stairs).filter(|_| !b.start_room) {
@@ -971,7 +972,7 @@ fn gate_voxel(b: &mut B, x: f32, y: f32, modifier: u8) -> bool {
 fn exit_voxel(b: &mut B, x: f32, y: f32, t: TileRef, f: &Tex) {
     let (items, o) = b.objects().unwrap();
     let (w, h) = (px_w(f.w), px_h(f.h));
-    b.put(&b.p.dark, Vec3::new(x, y, EXIT_Z[3] - 0.04), Vec3::new(x + w, y + h, EXIT_Z[3]));
+    b.put(&b.p.dark, Vec3::new(x, y, BACK_WALL.1),Vec3::new(x + w, y + h, EXIT_Z[3]));
     if let (Some(gap), Tile::ExitLeft) = (b.tiles.and_then(|s| s.exit_gap), t.kind) {
         let mid = x + px_w((gap.0 + gap.1) / 2.0);
         if let Some(s) = o.stairs.as_ref().filter(|_| !b.start_room) {
