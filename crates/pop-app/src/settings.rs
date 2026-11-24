@@ -57,10 +57,31 @@ pub struct Settings {
     /// "position" (kid and guard are drawn between the last two logic frames, 60 Hz motion at the cost of one logic frame,
     /// 83 ms, of delay) or "off" (the original's 12 Hz motion); POP_SMOOTH overrides
     pub motion_smoothing: String,
+    /// controller layout: "modern" (A jumps, B crouches, X acts, Y parries, no down on stick / D-pad), "combat" (shoulder
+    /// buttons for strike and parry, down also on stick / D-pad) or "classic" (D-pad / stick, A or X = Shift)
+    pub pad_layout: String,
 }
 
 pub const CAMERA_SCROLLS: [&str; 2] = ["smooth", "flip"];
 pub const MOTION_SMOOTHINGS: [&str; 2] = ["position", "off"];
+pub const PAD_LAYOUTS: [&str; 3] = ["modern", "combat", "classic"];
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PadLayout {
+    Modern,
+    Combat,
+    Classic,
+}
+
+impl PadLayout {
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "combat" => PadLayout::Combat,
+            "classic" => PadLayout::Classic,
+            _ => PadLayout::Modern,
+        }
+    }
+}
 pub const RENDER_MODES: [&str; 3] = ["classic", "enhanced", "rt_experimental"];
 pub const CHARACTER_STYLES: [&str; 2] = ["sprite", "voxel"];
 pub const SHADOW_QUALITIES: [&str; 3] = ["off", "low", "high"];
@@ -148,7 +169,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.5, muted: false, sound: "adlib".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, external_terminal: false, render_mode: "enhanced".into(), character_style: "voxel".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "low".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into() }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.5, muted: false, sound: "adlib".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, external_terminal: false, render_mode: "enhanced".into(), character_style: "voxel".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "low".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into(), pad_layout: "modern".into() }
     }
 }
 
@@ -160,6 +181,8 @@ pub struct KeyMap {
     pub up: Vec<KeyCode>,
     pub down: Vec<KeyCode>,
     pub shift: Vec<KeyCode>,
+    /// the controller layout (changes live from the Controls page)
+    pub pad: PadLayout,
 }
 
 impl Settings {
@@ -196,6 +219,7 @@ impl Settings {
             voxel_shading: field(&o, "voxel_shading", d.voxel_shading, |s| VOXEL_SHADINGS.contains(&s.as_str())),
             camera_scroll: field(&o, "camera_scroll", d.camera_scroll, |s| CAMERA_SCROLLS.contains(&s.as_str())),
             motion_smoothing: field(&o, "motion_smoothing", d.motion_smoothing, |s| MOTION_SMOOTHINGS.contains(&s.as_str())),
+            pad_layout: field(&o, "pad_layout", d.pad_layout, |s| PAD_LAYOUTS.contains(&s.as_str())),
         }
     }
 
@@ -292,7 +316,7 @@ impl Settings {
             if v.is_empty() { def.iter().filter_map(|n| key_code(n)).collect() } else { v }
         };
         let k = &self.keys;
-        KeyMap { left: res(&k.left, &d.left), right: res(&k.right, &d.right), up: res(&k.up, &d.up), down: res(&k.down, &d.down), shift: res(&k.shift, &d.shift) }
+        KeyMap { left: res(&k.left, &d.left), right: res(&k.right, &d.right), up: res(&k.up, &d.up), down: res(&k.down, &d.down), shift: res(&k.shift, &d.shift), pad: PadLayout::parse(&self.pad_layout) }
     }
 }
 
@@ -467,6 +491,14 @@ mod tests {
         // env wins over the file
         assert!(voxel_columns("smooth", None) && !voxel_columns("smooth", Some("flat")) && voxel_columns("flat", Some("smooth")));
         assert!(!unlit("lit", None) && unlit("lit", Some("unlit")) && !unlit("unlit", Some("lit")));
+    }
+
+    #[test]
+    fn pad_layout_parses_and_falls_back() {
+        assert_eq!(Settings::default().pad_layout, "modern");
+        assert_eq!(Settings::parse(r#"{"pad_layout": "combat"}"#).key_map().pad, PadLayout::Combat);
+        assert_eq!(Settings::parse(r#"{"pad_layout": "classic"}"#).key_map().pad, PadLayout::Classic);
+        assert_eq!(Settings::parse(r#"{"pad_layout": "wasd"}"#).pad_layout, "modern");
     }
 
     #[test]

@@ -107,6 +107,9 @@ pub fn back_decor(left: Tile, left_mod: u8, curr: Tile, palace: bool) -> Option<
             }
             ([44, 44, 45, 45][m as usize], 20)
         }
+        // palace only: the tapestry (1278 / 1280 / 1282, the small tops 1281 / 1283) hanging in the cell right of a Doortop
+        // (`ds:27A2[mod]` = 4E 50 52; modifiers 5 / 6 would give the 12-row tops 1281 / 1283, which lie wholly below the floor surface: not drawn), bottom on the row line; verified at 36 cells of levels 4, 5, 6, 10, 14
+        (Tile::Doortop | Tile::DoortopWithFloor, _) if palace && left_mod <= 2 => ([1078, 1080, 1082][left_mod as usize], -2),
         _ => return None,
     };
     (v != 0).then_some((200 + v, up - FLOOR_ROWS))
@@ -301,6 +304,8 @@ fn floor_record(kind: Tile) -> Option<[u8; 3]> {
         RaiseButton => [147, 42, 149],
         Debris | TorchDebris => [97, 98, 43],
         Skeleton => [30, 31, 43],
+        // the palace lattices' front lip is 1202 (record +8 = 2; found at 30 of the 45 hits, docs/level_render_check.md)
+        LatticeSupport | SmallLattice | LatticeLeft | LatticeRight => [41, 42, 2],
         // LooseFloor has no record images and Unknown31 no record; BigPillarTop has no floor
         Empty | Wall | LooseFloor | BigPillarTop | Unknown31 => return None,
         // shortcut: types whose record lacks +0 / +3 or holds chtab-7 values (Mirror, Chomper, Exit, Doortop, Balcony, Lattice)
@@ -425,7 +430,7 @@ impl TileSet {
         for k in 0..32u8 {
             let kind = Tile::from_u8(k);
             if let Some(r) = floor_record(kind) {
-                if r.iter().any(|&v| resolve(v, &|id| set.present.contains(&id)).is_none()) {
+                if r.iter().any(|&v| resolve(v, &|id| set.present.contains(&id)).is_none()) && (palace || !matches!(kind, Tile::LatticeSupport | Tile::SmallLattice | Tile::LatticeLeft | Tile::LatticeRight)) {
                     missing.push(format!("{name}: {kind:?} floor (record {r:?}) not in the set, plain floor used"));
                 }
             }
@@ -461,10 +466,13 @@ impl TileSet {
             }
         }
         // background pieces, cut at the floor surface (326 reaches 13 rows below it)
-        for (kind, m) in [Tile::Empty, Tile::Floor].into_iter().flat_map(|k| (0..4).map(move |m| (k, m))) {
+        for (kind, m) in [Tile::Empty, Tile::Floor, Tile::Doortop].into_iter().flat_map(|k| (0..4).map(move |m| (k, m))) {
             let Some((id, up)) = back_decor(kind, m, Tile::Empty, palace) else { continue };
             let Some(im) = decoded.get(&id).filter(|_| !set.imgs.contains_key(&id)) else { continue };
             let h = im.height - ((-up).max(0) as usize).min(im.height);
+            if h == 0 {
+                continue;
+            }
             let mat = texture(im.width, h, &im.pixels[..im.width * h], &p200, false);
             set.imgs.insert(id, Tex { mat, w: im.width as f32, h: h as f32 });
         }
@@ -624,6 +632,8 @@ mod tests {
         // palace: no skeleton images (1230/1231) -> plain floor; no 4-bit wall faces -> procedural wall
         let palace = |id: u16| dungeon(id) && !(1230..=1231).contains(&id) && !(366..=374).contains(&id);
         assert_eq!(tile_images(Skeleton, 0, palace).0, Some([241, 242, 243]));
+        assert_eq!(tile_images(LatticeSupport, 0, |id| palace(id) || id == 1202).0, Some([241, 242, 1202]));
+        assert_eq!(tile_images(LatticeSupport, 0, palace).0, Some([241, 242, 243]));
         assert_eq!(tile_images(Wall, 0, palace).1, None);
         assert_eq!(resolve(43, &palace), Some(243));
         assert_eq!(resolve(127, &palace), Some(1327)); // 327 absent -> base 1200
@@ -690,6 +700,11 @@ mod tests {
         assert_eq!(back_decor(Empty, 2, Floor, true), Some((325, 7)));
         assert_eq!(back_decor(Empty, 3, Empty, true), Some((326, -13)));
         assert_eq!(back_decor(Empty, 255, Empty, false), None);
+        // palace tapestries right of a Doortop by its modifier (2 = 1282 on the plain background), none in the dungeon or before a wall
+        assert_eq!(back_decor(Doortop, 2, Empty, true), Some((1282, -15)));
+        assert_eq!(back_decor(DoortopWithFloor, 1, Floor, true), Some((1280, -15)));
+        assert_eq!((back_decor(Doortop, 0, Empty, true), back_decor(Doortop, 3, Empty, true)), (Some((1278, -15)), None));
+        assert_eq!((back_decor(Doortop, 2, Empty, false), back_decor(Doortop, 2, Wall, true)), (None, None));
         // left Floor (ds:27B2): dungeon skips 0, palace skips 1; above 3 counts as 0
         assert_eq!(back_decor(Floor, 0, Empty, false), None);
         assert_eq!(back_decor(Floor, 1, Empty, false), Some((244, 7)));

@@ -47,10 +47,24 @@ list falls back to the default.
 Any controller supported by gilrs (XInput pads, PlayStation, Switch Pro and others) works alongside the keyboard; inputs
 from both are combined.
 
+Three layouts, chosen on Controls > Controller (settings.json `pad_layout`, applies at once). Xbox names, PlayStation in brackets;
+the stick threshold is half deflection.
+
+| Button | **Modern** (default) | **Combat** | **Classic** (as before 0.6.6) |
+|---|---|---|---|
+| D-pad / left stick | left, right, up (jump, climb); **no down** | left, right, up, down | left, right, up, down |
+| A (Cross) | up: jump | up: jump | Shift |
+| Y (Triangle) | up: parry | unused | unused |
+| B (Circle) | down: crouch, sheathe (menus: back) | down | unused (menus: back) |
+| X (Square) | Shift: action, strike | Shift | Shift |
+| RB / RT (R1 / R2) | Shift, hold: grab, careful step | Shift | unused |
+| LB / LT (L1 / L2) | unused (menus: previous tab) | up: parry | unused |
+
+The game has five inputs (left, right, up, down, Shift); a layout only decides which buttons feed them. Up is jump, climb and (with the
+sword) parry; Shift is grab, careful step, drink, pick up and strike.
+
 | Button | Action |
 |---|---|
-| D-pad / left stick | Arrow keys (stick threshold: half deflection) |
-| A / Cross (South), X / Square (West) | Shift (action) |
 | Start / Options | Pause menu; title: menu |
 | Back / Select / Share | Restart the level (Ctrl+A), while playing |
 | Any button | Title: start a new game; demo: start the game; skip a cutscene |

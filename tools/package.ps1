@@ -4,8 +4,14 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
+# the tests as CI runs them (no game data) in parallel with the release build; both must succeed
+$tests = Start-Job { & $using:PSScriptRoot\test_without_data.ps1 *>&1 }
+
 cargo build --release -p pop-app
-if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+$built = $LASTEXITCODE
+Receive-Job $tests -Wait -ErrorVariable testErr | Select-Object -Last 8
+if ($tests.State -ne 'Completed' -or $testErr) { throw "tests failed: $testErr" }
+if ($built -ne 0) { throw "cargo build failed" }
 
 $out = Join-Path $root 'dist\PrinceOfPersia-x64'
 $zip = Join-Path $root 'dist\PrinceOfPersia-x64.zip'
@@ -40,8 +46,9 @@ CONTROLS
   Ctrl+G          save (levels 3-13)   Ctrl+L   load (title screen)
   M               mute             - / =    volume
   F11             fullscreen       F3       debug text
-Controller: d-pad / left stick = arrows, A or X = Shift, Start = pause,
-Back = restart level, any button starts the game.
+Controller (Controls > Controller picks the layout; default Modern): stick / d-pad =
+left, right, jump; A = jump, B = crouch, X = action / strike, Y = parry, RB / RT = hold to
+grab, Start = pause, Back = restart level, any button starts the game.
 
 SETTINGS
 settings.json (created next to the exe on the first run): window mode and size,

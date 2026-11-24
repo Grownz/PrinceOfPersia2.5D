@@ -900,6 +900,7 @@ fn trace_replay() {
 /// tools/tick_trace: the sim only looked for items under a crouching kid).
 #[test]
 fn shift_next_to_a_potion_picks_it_up() {
+    if crate::no_game_data() { return; }
     let mut w = world(4, &[(3, 1, 10)], &[]); // the kid at column 4 faces left (start_dir 255), the potion is in front of him
     tick(&mut w, NONE, 12);
     assert_eq!(w.level.tile_at(1, 13).kind, Tile::Potion);

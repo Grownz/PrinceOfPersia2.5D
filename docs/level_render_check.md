@@ -97,6 +97,41 @@ across the back wall, thin door and torch pieces; in level 12 rooms 11 / 16 / 18
   the side as geometry).
 * **Gate lattices:** the original draws stacked bars; the port keeps its moving procedural bars.
 
+## Palace tapestries (found by pixel search, 2026-11)
+
+The wall hangings in the palace levels are VPALACE 1278 / 1280 / 1282 (32x62, 32x62, 25x62) and their small tops 1281 / 1283 (25x12).
+The record table does not name them. Search (all palace screenshots, 24 sample pixels then a 97 % match): 36 cells, every one in the
+cell to the right of a Doortop (12) or DoortopWithFloor (7) - across a room link in column 0 - bottom edge on the row's floor line, x at
+the cell's left edge. Which image is chosen by the **left neighbour's modifier**: 0 = 1278, 1 = 1280, 2 = 1282 (36 of 36 cells; the
+original's table `ds:27A2` = 4E 50 52 00 00 51 53). Palace only; nothing in front of a wall. The port draws them in `tiles::back_decor`
+(cut at the floor surface like the exit frames); `render2d.decor` has the same rule. Effect on the 2D model (palace levels 4, 5, 6, 10, 11,
+14): 95.8 % -> 96.0 % explained (rules only 90.0 % -> 90.2 %), rooms below 95 %: 34 -> 30.
+
+Images of the DATs still without a confirmed use (the list the task asked to keep): palace 232, 253..259 (24 wide strips), 260..267 (gate
+frames, need motion), 268 and 1314..1323 (1-bit), 269 / 270 / 271 / 272 / 273 / 274 / 345 / 350 / 351 / 362, 1202, 1206 (see below), 1281 /
+1283 (only the modifiers 5 and 6, none in the levels' hits), 299 / 361. 1206 (32x63) was found at four Doortop cells in column 9 whose left
+neighbour is a LatticeSupport (levels 4, 5, 6, 10) - rule not traced. 272 (25x16) was found at 14 places (floor edges, rows 1-2) - not
+attributed. Further unreferenced dungeon images: see docs/texture_inventory.md.
+
+## Loose floors (captured by `tools/room_shots/loose_floors.py`)
+
+The script patches the start room of a level (a floor row 2, six loose floors in row 1, the kid starts on the one in column 4), runs the
+original in DOSBox and saves every changed frame (`out_loose/`, not committed: game pixels). Dungeon (level 1) and palace (level 5) show
+the same thing, with the images of both sets:
+
+* At rest: 241 / 242 / 243 (the plain floor), as the port draws it.
+* The other loose floors of the room shake for a moment when one is triggered, in two frames that replace the face, the right piece and
+  the front lip: **A** = 269 (32x14) + 271 + 273, **B** = 270 + 272 + 274. Their bottoms sit on the same lines as 241 (126) and 243
+  (129); the differences are the highlight row shifted left or right by a few pixels.
+* The triggered floor itself: lip 273 under the kid, then B; it falls with the face 270 at y 126, 129, 135, 144, 156 (steps 3, 6, 9, 12 px:
+  the fall speed), the lip 274 3 px below the face, the right piece 272 one column to the right; 274 alone at y 174 on the last frame.
+* After landing: the debris 297 / 300 on the floor below (bottom 189), as the port draws it.
+
+So 269..274 are the loose floor's shake and fall frames, not other tile pieces. The port animates the slab geometrically (roll and bounce
+of `room.rs::wobble`) with the plain floor texture; the original swaps between two nearly identical images (a few shifted pixels).
+Which tick shows A or B is not measured (frames are captured at about 60 ms, the logic ticks at 83 ms); a tick-exact capture would need
+the counter in `tools/tick_trace` while grabbing. Using A / B as textures would change a handful of pixels on the lip and face.
+
 ## Not covered
 
 * 94 of the 332 non-empty rooms have no usable picture (no floor-like tile to start on, or the picture is blank or not a room); they are

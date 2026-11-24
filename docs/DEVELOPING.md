@@ -19,6 +19,7 @@ Technical notes moved out of the README: building, the environment variables for
 cargo run -p pop-app                 # debug build (dependencies optimized)
 cargo run --release -p pop-app       # release build (no console; log in pop.log next to the exe)
 cargo test --workspace               # tests needing Original_data print "skipping" without it
+tools\test_without_data.ps1          # the same without Original_data, as GitHub CI runs it (tools\package.ps1 does this first)
 ```
 
 Bevy features are listed explicitly in `crates/pop-app/Cargo.toml` (`default-features = false`). If a Bevy feature is missing at

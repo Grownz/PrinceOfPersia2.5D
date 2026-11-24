@@ -47,7 +47,7 @@ internet connection.
 | Look | F5 classic / enhanced, F6 sprite / 3D figures, F11 fullscreen |
 | Sound | M mute, - and = volume |
 
-Controllers work too: d-pad or left stick, A as Shift, Start to pause. The full list and key rebinding are in
+Controllers work too (Modern layout: A jump, B crouch, X action / strike, Y parry, RB / RT hold to grab, Start to pause; Combat and Classic layouts in Controls > Controller). The full list and key rebinding are in
 [docs/controls.md](docs/controls.md).
 
 ## Settings

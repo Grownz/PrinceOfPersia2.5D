@@ -84,12 +84,12 @@ Palettes: **200** (16 colours) and **360** (16 colours) are in both files. Palet
 | 266 | 20x9 | 4 | 2 | 54 | unreferenced by the record table |
 | 267 | 20x9 | 4 | 2 | 60 | unreferenced by the record table |
 | 268 | 24x9 | 1 | 2 | 24 | unreferenced by the record table |
-| 269 | 32x14 | 4 | 1 | 107 | unreferenced by the record table |
-| 270 | 32x13 | 4 | 1 | 108 | unreferenced by the record table |
-| 271 | 25x16 | 4 | 2 | 116 | unreferenced by the record table |
-| 272 | 26x16 | 4 | 1 | 116 | unreferenced by the record table |
-| 273 | 32x3 | 4 | 1 | 26 | unreferenced by the record table |
-| 274 | 32x3 | 4 | 1 | 24 | unreferenced by the record table |
+| 269 | 32x14 | 4 | 1 | 107 | loose floor, shake frame A: face 32x14 (docs/level_render_check.md, loose floors) |
+| 270 | 32x13 | 4 | 1 | 108 | loose floor, shake frame B and the falling slab: face 32x13 |
+| 271 | 25x16 | 4 | 2 | 116 | loose floor, shake frame A: right piece |
+| 272 | 26x16 | 4 | 1 | 116 | loose floor, shake frame B and the falling slab: right piece (nearly 242 plus one row) |
+| 273 | 32x3 | 4 | 1 | 26 | loose floor, shake frame A: front lip 32x3 |
+| 274 | 32x3 | 4 | 1 | 24 | loose floor, shake frame B and the falling slab: front lip 32x3 |
 | 285 | 32x4 | 4 | 2 | 16 | Doortop +8 (32x4 lintel) |
 | 292 | 32x60 | 4 | 4 | 239 | Pillar +0 (32x60 column); LatticePillar +0 |
 | 293 | 26x62 | 4 | 2 | 386 | Pillar +3 (26x62) |
@@ -217,12 +217,12 @@ Palettes: **200** (16 colours) and **360** (16 colours) are in both files. Palet
 | 266 | 20x9 | 4 | 4 | 38 | unreferenced by the record table |
 | 267 | 20x9 | 4 | 4 | 38 | unreferenced by the record table |
 | 268 | 24x9 | 1 | 2 | 24 | unreferenced by the record table |
-| 269 | 32x14 | 4 | 3 | 81 | unreferenced by the record table |
-| 270 | 32x13 | 4 | 3 | 80 | unreferenced by the record table |
-| 271 | 25x16 | 4 | 3 | 80 | unreferenced by the record table |
-| 272 | 25x16 | 4 | 3 | 79 | unreferenced by the record table |
-| 273 | 32x3 | 4 | 3 | 19 | unreferenced by the record table |
-| 274 | 32x3 | 4 | 3 | 17 | unreferenced by the record table |
+| 269 | 32x14 | 4 | 3 | 81 | loose floor, shake frame A: face 32x14 (docs/level_render_check.md, loose floors) |
+| 270 | 32x13 | 4 | 3 | 80 | loose floor, shake frame B and the falling slab: face 32x13 |
+| 271 | 25x16 | 4 | 3 | 80 | loose floor, shake frame A: right piece |
+| 272 | 25x16 | 4 | 3 | 79 | loose floor, shake frame B and the falling slab: right piece (nearly 242 plus one row) |
+| 273 | 32x3 | 4 | 3 | 19 | loose floor, shake frame A: front lip 32x3 |
+| 274 | 32x3 | 4 | 3 | 17 | loose floor, shake frame B and the falling slab: front lip 32x3 |
 | 284 | 8x7 | 4 | 4 | 30 | unreferenced by the record table |
 | 285 | 32x4 | 4 | 3 | 15 | Doortop +8 (32x4 lintel) |
 | 292 | 32x60 | 4 | 3 | 191 | Pillar +0 (32x60 column); LatticePillar +0 |
@@ -266,7 +266,7 @@ Palettes: **200** (16 colours) and **360** (16 colours) are in both files. Palet
 | 1203 | 32x43 | 4 | 4 | 183 | unreferenced by the record table |
 | 1204 | 32x43 | 4 | 4 | 182 | unreferenced by the record table |
 | 1205 | 32x43 | 4 | 4 | 162 | unreferenced by the record table |
-| 1206 | 32x63 | 4 | 4 | 217 | unreferenced by the record table |
+| 1206 | 32x63 | 4 | 4 | 217 | unreferenced; found 32x63 at the Doortop cell in column 9 whose left neighbour is a LatticeSupport (4 cells, rule not traced) - open |
 | 1209 | 32x7 | 4 | 4 | 25 | unreferenced by the record table |
 | 1210 | 32x60 | 4 | 3 | 245 | BalconyLeft +3 if the 1200 base applies (palace only) [I] |
 | 1211 | 32x20 | 4 | 4 | 150 | BalconyLeft +7 if the 1200 base applies (palace only) [I] |
@@ -274,11 +274,11 @@ Palettes: **200** (16 colours) and **360** (16 colours) are in both files. Palet
 | 1213 | 27x20 | 4 | 4 | 132 | BalconyRight +7 if the 1200 base applies (palace only) [I] |
 | 1275 | 32x60 | 4 | 4 | 249 | Mirror +0 (1200 base, palace only) [I] |
 | 1277 | 22x60 | 4 | 4 | 140 | Mirror +9 (1200 base, palace only) [I] |
-| 1278 | 32x62 | 4 | 4 | 366 | unreferenced by the record table |
-| 1280 | 32x62 | 4 | 4 | 196 | unreferenced by the record table |
-| 1281 | 25x12 | 4 | 4 | 56 | unreferenced by the record table |
-| 1282 | 25x62 | 4 | 4 | 331 | unreferenced by the record table |
-| 1283 | 25x12 | 4 | 4 | 58 | unreferenced by the record table |
+| 1278 | 32x62 | 4 | 4 | 366 | **tapestry** (`back_decor`: right of a Doortop, `ds:27A2[mod]`, drawn since 0.6.6) |
+| 1280 | 32x62 | 4 | 4 | 196 | **tapestry** (`back_decor`: right of a Doortop, `ds:27A2[mod]`, drawn since 0.6.6) |
+| 1281 | 25x12 | 4 | 4 | 56 | **tapestry top** (`ds:27A2[5/6]`, same rule) |
+| 1282 | 25x62 | 4 | 4 | 331 | **tapestry** (`back_decor`: right of a Doortop, `ds:27A2[mod]`, drawn since 0.6.6) |
+| 1283 | 25x12 | 4 | 4 | 58 | **tapestry top** (`ds:27A2[5/6]`, same rule) |
 | 1286 | 32x60 | 4 | 4 | 203 | BigPillarBottom +0 (1200 base) [I] |
 | 1287 | 32x62 | 4 | 4 | 261 | BigPillarBottom +3 (1200 base) [I] |
 | 1288 | 22x60 | 4 | 3 | 158 | BigPillarBottom +9 (1200 base) [I] |

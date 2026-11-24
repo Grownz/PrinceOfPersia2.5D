@@ -151,6 +151,8 @@ def decor(room, col, row, fg, bg, fgall, palace):
         m = 0 if lm > 3 else lm
         if m == int(palace): return None
         v, up = [44, 44, 45, 45][m], 20
+    elif lk in (7, 12) and palace and lm <= 6:
+        return ({0: 1278, 1: 1280, 2: 1282, 5: 1281, 6: 1283}.get(lm), 0) if lm in (0, 1, 2, 5, 6) else None   # palace tapestries (ds:27A2)
     else: return None
     return (200 + v, -(up + 2)) if v else None
 

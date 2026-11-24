@@ -3,6 +3,23 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.6.6] - 2026-11-24
+
+### Changed
+- Controller layouts: **Modern** is the new default (A jump, B crouch with no down on the stick or D-pad, X action / strike, Y parry, RB / RT
+  hold to grab); **Combat** (parry on LB / LT, down also on stick and D-pad) and **Classic** (the previous layout) are chosen on Controls >
+  Controller (`pad_layout` in settings.json). The pad pictures show the chosen layout.
+
+### Added
+- Palace tapestries (wall hangings, VPALACE 1278 / 1280 / 1282, tops 1281 / 1283) right of every Doortop, chosen by its modifier.
+
+- Palace lattice tiles use the lip image 1202 (record +8 = 2) instead of 243.
+- `tools/room_shots/loose_floors.py` captures a loose floor shaking, falling and landing in the original (images 269..274 identified).
+
+### Fixed
+- The test `shift_next_to_a_potion_picks_it_up` skips without game data (it failed on GitHub CI); `tools/test_without_data.ps1` runs the suite
+  as CI does and `tools/package.ps1` calls it first.
+
 ## [0.6.5] - 2026-11-23
 
 ### Fixed

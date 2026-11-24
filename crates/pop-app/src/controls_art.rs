@@ -4,7 +4,7 @@
 //! from UI nodes in the menu's colours; nothing is loaded from disk.
 use crate::menu::{Page, Tab};
 use crate::menu_ui::{font, MenuUi};
-use crate::settings::{Bindings, Settings};
+use crate::settings::{Bindings, PadLayout, Settings};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
@@ -40,7 +40,7 @@ pub struct ArtRoot(Tab);
 
 /// Which pad drawing this is (`true` = PlayStation).
 #[derive(Component)]
-pub struct PadRoot(bool);
+pub struct PadRoot(bool, PadLayout);
 
 /// Text under the pad drawing (which pad is shown).
 #[derive(Component)]
@@ -242,34 +242,56 @@ const PIC_H: f32 = 46.0;
 const CALL_W: f32 = 23.0;
 const CALL_H: f32 = 8.2;
 
-fn marks(ps: bool) -> Vec<Mark> {
+/// The callouts of one pad drawing in one layout (settings pad_layout; the buttons' shapes are those of the drawings).
+fn marks(ps: bool, layout: PadLayout) -> Vec<Mark> {
     use Shape::*;
     let n = |x: &str, y: &str| if ps { y.to_string() } else { x.to_string() };
     let m = |text: String, left, shape, g| Mark { text, left, shape, g };
-    if ps {
-        vec![
-            m(format!("{}: previous menu tab", n("LB", "L1")), true, Rect(70.0, 6.0, 112.0, 26.0), Group::View),
-            m("Left stick: move, jump, crouch".into(), true, Circle(212.0, 196.0, 66.0), Group::Move),
-            m("D-pad: move, jump, crouch".into(), true, Circle(115.0, 113.0, 52.0), Group::Move),
-            m(format!("{}: restart level", n("View", "Create / Share")), true, Rect(152.0, 36.0, 24.0, 34.0), Group::Game),
-            m(format!("{}: next menu tab", n("RB", "R1")), false, Rect(424.0, 6.0, 112.0, 26.0), Group::View),
-            m(format!("{}: pause menu", n("Menu", "Options")), false, Rect(434.0, 36.0, 24.0, 34.0), Group::Game),
-            m(format!("{}: action", n("X", "□")), false, Circle(445.0, 115.0, 23.0), Group::Action),
-            m(format!("{}: back in menus", n("B", "○")), false, Circle(531.0, 115.0, 23.0), Group::Game),
-            m(format!("{}: action, confirm", n("A", "×")), false, Circle(487.0, 157.0, 23.0), Group::Action),
-        ]
+    // (LB, left stick, D-pad, View, RB, Menu, X, B, A, Y) on the Xbox drawing, then on the PlayStation one
+    let (lb, ls, dp, vw, rb, mn, bx, bb, ba, by) = if ps {
+        (Rect(70.0, 6.0, 112.0, 26.0), Circle(212.0, 196.0, 66.0), Circle(115.0, 113.0, 52.0), Rect(152.0, 36.0, 24.0, 34.0), Rect(424.0, 6.0, 112.0, 26.0), Rect(434.0, 36.0, 24.0, 34.0), Circle(445.0, 115.0, 23.0), Circle(531.0, 115.0, 23.0), Circle(487.0, 157.0, 23.0), Circle(487.0, 73.0, 23.0))
     } else {
-        vec![
-            m(format!("{}: previous menu tab", n("LB", "L1")), true, Rect(92.0, 20.0, 112.0, 30.0), Group::View),
-            m("Left stick: move, jump, crouch".into(), true, Circle(152.0, 117.0, 66.0), Group::Move),
-            m("D-pad: move, jump, crouch".into(), true, Circle(220.0, 210.0, 50.0), Group::Move),
-            m(format!("{}: restart level", n("View", "Create / Share")), true, Circle(257.0, 119.0, 16.0), Group::Game),
-            m(format!("{}: next menu tab", n("RB", "R1")), false, Rect(392.0, 20.0, 112.0, 30.0), Group::View),
-            m(format!("{}: pause menu", n("Menu", "Options")), false, Circle(343.0, 119.0, 16.0), Group::Game),
-            m(format!("{}: action", n("X", "□")), false, Circle(412.0, 121.0, 23.0), Group::Action),
-            m(format!("{}: back in menus", n("B", "○")), false, Circle(493.0, 121.0, 23.0), Group::Game),
-            m(format!("{}: action, confirm", n("A", "×")), false, Circle(452.0, 158.0, 23.0), Group::Action),
-        ]
+        (Rect(92.0, 20.0, 112.0, 30.0), Circle(152.0, 117.0, 66.0), Circle(220.0, 210.0, 50.0), Circle(257.0, 119.0, 16.0), Rect(392.0, 20.0, 112.0, 30.0), Circle(343.0, 119.0, 16.0), Circle(412.0, 121.0, 23.0), Circle(493.0, 121.0, 23.0), Circle(452.0, 158.0, 23.0), Circle(452.0, 84.0, 23.0))
+    };
+    let (l1, r1, x, b, a, y) = (n("LB", "L1"), n("RB", "R1"), n("X", "□"), n("B", "○"), n("A", "×"), n("Y", "△"));
+    let (l2, r2) = (n("LT", "L2"), n("RT", "R2"));
+    let view = m(format!("{}: restart level", n("View", "Create / Share")), true, vw, Group::Game);
+    let menu = m(format!("{}: pause menu", n("Menu", "Options")), false, mn, Group::Game);
+    match layout {
+        PadLayout::Classic => vec![
+            m(format!("{l1}: previous menu tab"), true, lb, Group::View),
+            m("Left stick: move, jump, crouch".into(), true, ls, Group::Move),
+            m("D-pad: move, jump, crouch".into(), true, dp, Group::Move),
+            view,
+            m(format!("{r1}: next menu tab"), false, rb, Group::View),
+            menu,
+            m(format!("{x}: action"), false, bx, Group::Action),
+            m(format!("{b}: back in menus"), false, bb, Group::Game),
+            m(format!("{a}: action, confirm"), false, ba, Group::Action),
+        ],
+        PadLayout::Combat => vec![
+            m(format!("{l1} / {l2}: parry; menu: prev. tab"), true, lb, Group::Action),
+            m("Left stick: move, jump, crouch".into(), true, ls, Group::Move),
+            m("D-pad: move, jump, crouch".into(), true, dp, Group::Move),
+            view,
+            m(format!("{r1} / {r2}: action; menu: next tab"), false, rb, Group::Action),
+            menu,
+            m(format!("{x}: action, strike"), false, bx, Group::Action),
+            m(format!("{b}: crouch; menus: back"), false, bb, Group::Move),
+            m(format!("{a}: jump; menus: confirm"), false, ba, Group::Move),
+        ],
+        PadLayout::Modern => vec![
+            m(format!("{l1}: previous menu tab"), true, lb, Group::View),
+            m("Left stick: move, jump (no down)".into(), true, ls, Group::Move),
+            m("D-pad: move, jump (no down)".into(), true, dp, Group::Move),
+            view,
+            m(format!("{r1} / {r2}: action; menu: next tab"), false, rb, Group::Action),
+            menu,
+            m(format!("{y}: parry"), false, by, Group::Action),
+            m(format!("{x}: action, strike"), false, bx, Group::Action),
+            m(format!("{b}: crouch; menus: back"), false, bb, Group::Move),
+            m(format!("{a}: jump; menus: confirm"), false, ba, Group::Move),
+        ],
     }
 }
 
@@ -278,13 +300,13 @@ fn px(at: (f32, f32)) -> (f32, f32) {
 }
 
 /// The picture of one pad: the drawing, the outlines of the parts the game uses, callouts with leader lines.
-fn pad(p: &mut ChildSpawnerCommands, ps: bool) {
+fn pad(p: &mut ChildSpawnerCommands, ps: bool, layout: PadLayout) {
     let (iw, ih) = if ps { (606.0, 402.0) } else { (598.0, 405.0) };
-    p.spawn((Node { display: Display::None, position_type: PositionType::Relative, width: vm(PIC_W), height: vm(PIC_H), ..default() }, PadRoot(ps))).with_children(|p| {
+    p.spawn((Node { display: Display::None, position_type: PositionType::Relative, width: vm(PIC_W), height: vm(PIC_H), ..default() }, PadRoot(ps, layout))).with_children(|p| {
         // a dark plate behind the line drawing, so the busy background does not cut through it
         p.spawn((Node { position_type: PositionType::Absolute, left: vm(PAD_X - 1.5), top: vm(PAD_Y - 0.5), width: vm(iw * K + 3.0), height: vm(ih * K + 1.0), border_radius: BorderRadius::all(vm(3.0)), ..default() }, BackgroundColor(Color::srgba(0.02, 0.02, 0.04, 0.9))));
         p.spawn((ImageNode::default(), Node { position_type: PositionType::Absolute, left: vm(PAD_X), top: vm(PAD_Y), width: vm(iw * K), height: vm(ih * K), ..default() }, PadImage(ps)));
-        let mut all = marks(ps);
+        let mut all = marks(ps, layout);
         for mk in &all {
             // the outline in the action's colour, a little outside the part
             let (x, y, w, h, r) = match mk.shape {
@@ -301,7 +323,8 @@ fn pad(p: &mut ChildSpawnerCommands, ps: bool) {
         all.sort_by(|a, b| a.shape.centre().1.total_cmp(&b.shape.centre().1));
         for left in [true, false] {
             for (i, c) in all.iter().filter(|c| c.left == left).enumerate() {
-                let cy = if left { 2.0 + i as f32 * 9.4 } else { i as f32 * 8.6 };
+                let step = if all.iter().filter(|c| c.left == left).count() > 5 { 7.4 } else if left { 9.4 } else { 8.6 };
+                let cy = if left { 2.0 + i as f32 * step } else { i as f32 * step };
                 let cx = if left { 0.0 } else { PIC_W - CALL_W };
                 let col = colour(c.g);
                 let edge_x = if left { CALL_W } else { PIC_W - CALL_W };
@@ -364,8 +387,10 @@ pub fn spawn(p: &mut ChildSpawnerCommands) {
         });
     });
     p.spawn(root(Tab::Controller)).with_children(|p| {
-        pad(p, false);
-        pad(p, true);
+        for l in [PadLayout::Modern, PadLayout::Combat, PadLayout::Classic] {
+            pad(p, false, l);
+            pad(p, true, l);
+        }
         p.spawn((Text::new(""), font(1.9), TextColor(DIM_TEXT), PadNote));
     });
 }
@@ -407,8 +432,9 @@ pub fn draw(
     match tab {
         Some(Tab::Controller) => {
             let (kind, name) = current_pad(&pads);
+            let layout = PadLayout::parse(&set.pad_layout);
             for (r, mut n) in &mut pad_roots {
-                let d = if r.0 == (kind == PadKind::PlayStation) { Display::Flex } else { Display::None };
+                let d = if r.0 == (kind == PadKind::PlayStation) && r.1 == layout { Display::Flex } else { Display::None };
                 if n.display != d {
                     n.display = d;
                 }
@@ -499,10 +525,10 @@ mod tests {
 
     #[test]
     fn every_pad_has_its_marks() {
-        for ps in [false, true] {
-            let c = marks(ps);
+        for (ps, l) in [false, true].into_iter().flat_map(|ps| [PadLayout::Modern, PadLayout::Combat, PadLayout::Classic].map(move |l| (ps, l))) {
+            let c = marks(ps, l);
             assert_eq!(c.iter().filter(|c| c.left).count(), 4);
-            assert_eq!(c.iter().filter(|c| !c.left).count(), 5);
+            assert_eq!(c.iter().filter(|c| !c.left).count(), if l == PadLayout::Modern { 6 } else { 5 });
             assert!(c.iter().all(|c| {
                 let (x, y) = c.shape.centre();
                 x > 0.0 && x < 606.0 && y > 0.0 && y < 405.0

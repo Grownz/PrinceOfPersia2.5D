@@ -219,6 +219,7 @@ pub struct Live<'w, 's> {
     audio: ResMut<'w, AudioState>,
     sinks: Query<'w, 's, &'static mut AudioSink, With<Sfx>>,
     pending: Query<'w, 's, &'static mut PlaybackSettings, (With<Sfx>, Without<AudioSink>)>,
+    keys: ResMut<'w, crate::settings::KeyMap>,
 }
 
 impl Live<'_, '_> {
@@ -234,6 +235,7 @@ impl Live<'_, '_> {
                     w.mode = if set.borderless() { WindowMode::BorderlessFullscreen(MonitorSelection::Current) } else { WindowMode::Windowed };
                 }
             }
+            "pad_layout" => self.keys.pad = crate::settings::PadLayout::parse(&set.pad_layout),
             "external_terminal" => crate::flow::console(set.external_terminal),
             "volume" | "muted" => {
                 (self.audio.volume, self.audio.muted) = (set.volume, set.muted);

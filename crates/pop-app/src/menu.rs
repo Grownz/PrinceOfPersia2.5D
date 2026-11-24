@@ -154,7 +154,7 @@ pub struct Opt {
 const ON_OFF: &[&str] = &["true", "false"];
 const PERCENT: Ctl = Ctl::Slider { min: 0, max: 100, step: 5 };
 
-pub const OPTS: [Opt; 18] = [
+pub const OPTS: [Opt; 19] = [
     Opt { key: "render_mode", label: "Rendering", values: &["classic", "enhanced"], live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "character_style", label: "Characters", values: &settings::CHARACTER_STYLES, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "camera_scroll", label: "Room change", values: &settings::CAMERA_SCROLLS, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
@@ -172,6 +172,7 @@ pub const OPTS: [Opt; 18] = [
     Opt { key: "voxel_shading", label: "Voxel shading", values: &settings::VOXEL_SHADINGS, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
     Opt { key: "shadow_quality", label: "Shadows (enhanced)", values: &settings::SHADOW_QUALITIES, live: true, tab: Tab::Graphics, ctl: Ctl::Steps },
     Opt { key: "sun_brightness", label: "Sun light (enhanced)", values: &settings::SUN_BRIGHTNESS, live: true, tab: Tab::Graphics, ctl: Ctl::Steps },
+    Opt { key: "pad_layout", label: "Controller layout", values: &settings::PAD_LAYOUTS, live: true, tab: Tab::Controller, ctl: Ctl::Dropdown },
     Opt { key: "ssao", label: "SSAO (enhanced)", values: ON_OFF, live: true, tab: Tab::Graphics, ctl: Ctl::Checkbox },
 ];
 
@@ -416,7 +417,7 @@ impl Menu {
                 let body: Vec<Row> = if self.tab == Tab::Downloads { (0..soundfont::FONTS.len()).map(Row::Font).collect() } else { (0..OPTS.len()).filter(|&i| OPTS[i].tab == self.tab).map(Row::Opt).collect() };
                 [Row::Tabs].into_iter().chain(body).chain([Row::Item(Back)]).collect()
             }
-            (Page::Controls, _) => [Row::Tabs].into_iter().chain(items(&[Back])).collect(),
+            (Page::Controls, _) => [Row::Tabs].into_iter().chain((0..OPTS.len()).filter(|&i| OPTS[i].tab == self.tab).map(Row::Opt)).chain(items(&[Back])).collect(),
             (Page::Hof, _) => items(&[Back]),
         }
     }
@@ -793,7 +794,11 @@ mod tests {
         // every option is on exactly one tab; the first three tabs list them, Downloads lists the fonts
         let mut m = settings_menu();
         let n: usize = TABS[..3].iter().map(|&t| { m.tab = t; m.rows().iter().filter(|r| matches!(r, Row::Opt(_))).count() }).sum();
-        assert_eq!(n, OPTS.len());
+        m.page = Page::Controls;
+        m.tab = Tab::Controller;
+        let pads = m.rows().iter().filter(|r| matches!(r, Row::Opt(_))).count();
+        m.page = Page::Settings;
+        assert_eq!(n + pads, OPTS.len());
         m.tab = Tab::Downloads;
         assert_eq!(m.rows(), [Row::Tabs, Row::Font(0), Row::Font(1), Row::Item(Item::Back)]);
     }

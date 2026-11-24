@@ -1,7 +1,7 @@
 //! The kid in the app: input latching, per-tick control (pop-core), and drawing with the original sprites (KID.DAT).
 //! Sequence viewer: `,` / `.` = previous/next sequence (kid no longer controlled), Space = restart it, F = flip,
 //! C = back to the controlled kid at the level start.
-use crate::settings::{CharacterStyle, KeyMap};
+use crate::settings::{CharacterStyle, KeyMap, PadLayout};
 use crate::Game;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
@@ -117,7 +117,6 @@ fn ctrl_held(k: &ButtonInput<KeyCode>) -> bool {
 
 /// The kid's keys held now: the bound keyboard keys (settings.json) or any controller (d-pad / left stick, A = Shift).
 pub fn pressed(k: &ButtonInput<KeyCode>, m: &KeyMap, pads: &Query<&Gamepad>) -> Keys {
-    use GamepadButton::*;
     let mut keys = if ctrl_held(k) { Keys::default() } else { Keys { left: k.any_pressed(m.left.iter().copied()), right: k.any_pressed(m.right.iter().copied()), up: k.any_pressed(m.up.iter().copied()), down: k.any_pressed(m.down.iter().copied()), shift: k.any_pressed(m.shift.iter().copied()) } };
     if !ctrl_held(k) {
         for p in k.get_pressed().map(|&c| keypad(c)) {
@@ -125,14 +124,24 @@ pub fn pressed(k: &ButtonInput<KeyCode>, m: &KeyMap, pads: &Query<&Gamepad>) -> 
         }
     }
     for p in pads {
-        let s = p.left_stick();
-        keys.left |= p.pressed(DPadLeft) || s.x < -0.5;
-        keys.right |= p.pressed(DPadRight) || s.x > 0.5;
-        keys.up |= p.pressed(DPadUp) || s.y > 0.5;
-        keys.down |= p.pressed(DPadDown) || s.y < -0.5;
-        keys.shift |= p.pressed(South) || p.pressed(West);
+        let c = pad_keys(m.pad, |b| p.pressed(b), p.left_stick());
+        keys = Keys { left: keys.left | c.left, right: keys.right | c.right, up: keys.up | c.up, down: keys.down | c.down, shift: keys.shift | c.shift };
     }
     keys
+}
+
+/// The kid's keys from one controller (buttons, left stick) in a layout. Modern: A and Y = up (jump, parry), B = down (no down on the
+/// stick or D-pad), X / RB / RT = Shift. Combat: down also on stick and D-pad, parry on LB / LT instead of Y. Classic: A or X = Shift.
+pub fn pad_keys(layout: PadLayout, held: impl Fn(GamepadButton) -> bool, s: Vec2) -> Keys {
+    use GamepadButton::*;
+    let any = |b: &[GamepadButton]| b.iter().any(|&x| held(x));
+    let (left, right) = (held(DPadLeft) || s.x < -0.5, held(DPadRight) || s.x > 0.5);
+    let (up, down) = (held(DPadUp) || s.y > 0.5, held(DPadDown) || s.y < -0.5);
+    match layout {
+        PadLayout::Classic => Keys { left, right, up, down, shift: any(&[South, West]) },
+        PadLayout::Combat => Keys { left, right, up: up || any(&[South, LeftTrigger, LeftTrigger2]), down: down || held(East), shift: any(&[West, RightTrigger, RightTrigger2]) },
+        PadLayout::Modern => Keys { left, right, up: up || any(&[South, North]), down: held(East), shift: any(&[West, RightTrigger, RightTrigger2]) },
+    }
 }
 
 /// Numeric keypad, fixed like the original: its key table is indexed by scancode and the E0 prefix is dropped (0C83:00DE),
@@ -922,6 +931,28 @@ mod tests {
         assert!(!sword_shown(&k(238, 0, 0, true)) && !sword_shown(&k(15, 0, 0, true)), "sheathed frames");
         assert!(sword_shown(&k(158, 2, 0, true)));
         assert!(sword_shown(&k(166, 0, 2, true)) && !sword_shown(&k(166, 0, 2, false)), "living guard (charid 2)");
+    }
+
+    #[test]
+    fn pad_layouts_map_the_buttons() {
+        use GamepadButton::*;
+        let k = |l, b: &[GamepadButton], s: Vec2| { let k = pad_keys(l, |x| b.contains(&x), s); (k.left, k.right, k.up, k.down, k.shift) };
+        let (m, c, cl) = (PadLayout::Modern, PadLayout::Combat, PadLayout::Classic);
+        // modern: A and Y jump / parry, B crouches, no down on stick or D-pad, X / RB / RT = Shift
+        assert_eq!(k(m, &[South], Vec2::ZERO), (false, false, true, false, false));
+        assert_eq!(k(m, &[North], Vec2::ZERO), (false, false, true, false, false));
+        assert_eq!(k(m, &[East], Vec2::ZERO), (false, false, false, true, false));
+        assert_eq!(k(m, &[DPadDown], Vec2::new(0.0, -1.0)), (false, false, false, false, false));
+        assert_eq!(k(m, &[DPadUp, DPadLeft], Vec2::ZERO), (true, false, true, false, false));
+        assert_eq!(k(m, &[West], Vec2::ZERO).4 && k(m, &[RightTrigger], Vec2::ZERO).4 && k(m, &[RightTrigger2], Vec2::ZERO).4, true);
+        assert_eq!(k(m, &[LeftTrigger], Vec2::ZERO), (false, false, false, false, false));
+        // combat: down also on stick / D-pad, parry on LB / LT, Y unused
+        assert_eq!(k(c, &[], Vec2::new(0.0, -1.0)), (false, false, false, true, false));
+        assert_eq!(k(c, &[LeftTrigger2], Vec2::ZERO), (false, false, true, false, false));
+        assert_eq!(k(c, &[North], Vec2::ZERO), (false, false, false, false, false));
+        // classic: the first layout
+        assert_eq!(k(cl, &[South], Vec2::ZERO), (false, false, false, false, true));
+        assert_eq!(k(cl, &[East], Vec2::new(0.8, -0.8)), (false, true, false, true, false));
     }
 
     #[test]
