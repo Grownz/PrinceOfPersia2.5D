@@ -15,6 +15,7 @@
 //! POP_CAMERA=smooth|flip overrides settings.json "camera_scroll" (camera.rs). POP_SET="start=ROOM:TILE,door=N,upside=1"
 //! (with POP_LEVEL; "gate=N" sets every gate's opening, "exit=1" opens every exit door so "up" in front of it climbs the stairs) changes the first world for screenshots (`debug_set`). POP_MENU = main, settings (video, audio, graphics, downloads), controls, hof, name
 //! or attract opens a menu page or a hall-of-fame screen at once (`flow::debug_menu`).
+mod atlas;
 mod audio;
 mod camera;
 mod controls_art;
@@ -31,6 +32,7 @@ mod mixer;
 mod music;
 mod particles;
 mod perf;
+mod relief;
 mod room;
 mod settings;
 mod soundfont;
@@ -372,7 +374,7 @@ fn perf_log(time: Res<Time<Real>>, mut acc: Local<(u32, f32, u32)>) {
 
 fn setup(mut cmds: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>, mut imgs: ResMut<Assets<Image>>, set: Res<Settings>) {
     let dir = set.tile_textures().then(data_dir);
-    cmds.insert_resource(room::Palette::new(&mut meshes, &mut mats, &mut imgs, dir.as_deref(), set.voxel_columns(), set.voxel_objects()));
+    cmds.insert_resource(room::Palette::new(&mut meshes, &mut mats, &mut imgs, dir.as_deref(), set.voxel_columns(), set.voxel_objects(), set.tile_relief()));
     let centre = Vec3::new(5.0, 3.0, 0.0);
     cmds.spawn((
         Camera3d::default(),

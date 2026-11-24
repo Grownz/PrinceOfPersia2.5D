@@ -154,7 +154,7 @@ pub struct Opt {
 const ON_OFF: &[&str] = &["true", "false"];
 const PERCENT: Ctl = Ctl::Slider { min: 0, max: 100, step: 5 };
 
-pub const OPTS: [Opt; 19] = [
+pub const OPTS: [Opt; 20] = [
     Opt { key: "render_mode", label: "Rendering", values: &["classic", "enhanced"], live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "character_style", label: "Characters", values: &settings::CHARACTER_STYLES, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "camera_scroll", label: "Room change", values: &settings::CAMERA_SCROLLS, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
@@ -166,6 +166,7 @@ pub const OPTS: [Opt; 19] = [
     Opt { key: "sound", label: "Sound set", values: &["synth", "original", "adlib", "soundfont"], live: true, tab: Tab::Audio, ctl: Ctl::Dropdown },
     Opt { key: "soundfont", label: "SoundFont", values: &["musescore", "fluidr3"], live: true, tab: Tab::Audio, ctl: Ctl::Dropdown },
     Opt { key: "tile_textures", label: "Tile textures", values: &settings::TILE_TEXTURES, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
+    Opt { key: "tile_relief", label: "Tile relief (MMPX, normal maps)", values: ON_OFF, live: true, tab: Tab::Graphics, ctl: Ctl::Checkbox },
     Opt { key: "column_style", label: "Columns", values: &settings::COLUMN_STYLES, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
     Opt { key: "object_style", label: "Objects", values: &settings::OBJECT_STYLES, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
     Opt { key: "voxel_normals", label: "Voxel normals", values: &settings::VOXEL_NORMALS, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },

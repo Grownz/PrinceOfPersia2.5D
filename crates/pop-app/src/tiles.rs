@@ -1,7 +1,7 @@
 //! Original tile images (VDUNGEON.DAT / VPALACE.DAT) on the 3D room pieces. Which image goes where: docs/texture_inventory.md
 //! sections 3, 5 and 13. Decoded at runtime from the user's own DAT files; anything missing falls back to the procedural material.
 use bevy::asset::RenderAssetUsages;
-use bevy::image::ImageSampler;
+use bevy::image::{ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use pop_core::{dat::Dat, image, level::Tile};
@@ -368,6 +368,45 @@ pub fn floor_pixels(base: &image::Image, right: &image::Image, lip: &image::Imag
 /// Rows of an exit frame image above its floor (237 is 60 rows, the last 13 are floor); the lintel goes on top of them.
 pub const EXIT_FRAME_H: usize = 47;
 
+/// An RGBA8 image with its whole mip chain (`relief::mip_chain`); `Image::new` would only accept the first level's data.
+fn mipped(extent: Extent3d, rgba: Vec<u8>, format: TextureFormat, kind: crate::relief::MipKind, levels: u32) -> Image {
+    let (w, h) = (extent.width as usize, extent.height as usize);
+    let levels = levels.min(crate::relief::mip_levels(w, h));
+    if levels <= 1 {
+        return Image::new(extent, TextureDimension::D2, rgba, format, RenderAssetUsages::default());
+    }
+    let mut img = Image::new_uninit(extent, TextureDimension::D2, format, RenderAssetUsages::default());
+    img.data = Some(crate::relief::mip_chain(w, h, rgba, kind, levels));
+    img.texture_descriptor.mip_level_count = levels;
+    img
+}
+
+/// Edge of an atlas page in colour pixels, and the most mip levels a page gets (the gutters are sized for them, atlas.rs).
+const ATLAS_PAGE_PX: usize = 2048;
+const ATLAS_MAX_MIPS: u32 = 4;
+
+/// Mip levels of the atlas pages: `POP_MIPS` (default 1 = none), at most `ATLAS_MAX_MIPS`; none for the plain nearest look.
+fn atlas_levels(upscale: crate::relief::Upscale) -> u32 {
+    if upscale == crate::relief::Upscale::Nearest { 1 } else { mip_levels_wanted().clamp(1, ATLAS_MAX_MIPS) }
+}
+
+/// `POP_MIPS`: mip levels wanted for the enlarged tile textures (default 1 = none). With separate textures every level cost about 6 ms per
+/// frame (881 textures in bindless arrays, docs/tile_filters.md); in the atlas the textures are few.
+fn mip_levels_wanted() -> u32 {
+    static N: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *N.get_or_init(|| std::env::var("POP_MIPS").ok().and_then(|v| v.parse().ok()).unwrap_or(1))
+}
+
+/// Linear filtering between texels and mip levels, 8x anisotropic (the floors are seen at a grazing angle).
+fn smooth_sampler() -> ImageSampler {
+    let mut d = ImageSamplerDescriptor::linear();
+    d.set_anisotropic_filter(8);
+    ImageSampler::Descriptor(d)
+}
+
+/// Slope of the relief normal maps (relief.rs).
+const RELIEF_STRENGTH: f32 = 6.0;
+
 /// One textured piece: its material and size in screen pixels.
 #[derive(Clone)]
 pub struct Tex {
@@ -401,7 +440,7 @@ fn opaque_cols(im: &image::Image, y: usize) -> Option<(usize, usize)> {
 
 impl TileSet {
     /// Decode the pieces `tile_images` names. Returns the set, the bytes of RGBA uploaded and log lines for what is missing.
-    pub fn load(dat: &Dat, name: &str, palace: bool, imgs: &mut Assets<Image>, mats: &mut Assets<StandardMaterial>) -> (TileSet, usize, Vec<String>) {
+    pub fn load(dat: &Dat, name: &str, palace: bool, relief: bool, imgs: &mut Assets<Image>, mats: &mut Assets<StandardMaterial>) -> (TileSet, usize, Vec<String>) {
         let mut all: HashMap<u16, image::Image> = dat.ids().filter_map(|id| Some((id, image::decode(dat.get(id)?)?))).collect();
         // palace: the speckle strips 363..377 drawn over the brick rectangles of the walls
         let strips: HashMap<u16, image::Image> = if palace { (363..=377).filter_map(|id| Some((id, all.remove(&id)?))).collect() } else { HashMap::new() };
@@ -415,17 +454,29 @@ impl TileSet {
         };
         let mut set = TileSet { floors: HashMap::new(), imgs: HashMap::new(), present: decoded.keys().copied().filter(|&id| id != 200 && id != 360).collect(), palace, walls: vec![], faces: [None, None, None, None], splits: vec![], exit_gap };
         let (mut bytes, mut missing) = (0, vec![]);
+        // relief on = MMPX 4x colour images (linear sampling) plus normal maps; POP_UPSCALE picks a test filter without it
+        let upscale = if relief { crate::relief::Upscale::Mmpx } else { crate::relief::Upscale::from_env() };
+        // every image goes into the atlas of this set (atlas.rs): a few pages instead of one texture each; the material selects its
+        // rectangle with uv_transform, set when the pages are finished below
+        let (cs, ns, levels) = (if upscale == crate::relief::Upscale::Nearest { 1 } else { 4 }, if relief { 2 } else { 0 }, atlas_levels(upscale));
+        let mut atlas = crate::atlas::Atlas::new(ATLAS_PAGE_PX, cs, ns, crate::atlas::gutter_for(levels, if ns > 0 { ns } else { cs }));
+        let mut placed: Vec<(Handle<StandardMaterial>, crate::atlas::Slot)> = vec![];
         let mut texture = |w: usize, h: usize, px: &[u8], pal: &[[u8; 3]], opaque: bool| {
-            let mut rgba = Vec::with_capacity(px.len() * 4);
-            for &p in px {
+            let cut = px.contains(&0) && !opaque;
+            let (sw, sh, spx) = upscale.apply(w, h, px, pal);
+            let mut rgba = Vec::with_capacity(spx.len() * 4);
+            for &p in spx.iter() {
                 let c = pal.get(p as usize).copied().unwrap_or([255, 0, 255]);
                 rgba.extend_from_slice(&[c[0], c[1], c[2], if p == 0 && !opaque { 0 } else { 255 }]);
             }
-            bytes += rgba.len();
-            let cut = px.contains(&0) && !opaque;
-            let mut img = Image::new(Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default());
-            img.sampler = ImageSampler::nearest();
-            mats.add(StandardMaterial { base_color_texture: Some(imgs.add(img)), perceptual_roughness: 0.9, alpha_mode: if cut { AlphaMode::Mask(0.5) } else { AlphaMode::Opaque }, ..default() })
+            debug_assert_eq!((sw, sh), (w * cs, h * cs));
+            // relief: the normal map comes from the indices scaled 2x (rounded bevels); the colour image is not smoothed, so the
+            // 1 px speckle stays exact (Scale2x turned it into diagonals)
+            let normal = relief.then(|| crate::relief::normal_map(w * 2, h * 2, &crate::relief::scale2x(w, h, px), pal, RELIEF_STRENGTH));
+            let slot = atlas.insert(w, h, &rgba, normal.as_deref());
+            let mat = mats.add(StandardMaterial { perceptual_roughness: 0.9, alpha_mode: if cut { AlphaMode::Mask(0.5) } else { AlphaMode::Opaque }, ..default() });
+            placed.push((mat.clone(), slot));
+            mat
         };
         for k in 0..32u8 {
             let kind = Tile::from_u8(k);
@@ -506,6 +557,33 @@ impl TileSet {
                 missing.push(format!("{name}: no speckle strips 363..377, palace walls without them"));
             }
         }
+        // the pages become images (with mip levels where asked for); each material gets its page and rectangle
+        let mut fin = atlas.finish();
+        let finished_pages = std::mem::take(&mut fin.pages);
+        let pages: Vec<(Handle<Image>, Option<Handle<Image>>)> = finished_pages
+            .into_iter()
+            .map(|pg| {
+                let (cw, ch) = pg.colour_size;
+                bytes += pg.colour.len();
+                let mut img = mipped(Extent3d { width: cw as u32, height: ch as u32, depth_or_array_layers: 1 }, pg.colour, TextureFormat::Rgba8UnormSrgb, crate::relief::MipKind::Colour, levels);
+                img.sampler = if upscale == crate::relief::Upscale::Nearest { ImageSampler::nearest() } else { smooth_sampler() };
+                let normal = pg.normal.map(|(data, (nw, nh))| {
+                    bytes += data.len();
+                    let mut n = mipped(Extent3d { width: nw as u32, height: nh as u32, depth_or_array_layers: 1 }, data, TextureFormat::Rgba8Unorm, crate::relief::MipKind::Normal, levels);
+                    n.sampler = smooth_sampler();
+                    imgs.add(n)
+                });
+                (imgs.add(img), normal)
+            })
+            .collect();
+        for (mat, slot) in placed {
+            let (scale, offset) = fin.uv(&slot);
+            if let Some(mut m) = mats.get_mut(&mat) {
+                m.base_color_texture = Some(pages[slot.page].0.clone());
+                m.normal_map_texture = pages[slot.page].1.clone();
+                m.uv_transform = bevy::math::Affine2::from_scale_angle_translation(Vec2::from(scale), 0.0, Vec2::from(offset));
+            }
+        }
         (set, bytes, missing)
     }
 
@@ -567,12 +645,13 @@ impl TileSet {
 }
 
 /// Both tile sets, [dungeon, palace]; None where the DAT is missing or `tile_textures` is "procedural".
-pub fn load_sets(dir: &str, imgs: &mut Assets<Image>, mats: &mut Assets<StandardMaterial>) -> [Option<TileSet>; 2] {
+pub fn load_sets(dir: &str, relief: bool, imgs: &mut Assets<Image>, mats: &mut Assets<StandardMaterial>) -> [Option<TileSet>; 2] {
     let t0 = std::time::Instant::now();
     let mut total = 0;
+    let (i0, m0) = (imgs.len(), mats.len());
     let sets = ["VDUNGEON.DAT", "VPALACE.DAT"].map(|f| match Dat::open(format!("{dir}/{f}")) {
         Ok(dat) => {
-            let (set, bytes, missing) = TileSet::load(&dat, f, f == "VPALACE.DAT", imgs, mats);
+            let (set, bytes, missing) = TileSet::load(&dat, f, f == "VPALACE.DAT", relief, imgs, mats);
             total += bytes;
             for m in missing {
                 info!("tile textures: {m}");
@@ -584,7 +663,7 @@ pub fn load_sets(dir: &str, imgs: &mut Assets<Image>, mats: &mut Assets<Standard
             None
         }
     });
-    info!("tile textures: loaded in {:.1} ms, {} KB RGBA", t0.elapsed().as_secs_f32() * 1000.0, total / 1024);
+    info!("tile textures: loaded in {:.1} ms, {} KB RGBA, {} images, {} materials", t0.elapsed().as_secs_f32() * 1000.0, total / 1024, imgs.len() - i0, mats.len() - m0);
     sets
 }
 

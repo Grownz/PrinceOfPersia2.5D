@@ -48,8 +48,8 @@ pub struct Palette {
 impl Palette {
     /// `tiles_dir`: game data folder to load the tile images from (None = procedural tiles); `columns` / `objects`: voxel
     /// columns / voxel objects.
-    pub fn new(meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>, imgs: &mut Assets<Image>, tiles_dir: Option<&str>, columns: bool, objects: bool) -> Self {
-        let tiles = tiles_dir.map_or([None, None], |d| crate::tiles::load_sets(d, imgs, mats));
+    pub fn new(meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>, imgs: &mut Assets<Image>, tiles_dir: Option<&str>, columns: bool, objects: bool, relief: bool) -> Self {
+        let tiles = tiles_dir.map_or([None, None], |d| crate::tiles::load_sets(d, relief, imgs, mats));
         let items = tiles_dir.map(|d| crate::items::Items::load(d, columns, objects, meshes, mats));
         let mut by_split: HashMap<u32, Handle<Mesh>> = HashMap::new();
         let mut slab_mesh = HashMap::new();
@@ -87,6 +87,10 @@ fn textured_cube() -> Mesh {
         .map(|(p, n)| if n[1] != 0.0 { [p[0] + 0.5, p[2] + 0.5] } else if n[0] != 0.0 { [0.5 - p[2] * n[0], 0.5 - p[1]] } else { [0.5 + p[0] * n[2], 0.5 - p[1]] })
         .collect();
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+    // normal maps (relief.rs) need tangents; the slab's UV change below keeps their directions
+    if let Err(e) = mesh.generate_tangents() {
+        warn!("cube tangents: {e}");
+    }
     mesh
 }
 
@@ -1189,7 +1193,7 @@ mod tests {
     fn slabs_and_walls_close_against_the_back_wall() {
         let mut world = World::new();
         let (mut meshes, mut mats, mut imgs) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default());
-        let p = Palette::new(&mut meshes, &mut mats, &mut imgs, None, false, false);
+        let p = Palette::new(&mut meshes, &mut mats, &mut imgs, None, false, false, false);
         let mut l = Level::parse(&[0u8; 4096]).expect("zero level");
         for (i, t) in [(0, Tile::Floor), (1, Tile::Wall), (2, Tile::LooseFloor), (3, Tile::DropButton), (4, Tile::Pillar), (11, Tile::Torch)] {
             l.set_tile(1, i, t);
@@ -1252,8 +1256,8 @@ pub fn palette_live(
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut imgs: ResMut<Assets<Image>>,
-    mut last: Local<Option<(bool, bool, bool)>>,
-    mut parked: Local<HashMap<(bool, bool, bool), (Palette, f64)>>,
+    mut last: Local<Option<(bool, bool, bool, bool)>>,
+    mut parked: Local<HashMap<(bool, bool, bool, bool), (Palette, f64)>>,
 ) {
     let t = time.elapsed_secs_f64();
     let ttl = palette_ttl();
@@ -1261,11 +1265,11 @@ pub fn palette_live(
         parked.retain(|_, (_, since)| t - *since < ttl);
         info!("palette cache: dropped unused palettes (their assets are freed by Bevy)");
     }
-    let now = (set.tile_textures(), set.voxel_columns(), set.voxel_objects());
+    let now = (set.tile_textures(), set.voxel_columns(), set.voxel_objects(), set.tile_relief());
     let Some(old_key) = last.replace(now).filter(|&l| l != now) else { return };
     let new = parked.remove(&now).map(|(p, _)| p).unwrap_or_else(|| {
         let dir = now.0.then(crate::data_dir);
-        Palette::new(&mut meshes, &mut mats, &mut imgs, dir.as_deref(), now.1, now.2)
+        Palette::new(&mut meshes, &mut mats, &mut imgs, dir.as_deref(), now.1, now.2, now.3)
     });
     let old = std::mem::replace(&mut *pal, new);
     parked.insert(old_key, (old, t));

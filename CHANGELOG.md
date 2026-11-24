@@ -3,6 +3,18 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [Unreleased]
+
+### Added
+- Tile relief (off by default; Settings > Graphics `tile_relief`, `POP_RELIEF=1`): the tile images enlarged 4x with MMPX (palette and single pixels
+  kept) and a normal map derived from them, so the torches light the brick edges. About 20x the tile texture memory (126 MB). Cube meshes now carry tangents.
+- Texture atlas (`atlas.rs`): the tile images of a set are packed into a few pages, materials select their rectangle with `uv_transform`; gutters of
+  replicated edge pixels keep neighbours from showing through, and the atlas grows by pages when more images are added. 881 textures became 2-22:
+  frame time with relief and 4 mip levels on a palace level went from about 75 ms to 14 ms (dev build).
+- `POP_MIPS=<levels>` (1-4, default 1) builds mip maps for the enlarged tile textures on the CPU (sRGB colour in linear light, renormalised normals).
+- Test hook `POP_UPSCALE=nearest|epx|mmpx|sharp` for the tile colour images (MMPX ported to Rust) and `tools/tile_filters/compare.py`, the filter
+  comparison on the game's own tiles; results in `docs/tile_filters.md`.
+
 ## [0.6.7] - 2026-11-24
 
 ### Added

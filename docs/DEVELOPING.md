@@ -129,6 +129,15 @@ in-game Settings menu (Esc), see [controls.md](controls.md).
   [texture_inventory.md](texture_inventory.md) 13) or `procedural` (plain coloured boxes); env `POP_TILES`. With `original`,
   the skeleton floor, the sword and the potions are voxel models built at runtime from their images (bubbles glow in the
   potion's colour).
+- `tile_relief` (off; Settings > Graphics, `POP_RELIEF=1`, `relief.rs`, needs `tile_textures = original`): the tile colour images enlarged 4x with
+  MMPX on their palette indices (palette and single pixels kept, linear sampling) plus a normal map (palette brightness of the indices scaled 2x,
+  blur, Sobel, `RELIEF_STRENGTH` in `tiles.rs`) lit by the torches. Measured in the dev build (atlas included): tile textures 9 MB RGBA and 37 ms to load
+  without, 156 MB and 1.3 s with (no mip maps); frame time on a palace level 12.6 ms plain, 13.5 ms with. [tile_filters.md](tile_filters.md) has the filter comparison.
+- `POP_MIPS=<levels>` (test only, default 1 = no mip maps, at most 4): mip levels of the enlarged tile textures, built on the CPU. The tile
+  images live in an atlas per tile set (`atlas.rs`, [tile_filters.md](tile_filters.md)); to add a texture call `texture(w, h, indices,
+  palette, opaque)` in `TileSet::load` as for the others, the atlas grows by itself and the gutters keep neighbours out.
+- `POP_UPSCALE` (test only, ignored with `tile_relief`): `nearest` (default), `epx`, `mmpx` or `sharp` enlarge the tile colour images 4x and
+  sample them linearly.
 - `column_style` `voxel|flat` (pillars and door posts, `POP_COLUMNS`) and `object_style` `voxel|flat` (spikes, chompers, gates,
   exit doors, torch flames and debris, `POP_OBJECTS`); both only with `tile_textures = original`.
 - `camera_scroll`: `smooth` (default: a short eased pan to the next room) or `flip` (the original's hard cut); env `POP_CAMERA`.

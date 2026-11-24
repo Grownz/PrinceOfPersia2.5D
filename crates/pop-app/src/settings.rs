@@ -60,6 +60,9 @@ pub struct Settings {
     /// controller layout: "modern" (A jumps, B crouches, X acts, Y parries, no down on stick / D-pad), "combat" (shoulder
     /// buttons for strike and parry, down also on stick / D-pad) or "classic" (D-pad / stick, A or X = Shift)
     pub pad_layout: String,
+    /// tile images enlarged 4x with MMPX (palette kept, sampled linearly) and given a normal map derived from them (relief.rs);
+    /// needs tile_textures = original; about 20x the texture memory (126 MB instead of 6 MB); POP_RELIEF=1 turns it on
+    pub tile_relief: bool,
 }
 
 pub const CAMERA_SCROLLS: [&str; 2] = ["smooth", "flip"];
@@ -169,7 +172,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.5, muted: false, sound: "adlib".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, external_terminal: false, render_mode: "enhanced".into(), character_style: "voxel".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "low".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into(), pad_layout: "modern".into() }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.5, muted: false, sound: "adlib".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, external_terminal: false, render_mode: "enhanced".into(), character_style: "voxel".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "low".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into(), pad_layout: "modern".into(), tile_relief: false }
     }
 }
 
@@ -220,7 +223,13 @@ impl Settings {
             camera_scroll: field(&o, "camera_scroll", d.camera_scroll, |s| CAMERA_SCROLLS.contains(&s.as_str())),
             motion_smoothing: field(&o, "motion_smoothing", d.motion_smoothing, |s| MOTION_SMOOTHINGS.contains(&s.as_str())),
             pad_layout: field(&o, "pad_layout", d.pad_layout, |s| PAD_LAYOUTS.contains(&s.as_str())),
+            tile_relief: field(&o, "tile_relief", d.tile_relief, |_| true),
         }
+    }
+
+    /// Tile relief (settings plus POP_RELIEF=1).
+    pub fn tile_relief(&self) -> bool {
+        self.tile_relief || std::env::var("POP_RELIEF").is_ok_and(|v| v == "1")
     }
 
     /// Effective render mode and character style (settings plus POP_RENDER / POP_CHARS).
