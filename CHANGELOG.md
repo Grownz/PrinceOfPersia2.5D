@@ -3,6 +3,12 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.6.9] - 2026-11-25
+
+### Fixed
+- The tag `v0.6.8` points at the commit before the version bump (a repository rule keeps tags from being moved); this release carries the same
+  program as v0.6.8, with the version number and sources that match its tag.
+
 ## [0.6.8] - 2026-11-25
 
 ### Added
