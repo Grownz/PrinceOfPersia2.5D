@@ -534,6 +534,28 @@ uses the cutscene player.
     -> world x 4.25..4.8, standing on the floor in front of the actors' line;
   - pillar piece: a front column at px 240..255 -> world x 7.0..7.5, z in front of the actors (it occludes them, as the
     foretable does).
+- **Depth (0.6.7)**: PV 951 is a perspective picture of a deep colonnade, and the set is built as that room, laid out from the picture
+  itself. The camera is level and centred (`cutscene::CAM_*`: x 4.6, y 2.1, z 7.66, the distance at which the 3 x 63 picture lines of
+  2 units fill the 45 degree view), so the plane z 0 (the actors' line 166) is the screen one to one. A thing standing on the floor on
+  picture line L is at depth `floor_z(L)`: the thin arcade columns (base line 146) at z -3.3, the far floor edge (line 144) at -3.8, the
+  front columns (the screen bottom, line 200) at +2.6, the rug of the bed (lines 142..183) from z -4.3 to +1.6. `far_at(depth, px,
+  line)` puts a picture point on a plane that deep so it lands on its own screen position; things on it are `far_scale(depth)` times
+  larger than a picture pixel. Built that way: the floor (palace floor slabs, level with the actors' feet, from z +3.6 back to the
+  far wall and out to the sides), the bed's carpet as a mesh lying on it (one strip per picture line at its floor depth, so it looks
+  as painted), the far wall (black below line 76, night sky above, the dotted band lines 119..131 on it), and **picture layers cut out
+  of PV 951** as unlit cut-out sheets: the arcade (lattice ceiling, the big and the small arches, lines 0..89, on the thin columns'
+  plane, with a mirrored copy on each side for wide views), the left wall with the arched door (lines 88..143, x 0..41, on the far
+  wall; the stars are small quads in the door), and the two front piers with their capitals (x 56 and 241, lines 0..107) on the front
+  columns' plane. The columns are cut out of PV 951 too (per row the run of palette colours 1..7 around the axis): the four thin ones
+  (x 41..57, lines 90..146, axes 49 / 112 / 206 / 269) and the two front ones (x 57..81 / 238..262, lines 107..199, axes 69 / 250), voxel
+  (revolved) or flat (a sheet with the image) like the level columns. Torch holders and flames are scaled to their plane. The set has no
+  tiles of its own any more. Checked against the picture by a screenshot overlay at 16:10 (`POP_CUTSCENE=2`): positions within about 5 px
+  of 320 at the far right (a 16:10 window shows 10.15 instead of 10 units across at z 0). Known: the flat torch holder image (346)
+  carries a grey dotted background piece and is not scaled; the floor tiles are square (the original's joints run to a vanishing
+  point); the actors stand at z 0 and 0.02. The bed picture PV 981 runs off the left edge of the picture; its carpet is completed procedurally
+  (`cutscene::extend_carpet`, 56 px): the tan margin, which already slants down to the left at the picture's edge (2.5 px per row), goes on
+  to the bottom-left corner, its outer rows are the right end's profile mirrored (tan, outline, blue and red border with dashes), the
+  corner towards the bed is the border's red, the bottom border rows go on with their 7-px dash pattern and the bottom margin runs out.
 - Implemented look: with `tile_textures` original the set uses the palace texture mapping of the levels (walls, floors,
   arches, columns 295 for the arcade, torch holders 346, voxel flames with `object_style` voxel); the two front columns
   (951 x 64..73, seen through the bed's gap, and x 245..254 = PV 952) use PV 952's 10-px shaft (voxel revolved or a flat

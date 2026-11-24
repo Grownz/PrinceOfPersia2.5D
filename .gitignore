@@ -30,3 +30,4 @@ tools/room_shots/textures_*.npz
 tools/room_shots/__pycache__/
 tools/room_shots/out2/
 tools/room_shots/out_loose/
+tools/room_shots/out_carpet/

@@ -27,7 +27,14 @@ runtime (e.g. invisible text, wrong tonemapping), add it. Release uses fat LTO a
 
 Package: `powershell -ExecutionPolicy Bypass -File tools/package.ps1` builds the release exe and creates
 `dist/PrinceOfPersia-x64/` (exe + README.txt) and `dist/PrinceOfPersia-x64.zip`. It never copies `Original_data` or any game
-file. Release notes come from `CHANGELOG.md` (`tools/release_notes.ps1 v0.5.0 notes.md`).
+file. Release notes come from `CHANGELOG.md` (`tools/release_notes.ps1 v0.5.0 notes.md`). `-SkipTests` only builds and packs
+(`package.ps1` runs the CI test run `tools/test_without_data.ps1` next to the build otherwise).
+
+Release: bump the versions and `CHANGELOG.md`, run `tools/package.ps1`, commit and push `main`, then publish with the local zip:
+`gh release create vX.Y.Z --target <commit> --title vX.Y.Z --notes-file notes.md dist/PrinceOfPersia-x64.zip` (this creates the tag).
+`.github/workflows/release.yml` runs on the tag, sees the zip on the release and stops after a few seconds; without a zip it builds one
+(`package.ps1 -SkipTests`, the tests ran in CI) with the dependencies from the cache that `release-cache.yml` keeps on `main`. Pushing the
+tag before the release exists makes the workflow build and upload its own zip (about 10 minutes with the cache, 30 without).
 
 ## Checking the levels against the original
 

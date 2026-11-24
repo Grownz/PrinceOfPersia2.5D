@@ -1,16 +1,20 @@
 # Builds the release exe and packs dist/PrinceOfPersia-x64/ (exe, README.txt) plus dist/PrinceOfPersia-x64.zip.
 # Never copies Original_data or any other game file: players supply their own copy.
+# -SkipTests: only build and pack (the release workflow: CI has run the tests on that commit already)
+param([switch]$SkipTests)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 # the tests as CI runs them (no game data) in parallel with the release build; both must succeed
-$tests = Start-Job { & $using:PSScriptRoot\test_without_data.ps1 *>&1 }
+if (-not $SkipTests) { $tests = Start-Job { & $using:PSScriptRoot\test_without_data.ps1 *>&1 } }
 
 cargo build --release -p pop-app
 $built = $LASTEXITCODE
-Receive-Job $tests -Wait -ErrorVariable testErr | Select-Object -Last 8
-if ($tests.State -ne 'Completed' -or $testErr) { throw "tests failed: $testErr" }
+if ($tests) {
+    Receive-Job $tests -Wait -ErrorVariable testErr | Select-Object -Last 8
+    if ($tests.State -ne 'Completed' -or $testErr) { throw "tests failed: $testErr" }
+}
 if ($built -ne 0) { throw "cargo build failed" }
 
 $out = Join-Path $root 'dist\PrinceOfPersia-x64'

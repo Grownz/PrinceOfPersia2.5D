@@ -3,6 +3,20 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.6.7] - 2026-11-24
+
+### Added
+- The princess chamber of the cutscenes is rebuilt from the original picture PV 951: a level camera in which the picture plane is the screen,
+  the floor, the carpet (lying on it), the far wall with the dotted band and the arcade columns at the depths the painted lines give,
+  picture layers cut out of PV 951 for the arches, the left wall with its door and the front piers, thin and front columns cut out of the
+  picture as voxel and flat variants. Compared with the picture by an overlay: the same room. The carpet, which the picture cuts at its left
+  edge, gets its slanted left end (procedural, from the picture's own margin and border).
+
+### Changed
+- Release build time: the release workflow skips the tests (CI runs them on the commit), reads a release cache that the new workflow
+  `release-cache.yml` keeps on `main`, and does nothing when the release already carries a locally built zip
+  (`tools/package.ps1 -SkipTests` for the workflow; the local release procedure is in docs/DEVELOPING.md).
+
 ## [0.6.6] - 2026-11-24
 
 ### Changed

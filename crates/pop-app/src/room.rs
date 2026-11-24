@@ -143,13 +143,15 @@ impl<'a> B<'a, '_, '_> {
     fn voxel_column(&mut self, id: Option<u16>, left: f32, y0: f32, y1: f32, z: f32) -> bool {
         let Some(((items, set), id)) = self.items.zip(id) else { return false };
         let Some(c) = items.columns[set].get(&id) else { return false };
-        self.column_mesh(c, &items.mat, left, y0, y1, z);
+        self.column_mesh(c, &items.mat, left, y0, y1, z, 1.0);
         true
     }
 
     /// A voxel column mesh: image left edge at `left`, rows stretched over y0..y1, axis at depth `z`.
-    fn column_mesh(&mut self, c: &crate::items::Column, mat: &Handle<StandardMaterial>, left: f32, y0: f32, y1: f32, z: f32) {
-        let s = Vec3::new(1.0 / 32.0, (y1 - y0) / c.h as f32, 1.0 / 32.0);
+    /// `k` widens and deepens the column (1 = one voxel is a pixel: the chamber's far columns are `k` times farther than the plane
+    /// the picture is drawn for).
+    fn column_mesh(&mut self, c: &crate::items::Column, mat: &Handle<StandardMaterial>, left: f32, y0: f32, y1: f32, z: f32, k: f32) {
+        let s = Vec3::new(k / 32.0, (y1 - y0) / c.h as f32, k / 32.0);
         let e = self.cmds.spawn((Mesh3d(c.mesh.clone()), MeshMaterial3d(mat.clone()), Transform::from_translation(self.origin + Vec3::new(left, y0, z - c.az * s.z)).with_scale(s))).id();
         self.tag(e);
     }
@@ -273,6 +275,25 @@ pub fn spawn_chamber(cmds: &mut Commands, level: &Level, room: usize, origin: Ve
     spawn_tiles(&mut chamber_builder(cmds, room, origin, p), level, &[], room);
 }
 
+/// Depth of the chamber: the far wall and the end of its floor (the original's painted room is a deep colonnade).
+pub const CHAMBER_DEPTH: f32 = 3.8;
+/// z of the chamber's arcade, its far columns, torch holders and window wall.
+pub const ARCADE_Z: f32 = -3.3;
+/// The chamber's floor: one palace floor slab per tile, level with the actors' feet (y 0), from z `front` back to the far wall and
+/// out beyond the picture's width, so it runs as the original's perspective floor does.
+pub fn chamber_floor(cmds: &mut Commands, p: &Palette, origin: Vec3, front: f32) {
+    let mut b = chamber_builder(cmds, 0, origin, p);
+    let mat = plain_floor(&b);
+    let mesh = b.p.slab_mesh.get(&mat.id()).unwrap_or(&b.p.cube).clone();
+    let rows = (front + CHAMBER_DEPTH).ceil() as i32;
+    for col in -8..18 {
+        for k in 0..rows {
+            let z1 = front - k as f32;
+            b.put_mesh(mesh.clone(), &mat, Vec3::new(col as f32, -SLAB, (z1 - 1.0).max(-CHAMBER_DEPTH)), Vec3::new(col as f32 + 1.0, 0.0, z1));
+        }
+    }
+}
+
 /// A plain box of the room palette in the chamber set (`mat`: "stone", "dark", "wood", "flame"; anything else = metal).
 pub fn chamber_box(cmds: &mut Commands, p: &Palette, mat: &str, lo: Vec3, hi: Vec3) {
     let m = match mat { "stone" => p.stone.clone(), "dark" => p.dark.clone(), "wood" => p.wood.clone(), "flame" => p.flame.clone(), _ => p.metal.clone() };
@@ -281,30 +302,33 @@ pub fn chamber_box(cmds: &mut Commands, p: &Palette, mat: &str, lo: Vec3, hi: Ve
 
 /// A front column of the chamber set from the cutscene's own column image (PV 952; the palace set has no 10 px column),
 /// `at` (world) = image left edge, bottom, axis depth; up to `top` (world y). `vox` with voxel columns (as the levels'
-/// voxel columns), else the flat image `tex`; false with procedural tiles (the caller keeps its box).
-pub fn chamber_column(cmds: &mut Commands, p: &Palette, vox: &crate::items::Column, tex: &Tex, at: Vec3, top: f32) -> bool {
+/// voxel columns), else the flat image `tex`; `k` = scale of a pixel (1 on the tile row's plane); false with procedural tiles (the caller keeps its box).
+pub fn chamber_column(cmds: &mut Commands, p: &Palette, vox: &crate::items::Column, tex: &Tex, at: Vec3, top: f32, k: f32) -> bool {
     let mut b = chamber_builder(cmds, 0, Vec3::ZERO, p);
     let Some((items, set)) = b.items.filter(|_| b.tiles.is_some()) else { return false };
     if !items.columns[set].is_empty() {
-        b.column_mesh(vox, &items.mat, at.x, at.y, top, at.z);
+        b.column_mesh(vox, &items.mat, at.x, at.y, top, at.z, k);
     } else {
-        let w = px_w(tex.w);
-        b.put(&tex.mat, at - Vec3::new(0.0, 0.0, w / 2.0), Vec3::new(at.x + w, top, at.z + w / 2.0));
+        // a cut-out image on a box: as deep as wide, but as a sheet where it is scaled (its side faces would show the whole image squeezed)
+        let (w, d) = (px_w(tex.w) * k, if k == 1.0 { px_w(tex.w) } else { 0.02 });
+        b.put(&tex.mat, at - Vec3::new(0.0, 0.0, d / 2.0), Vec3::new(at.x + w, top, at.z + d / 2.0));
     }
     true
 }
 
 /// A torch holder (346) in the chamber set as in the levels, `top` = the level's flame anchor (world: cup centre x, y the
 /// flame stands on): the voxel holder with voxel objects, else the flat image; false with procedural tiles (keep the box).
-pub fn chamber_holder(cmds: &mut Commands, p: &Palette, top: Vec3) -> bool {
+pub fn chamber_holder(cmds: &mut Commands, p: &Palette, top: Vec3, k: f32) -> bool {
     let mut b = chamber_builder(cmds, 0, Vec3::ZERO, p);
     if let Some((items, h, axis)) = b.objects().filter(|(i, _)| !i.flames.is_empty()).and_then(|(i, o)| Some((i, o.ids.get(&346)?.clone(), o.holder_axis))) {
-        let e = b.object(&h, &items.mat, Vec3::new(top.x - px_w(axis), top.y - px_h(h.h as f32 - 2.0), TORCH_Z), 1.0);
-        b.cmds.entity(e).insert(bevy::light::NotShadowCaster);
+        let lo = Vec3::new(top.x - px_w(axis) * k, top.y - px_h(h.h as f32 - 2.0) * k, CHAMBER_TORCH_Z);
+        let e = b.object(&h, &items.mat, lo, 1.0);
+        // `k` times larger: the holder hangs on a plane `k` times farther than the picture's
+        b.cmds.entity(e).insert((Transform::from_translation(lo).with_scale(voxel_px() * k), bevy::light::NotShadowCaster));
         return true;
     }
     let Some(s) = b.tiles.map_or(vec![], |s| s.pieces(Tile::Torch, 0)).into_iter().find(|(r, _)| *r == Role::TorchStub) else { return false };
-    b.sprite(&s.1, Vec3::new(top.x - 0.5, top.y - px_h(s.1.h - 2.0), -0.86));
+    b.sprite(&s.1, Vec3::new(top.x - 0.5, top.y - px_h(s.1.h - 2.0), CHAMBER_TORCH_Z - 0.09));
     true
 }
 
@@ -312,7 +336,7 @@ pub fn chamber_holder(cmds: &mut Commands, p: &Palette, top: Vec3) -> bool {
 /// a flame relative to its `top` (as `chamber_holder`), one voxel = one pixel (scale `voxel_px`).
 pub fn chamber_flames(p: &Palette) -> Option<(&[crate::items::Model], &Handle<StandardMaterial>, Vec3)> {
     let i = p.items.as_ref().filter(|i| !i.flames.is_empty() && i.objects[1].ids.contains_key(&346))?;
-    Some((&i.flames, &i.flame_mat, Vec3::new(-px_w(FLAME_AXIS), -px_h(FLAME_SINK), TORCH_Z)))
+    Some((&i.flames, &i.flame_mat, Vec3::new(-px_w(FLAME_AXIS), -px_h(FLAME_SINK), CHAMBER_TORCH_Z)))
 }
 
 /// Scale of a voxel model whose one voxel is one screen pixel (1/32 unit across and deep, TILE_H/63 up).
@@ -387,7 +411,9 @@ fn left_tile(level: &Level, room: usize, idx: usize) -> (Tile, u8) {
 /// Every light is in front of it, so in the levels it casts no shadow (it only filled the shadow maps).
 fn back_wall(b: &mut B) {
     let p = b.p;
-    let e = b.put_id(&p.dark, Vec3::new(-0.5, -SLAB, BACK_WALL.0), Vec3::new(10.5, 3.0 * TILE_H, BACK_WALL.1));
+    // the chamber is a deep colonnade: its far wall stands at CHAMBER_DEPTH and spans the whole view
+    let (z, x) = if b.chamber { ((-CHAMBER_DEPTH - 0.1, -CHAMBER_DEPTH), (-6.0, 16.0)) } else { (BACK_WALL, (-0.5, 10.5)) };
+    let e = b.put_id(&p.dark, Vec3::new(x.0, -SLAB, z.0), Vec3::new(x.1, 3.0 * TILE_H, z.1));
     if !b.chamber {
         b.cmds.entity(e).insert(bevy::light::NotShadowCaster);
     }
@@ -703,7 +729,9 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                 }
             }
             None => {
-                floor(b, &fl);
+                if !b.chamber {
+                    floor(b, &fl); // the chamber's arcade floats: no floor slab through the middle of the view
+                }
                 // palace lattice support: its arch panel on the back wall instead of the stone column
                 match piece(Role::BackPanel) {
                     Some(_) => back_panel(b, &piece, x, y, 0.0),
@@ -719,7 +747,9 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             }
         }
         SmallLattice | LatticeLeft | LatticeRight => {
-            floor(b, &fl);
+            if !b.chamber {
+                floor(b, &fl);
+            }
             // record +2 = -10: the 43-px arch pieces stand 10 px up, so with the 7-px frieze they fill the 60 px under the slab above
             match piece(Role::BackPanel) {
                 Some(_) => back_panel(b, &piece, x, y, 10.0),
@@ -905,6 +935,8 @@ const SPIKE_ROWS: [f32; 3] = [0.4, 0.05, -0.3];
 const FLOOR_SHEAR: f32 = 26.0;
 const JAW_DIAG_Z: f32 = 0.25;
 const TORCH_Z: f32 = -0.77;
+/// The same in the chamber: on the far arcade plane.
+const CHAMBER_TORCH_Z: f32 = ARCADE_Z + 0.1;
 const FLAME_AXIS: f32 = 7.5;
 const FLAME_SINK: f32 = 1.0;
 const DEBRIS_LAYER: f32 = 1.0 / 32.0;

@@ -8,7 +8,8 @@ opt-level = 3
 [profile.dev]
 opt-level = 1
 
-# Release: thin LTO keeps link times reasonable; default codegen-units (parallel) for build speed.
+# Release: fat LTO and one codegen unit (smallest, fastest exe; the link is slow: about 8 minutes on a fast machine). Measure
+# before changing (POP_BENCH, POP_PERF): thin LTO would link faster.
 [profile.release]
 opt-level = 3
 lto = "fat"

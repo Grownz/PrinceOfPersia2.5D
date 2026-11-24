@@ -16,7 +16,7 @@ use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use pop_core::cutscene::{Actor, Cutscene, End, Scene, Slot, SpriteFile, STAR_COLOURS};
-use pop_core::{dat::Dat, image, level::Tile};
+use pop_core::{dat::Dat, image};
 use std::collections::HashMap;
 
 /// Where the chamber set is built (far below the level rooms, so neither lights nor geometry mix).
@@ -100,6 +100,35 @@ fn wy(line: f32) -> f32 {
     (FLOOR_Y - line) * TILE_H / pop_core::level::TILE_H_PX as f32
 }
 
+/// Where a point of the original's picture (screen px, screen line) lands on the arcade plane `ARCADE_Z`: the camera (`camera_on_set`)
+/// sees that plane `(7.8 + 2.6) / 7.8` times farther away, so x and y are spread from the camera axis by that factor to
+/// appear at the same screen position as the painted picture. (x, y above the set's floor, relative to `ORIGIN`.)
+fn far(px: f32, line: f32) -> (f32, f32) {
+    far_at(-room::ARCADE_Z, px, line)
+}
+
+/// The same for a plane `depth` units behind the picture plane (the far wall: `room::CHAMBER_DEPTH`).
+fn far_at(depth: f32, px: f32, line: f32) -> (f32, f32) {
+    let k = far_scale(depth);
+    (CAM_X + (wx(px) - CAM_X) * k, CAM_Y - (CAM_Y - wy(line)) * k)
+}
+
+/// How much larger a picture pixel is on a plane `depth` behind the picture plane.
+fn far_scale(depth: f32) -> f32 {
+    (CAM_Z + depth) / CAM_Z
+}
+/// The camera of the set: level (no pitch), centred on the picture, at the distance where the 63 px rows of the 3 tile rows of 2
+/// units fill a 45 degree view: the picture plane (z 0) then maps one to one onto the screen (320 x 200 px = 10 x 6.35 units).
+const CAM_X: f32 = 4.6;
+const CAM_Y: f32 = 2.1;
+const CAM_Z: f32 = 7.66;
+
+/// Depth (z) of the floor point the camera sees on picture line `line` (below the horizon, line 100): where the painted room's things
+/// stand (thin columns on line 146, the front columns on 200).
+fn floor_z(line: f32) -> f32 {
+    CAM_Z - CAM_Y * CAM_Z / (CAM_Y - wy(line))
+}
+
 /// Torch x (ds:0E08/0E0C) and flame bottom line.
 const TORCH_X: [f32; 2] = [93.0, 211.0];
 const TORCH_BOTTOM: f32 = 116.0;
@@ -107,29 +136,161 @@ const TORCH_BOTTOM: f32 = 116.0;
 /// and axis depth. The left one stands in the hole PV 981 leaves for it
 /// (bed transparent at x 64..73, the column shows through: axis in the bed plane z 0.52); the right one is in front of the
 /// actors (952, foretable).
+#[allow(dead_code)]
 const FRONT_COLUMNS: [(f32, f32); 2] = [(64.0, 0.52), (245.0, 1.0)];
-/// Bottom line of the bed picture (PV 981, 41 rows from y 142).
-const BED_BOTTOM: f32 = 183.0;
 /// Opaque shaft columns of PV 952 (first, last; 952 is drawn at x 240, so its shaft is 951's right column).
+#[allow(dead_code)]
 const FRONT_SHAFT: (usize, usize) = (5, 14);
+/// Screen x of the thin arcade columns in PV 951.
+const ARCADE_COLUMNS: [f32; 4] = [49.0, 112.0, 206.0, 269.0];
 const STARS: [(f32, f32); 6] = [(20.0, 97.0), (16.0, 104.0), (23.0, 110.0), (17.0, 116.0), (24.0, 120.0), (18.0, 128.0)];
 
-/// Synthetic room for the set: a palace arcade (lattice screens above lattice pillars, as level 14 rooms 2 and 3).
+/// The set's room has no tiles: the architecture is the floor, the thin and front columns and the picture layers around them.
 fn chamber_level(base: &pop_core::level::Level) -> pop_core::level::Level {
-    use Tile::*;
-    let rows: [[Tile; 10]; 3] = [
-        [LatticeSupport, SmallLattice, LatticeSupport, LatticeLeft, LatticeRight, LatticeSupport, SmallLattice, LatticeSupport, SmallLattice, LatticeSupport],
-        [Wall, Empty, Empty, LatticePillar, Empty, Empty, Empty, Empty, LatticePillar, Wall],
-        [Floor, Floor, Floor, LatticePillar, Floor, Floor, Floor, Floor, LatticePillar, Floor],
-    ];
     let mut l = base.clone();
-    for (r, row) in rows.iter().enumerate() {
-        for (c, t) in row.iter().enumerate() {
-            l.fg[r * 10 + c] = *t as u8;
-            l.bg[r * 10 + c] = 0;
+    l.fg = [0; 720];
+    l.bg = [0; 720];
+    l
+}
+
+/// The carpet of the bed as a mesh on the floor (y 0.003): one strip per picture line, each at the floor depth the camera sees that
+/// line at, so the picture appears exactly as painted; u = x / 240 px, v = row / 41.
+fn bed_mesh() -> Mesh {
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    let (rows, w) = (41usize, 240.0f32);
+    let (mut pos, mut uv, mut idx) = (vec![], vec![], vec![]);
+    for r in 0..=rows {
+        let line = 142.0 + r as f32;
+        let z = floor_z(line);
+        let k = far_scale(-z);
+        for (i, px) in [-(CARPET_EXT as f32), w].into_iter().enumerate() {
+            pos.push([CAM_X + (wx(px) - CAM_X) * k, 0.003, z]);
+            uv.push([i as f32, r as f32 / rows as f32]);
+        }
+        if r > 0 {
+            let a = (r as u32 - 1) * 2;
+            idx.extend([a, a + 1, a + 3, a, a + 3, a + 2]);
         }
     }
-    l
+    let n = pos.len();
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; n])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
+        .with_inserted_indices(Indices::U32(idx))
+}
+
+/// A column built from a picture of its rows (`px` = palette indices, 0 transparent, one opaque run per row): the voxel column
+/// (revolved about image x `axis`, like the levels' columns) and the flat textured box variant (cut out where 0).
+#[allow(clippy::too_many_arguments)]
+fn column_assets(meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>, imgs: &mut Assets<Image>, pal: &[[u8; 3]], w: usize, h: usize, px: &[u8], axis: f32) -> (crate::items::Column, crate::tiles::Tex) {
+    let rgb = |p: u8| pal.get(p as usize).copied().unwrap_or([255, 0, 255]);
+    let v = crate::voxel::VoxelModel::revolve(w, h, px, axis);
+    let mesh = meshes.add(v.mesh(|p| {
+        let [r, g, b] = rgb(p);
+        Color::srgb_u8(r, g, b).to_linear().to_f32_array()
+    }));
+    let rgba: Vec<u8> = px.iter().flat_map(|&p| { let c = rgb(p); [c[0], c[1], c[2], if p == 0 { 0 } else { 255 }] }).collect();
+    let mut img = Image::new(Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default());
+    img.sampler = ImageSampler::nearest();
+    let mat = mats.add(StandardMaterial { base_color_texture: Some(imgs.add(img)), perceptual_roughness: 0.9, alpha_mode: AlphaMode::Mask(0.5), ..default() });
+    (crate::items::Column { mesh, h: v.h, az: v.axis_z() }, crate::tiles::Tex { mat, w: w as f32, h: h as f32 })
+}
+
+/// One thin arcade column of PV 951 cut out of the picture: x 41..57 around the shaft axis 49, rows 90..147 (capital, shaft with
+/// its rings, base). Only the contiguous run of column colours (palette 1..7) around the axis of each row is kept; the floor
+/// (8..) and the arch pieces beside the capital are not.
+const THIN: (usize, usize, usize, usize) = (41, 57, 90, 147);
+const THIN_AXIS: usize = 49;
+
+fn thin_column(im: &image::Image) -> (usize, usize, Vec<u8>) {
+    let (x0, x1, y0, y1) = THIN;
+    let w = x1 - x0;
+    let mut px = vec![0u8; w * (y1 - y0)];
+    for y in y0..y1 {
+        let row = &im.pixels[y * im.width..][..im.width];
+        let col = |x: usize| (1..=7).contains(&row[x]);
+        if !col(THIN_AXIS) {
+            continue;
+        }
+        let (mut a, mut b) = (THIN_AXIS, THIN_AXIS);
+        while a > x0 && col(a - 1) {
+            a -= 1;
+        }
+        while b + 1 < x1 && col(b + 1) {
+            b += 1;
+        }
+        px[(y - y0) * w + a - x0..=(y - y0) * w + b - x0].copy_from_slice(&row[a..=b]);
+    }
+    (w, y1 - y0, px)
+}
+
+/// The dotted band across the far wall: PV 951 lines 119..131 from x 52 (colours 8, 9, 10 on black).
+const BAND: (usize, usize, usize) = (52, 119, 132);
+
+/// The front piers of PV 951 above the front columns (x0 = 56 and 241): the body (lattice-framed pier, lines 0..77), the big capital
+/// (78..96) and the lower capital (97..107), as rectangles of the picture.
+const PIERS: [usize; 2] = [56, 241];
+
+fn in_pier(x0: usize, x: usize, y: usize) -> bool {
+    let inside = |a: usize, b: usize| x + 5 >= x0 + a && x + 5 < x0 + b;
+    match y {
+        0..=77 => inside(5, 31),
+        78..=96 => inside(0, 36),
+        97..=107 => inside(7, 29),
+        _ => false,
+    }
+}
+
+/// The front columns of PV 951: x 57..81 / 238..262 around the shaft axes 69 / 250, lines 107..199 (capital, shaft with its rings).
+const FRONT_COL: [(usize, usize); 2] = [(57, 69), (238, 250)];
+const FRONT_TOP: usize = 107;
+
+/// The rows of PV 951 around an axis as one opaque run of column colours (1..7) per row, like `thin_column`.
+fn run_column(im: &image::Image, x0: usize, x1: usize, axis: usize, y0: usize, y1: usize) -> (usize, usize, Vec<u8>) {
+    let w = x1 - x0;
+    let mut px = vec![0u8; w * (y1 - y0)];
+    for y in y0..y1 {
+        let row = &im.pixels[y * im.width..][..im.width];
+        let col = |x: usize| (1..=7).contains(&row[x]);
+        if !col(axis) {
+            continue;
+        }
+        let (mut a, mut b) = (axis, axis);
+        while a > x0 && col(a - 1) {
+            a -= 1;
+        }
+        while b + 1 < x1 && col(b + 1) {
+            b += 1;
+        }
+        px[(y - y0) * w + a - x0..=(y - y0) * w + b - x0].copy_from_slice(&row[a..=b]);
+    }
+    (w, y1 - y0, px)
+}
+
+/// An image layer: the rectangle `x0..x1` x `y0..y1` of PV 951 (index 0 and the pixels `keep` rejects transparent) as an unlit cut-out
+/// sheet on the plane `depth` units behind the picture plane (negative: in front), covering the picture pixels `x0 + shift ..`;
+/// `flip` mirrors the image (the copies beside the picture, so the arcade goes on to the sides of a wide view).
+#[allow(clippy::too_many_arguments)]
+fn layer(cmds: &mut Commands, quad: &Handle<Mesh>, mats: &mut Assets<StandardMaterial>, imgs: &mut Assets<Image>, im: &image::Image, pal: &[[u8; 3]], rect: (usize, usize, usize, usize), keep: &dyn Fn(usize, usize) -> bool, depth: f32, shift: f32, flip: bool) {
+    let (x0, y0, x1, y1) = rect;
+    let (w, h) = (x1 - x0, y1 - y0);
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for y in y0..y1 {
+        for i in 0..w {
+            let x = if flip { x1 - 1 - i } else { x0 + i };
+            let p = im.pixels[y * im.width + x];
+            let c = pal.get(p as usize).copied().unwrap_or([255, 0, 255]);
+            rgba.extend_from_slice(&[c[0], c[1], c[2], if p != 0 && keep(x, y) { 255 } else { 0 }]);
+        }
+    }
+    let mut img = Image::new(Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default());
+    img.sampler = ImageSampler::nearest();
+    let mat = mats.add(StandardMaterial { base_color_texture: Some(imgs.add(img)), unlit: true, alpha_mode: AlphaMode::Mask(0.5), ..default() });
+    let (xa, xb) = (far_at(depth, x0 as f32 + shift, 0.0).0, far_at(depth, x1 as f32 + shift, 0.0).0);
+    let (yt, yb) = (far_at(depth, 0.0, y0 as f32).1, far_at(depth, 0.0, y1 as f32).1);
+    // a single sheet (a box would show its side faces at the edges of a wide view)
+    cmds.spawn((Mesh3d(quad.clone()), MeshMaterial3d(mat), Transform::from_translation(ORIGIN + Vec3::new((xa + xb) / 2.0, (yt + yb) / 2.0, -depth)).with_scale(Vec3::new(xb - xa, yt - yb, 1.0)), Chamber));
 }
 
 /// Everything of the princess chamber that depends on the `Palette` (tiles, columns, torch holders), plus the sky and the
@@ -138,50 +299,90 @@ fn chamber_parts(cmds: &mut Commands, g: &Game, p: &Palette, cut: &Cut, meshes: 
     let level = chamber_level(&g.levels[g.levels.len() - 1]);
     room::spawn_chamber(cmds, &level, 1, ORIGIN, p);
     let o = ORIGIN;
-    // the arched opening on the left with the night sky (stars at ds:0DD6)
-    let sky = mats.add(StandardMaterial { base_color: Color::srgb(0.02, 0.03, 0.16), unlit: true, ..default() });
+    let pv951 = cut.pv.as_ref().and_then(|d| Some((image::decode(d.get(951)?)?, image::palette(d.get(950)?)?)));
+    // depths from the picture: the lines the things stand on (floor_z): the front columns on 200, the thin ones on 146, the far
+    // floor edge on 144
+    let zf = floor_z(200.0);
+    let z = room::ARCADE_Z;
+    room::chamber_floor(cmds, p, o, zf + 1.0);
     let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
+    let sheet = meshes.add(Rectangle::new(1.0, 1.0));
     let boxed = |lo: Vec3, hi: Vec3| Transform::from_translation(o + (lo + hi) / 2.0).with_scale(hi - lo);
-    cmds.spawn((Mesh3d(cube.clone()), MeshMaterial3d(sky), boxed(Vec3::new(wx(11.0), wy(150.0), -0.89), Vec3::new(wx(34.0), wy(86.0), -0.88)), Chamber));
+    let sky = mats.add(StandardMaterial { base_color: Color::srgb(0.02, 0.03, 0.16), unlit: true, ..default() });
+    let black = mats.add(StandardMaterial { base_color: Color::BLACK, unlit: true, ..default() });
+    let (top, d) = (3.0 * TILE_H, room::CHAMBER_DEPTH);
+    // the far wall: black below the arcade's arches (line 76), the night sky above them (it shows through the arches' transparent
+    // dither); the wall and the window of the left wall are one plane
+    cmds.spawn((Mesh3d(cube.clone()), MeshMaterial3d(sky), boxed(Vec3::new(-12.0, far_at(d, 0.0, 76.0).1, -d), Vec3::new(22.0, top * 2.0, -d + 0.01)), Chamber));
+    cmds.spawn((Mesh3d(cube.clone()), MeshMaterial3d(black), boxed(Vec3::new(-12.0, -room::SLAB, -d), Vec3::new(22.0, far_at(d, 0.0, 76.0).1, -d + 0.01)), Chamber));
     let star_mats: Vec<Handle<StandardMaterial>> =
         [0.35, 0.7, 1.0].iter().map(|&v| mats.add(StandardMaterial { base_color: Color::srgb(v, v, v), emissive: LinearRgba::rgb(v * 3.0, v * 3.0, v * 3.0), unlit: true, ..default() })).collect();
     for (i, &(x, y)) in STARS.iter().enumerate() {
-        let c = Vec3::new(wx(x), wy(y), -0.87);
-        cmds.spawn((Mesh3d(cube.clone()), MeshMaterial3d(star_mats[2].clone()), Transform::from_translation(o + c).with_scale(Vec3::splat(0.05)), StarDot(i), Chamber));
+        let (sx, sy) = far_at(d - 0.05, x, y);
+        cmds.spawn((Mesh3d(cube.clone()), MeshMaterial3d(star_mats[2].clone()), Transform::from_translation(o + Vec3::new(sx, sy, -d + 0.05)).with_scale(Vec3::splat(0.07)), StarDot(i), Chamber));
     }
     cmds.insert_resource(StarMats(star_mats));
-    // the two front columns of PV 951 (PV 952 is the right one), built from PV 952: voxel (revolved like the level columns) or flat
-    // (only its 10 px shaft, every row opaque: revolved about its centre, or a solid textured box)
-    let front = cut.pv.as_ref().and_then(|d| Some((image::decode(d.get(952)?)?, image::palette(d.get(950)?)?))).map(|(im, pal)| {
-        let rgb = |p: u8| pal.get(p as usize).copied().unwrap_or([255, 0, 255]);
-        let w = FRONT_SHAFT.1 + 1 - FRONT_SHAFT.0;
-        let px: Vec<u8> = im.pixels.chunks(im.width).flat_map(|r| r[FRONT_SHAFT.0..=FRONT_SHAFT.1].to_vec()).collect();
-        let v = crate::voxel::VoxelModel::revolve(w, im.height, &px, w as f32 / 2.0);
-        let mesh = meshes.add(v.mesh(|p| {
-            let [r, g, b] = rgb(p);
-            Color::srgb_u8(r, g, b).to_linear().to_f32_array()
-        }));
-        let rgba: Vec<u8> = px.iter().flat_map(|&p| rgb(p).into_iter().chain([255])).collect();
-        let mut img = Image::new(Extent3d { width: w as u32, height: im.height as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default());
-        img.sampler = ImageSampler::nearest();
-        let mat = mats.add(StandardMaterial { base_color_texture: Some(imgs.add(img)), perceptual_roughness: 0.9, ..default() });
-        (crate::items::Column { mesh, h: v.h, az: v.axis_z() }, crate::tiles::Tex { mat, w: w as f32, h: im.height as f32 })
+    if let Some((im, pal)) = pv951.as_ref() {
+        let none: &dyn Fn(usize, usize) -> bool = &|_, _| true;
+        // the arcade: lattice ceiling, the big arch and the small ones, the capitals on the thin columns (lines 0..89), on the plane of
+        // the thin columns; without the front piers; a mirrored copy on each side for a wide view
+        let arcade: &dyn Fn(usize, usize) -> bool = &|x, y| !PIERS.iter().any(|&x0| in_pier(x0, x, y));
+        // (columns 1..318: the picture's outermost columns are a dark edge line, which the mirror would double)
+        layer(cmds, &sheet, mats, imgs, im, pal, (1, 0, 319, 90), arcade, -z, 0.0, false);
+        layer(cmds, &sheet, mats, imgs, im, pal, (1, 0, 319, 90), arcade, -z, 318.0, true);
+        layer(cmds, &sheet, mats, imgs, im, pal, (1, 0, 319, 90), arcade, -z, -318.0, true);
+        // the left wall with its arched door (frame lines 88..143, x 0..41) on the far wall's plane, the door's inside transparent
+        layer(cmds, &sheet, mats, imgs, im, pal, (0, 88, 41, 144), none, d - 0.03, 0.0, false);
+        // the dotted band across the far wall (lines 119..131 from x 52), repeated sideways
+        let band: &dyn Fn(usize, usize) -> bool = &|x, y| x >= BAND.0 && y >= BAND.1 && y < BAND.2 && (8..=10).contains(&im.pixels[y * im.width + x]);
+        for i in -1..=1 {
+            layer(cmds, &sheet, mats, imgs, im, pal, (BAND.0, BAND.1, 320, BAND.2), band, d - 0.01, (320 - BAND.0) as f32 * i as f32, false);
+        }
+        // the front piers on the plane of the front columns, in front of everything
+        for x0 in PIERS {
+            let keep: &dyn Fn(usize, usize) -> bool = &move |x, y| in_pier(x0, x, y);
+            layer(cmds, &sheet, mats, imgs, im, pal, (x0 - 5, 0, x0 + 31, 108), keep, -zf, 0.0, false);
+        }
+    }
+    // the four thin arcade columns of PV 951 (screen px 49, 112, 206, 269; base line 147, capital top 90), cut out of the picture:
+    // voxel (revolved) or flat like the front columns, `k` times larger because their plane is farther than the picture's
+    let thin = pv951.as_ref().map(|(im, pal)| {
+        let (w, h, px) = thin_column(im);
+        column_assets(meshes, mats, imgs, pal, w, h, &px, (THIN_AXIS - THIN.0) as f32)
     });
-    // from the bed's bottom line (951 runs them to the screen bottom; the gap is open down to there) to the top of the row
-    let (y0, y1) = (o.y + wy(BED_BOTTOM), o.y + TILE_H);
-    for (x, z) in FRONT_COLUMNS {
-        if !front.as_ref().is_some_and(|(v, t)| room::chamber_column(cmds, p, v, t, Vec3::new(o.x + wx(x), y0, o.z + z), y1)) {
-            let r = 5.0 / 32.0;
-            room::chamber_box(cmds, p, "stone", Vec3::new(o.x + wx(x), y0, o.z + z - r), Vec3::new(o.x + wx(x + 10.0), y1, o.z + z + r));
+    let k = far_scale(-z);
+    let tan = mats.add(StandardMaterial { base_color: Color::srgb(0.93, 0.76, 0.48), perceptual_roughness: 0.8, ..default() });
+    let shaft = meshes.add(Cylinder::new(0.07, 1.0));
+    for px in ARCADE_COLUMNS {
+        let (left, y0) = far(px - (THIN_AXIS - THIN.0) as f32, THIN.3 as f32);
+        let y1 = far(px, THIN.2 as f32).1;
+        if !thin.as_ref().is_some_and(|(v, t)| room::chamber_column(cmds, p, v, t, Vec3::new(o.x + left, o.y + y0, o.z + z), o.y + y1, k)) {
+            let (x, _) = far(px, 0.0);
+            cmds.spawn((Mesh3d(shaft.clone()), MeshMaterial3d(tan.clone()), Transform::from_translation(o + Vec3::new(x, (y0 + y1) / 2.0, z)).with_scale(Vec3::new(1.0, y1 - y0, 1.0)), Chamber));
+        }
+    }
+    // the two front columns of PV 951 (capital and shaft, lines 107..199, cut out of the picture like the thin ones), standing on
+    // the floor at the depth of line 200, `kf` times smaller than the picture's pixels
+    let kf = far_scale(-zf);
+    for (x0, axis) in FRONT_COL {
+        let front = pv951.as_ref().map(|(im, pal)| {
+            let (w, h, px) = run_column(im, x0, x0 + 24, axis, FRONT_TOP, 200);
+            column_assets(meshes, mats, imgs, pal, w, h, &px, (axis - x0) as f32)
+        });
+        let (left, y1) = far_at(-zf, x0 as f32, FRONT_TOP as f32);
+        if !front.as_ref().is_some_and(|(v, t)| room::chamber_column(cmds, p, v, t, Vec3::new(o.x + left, o.y, o.z + zf), o.y + y1, kf)) {
+            let r = 5.0 * kf / 32.0;
+            let x = far_at(-zf, axis as f32, 0.0).0;
+            room::chamber_box(cmds, p, "stone", Vec3::new(o.x + x - r, o.y, o.z + zf - r), Vec3::new(o.x + x + r, o.y + y1, o.z + zf + r));
         }
     }
     // torches: holder (the level's 346 with original tiles) and the level light
     for &x in TORCH_X.iter() {
-        let cx = wx(x + 8.0);
-        if !room::chamber_holder(cmds, p, o + Vec3::new(cx, wy(TORCH_BOTTOM), 0.0)) {
-            room::chamber_box(cmds, p, "dark", o + Vec3::new(cx - 0.08, wy(TORCH_BOTTOM) - 0.25, -0.88), o + Vec3::new(cx + 0.08, wy(TORCH_BOTTOM) + 0.02, -0.75));
+        let (cx, cy) = far(x + 8.0, TORCH_BOTTOM);
+        if !room::chamber_holder(cmds, p, o + Vec3::new(cx, cy, 0.0), k) {
+            room::chamber_box(cmds, p, "dark", o + Vec3::new(cx - 0.08, cy - 0.25, room::ARCADE_Z - 0.1), o + Vec3::new(cx + 0.08, cy + 0.02, room::ARCADE_Z + 0.05));
         }
-        cmds.spawn((room::torch_light(), Transform::from_translation(o + Vec3::new(cx, wy(TORCH_BOTTOM) + 0.6, -0.2)), Chamber));
+        cmds.spawn((room::torch_light(), Transform::from_translation(o + Vec3::new(cx, cy + 0.6, room::ARCADE_Z + 0.6)), Chamber));
     }
 }
 
@@ -210,8 +411,8 @@ pub fn setup(mut cmds: Commands, g: Res<Game>, p: Res<Palette>, mut meshes: ResM
     for stream in [false, true] {
         cmds.spawn((Mesh3d(quad.clone()), MeshMaterial3d::<StandardMaterial>::default(), Transform::default(), Visibility::Hidden, GlassSprite(stream)));
     }
-    // the bed on its carpet (PV 981, 240x41 at (0, 142)), a flat sprite standing just in front of the floor
-    cmds.spawn((Mesh3d(quad.clone()), MeshMaterial3d::<StandardMaterial>::default(), Transform::default(), Visibility::Hidden, Bed));
+    // the bed on its carpet (PV 981, 240x41 at (0, 142)): lying on the floor, its rows on the floor lines the camera sees them on
+    cmds.spawn((Mesh3d(meshes.add(bed_mesh())), MeshMaterial3d::<StandardMaterial>::default(), Transform::default(), Visibility::Hidden, Bed));
     cmds.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(10), BackgroundColor(Color::NONE), FadeOverlay));
 }
 
@@ -220,9 +421,46 @@ pub struct StarMats(Vec<Handle<StandardMaterial>>);
 #[derive(Component)]
 pub struct Bed;
 
-/// Camera on the set: the whole bottom row and the arcade above it, slightly from above like the level view.
+/// Camera on the set: level and centred, so the picture plane is the screen (see `CAM_Z`).
 pub fn camera_on_set() -> Transform {
-    Transform::from_translation(ORIGIN + Vec3::new(4.6, 2.5, 7.8)).looking_at(ORIGIN + Vec3::new(4.6, 1.4, 0.0), Vec3::Y)
+    Transform::from_translation(ORIGIN + Vec3::new(CAM_X, CAM_Y, CAM_Z)).looking_at(ORIGIN + Vec3::new(CAM_X, CAM_Y, 0.0), Vec3::Y)
+}
+
+/// The bed picture (PV 981, 240 x 41) runs off the picture's left edge; a wide view shows its cut. The carpet's left end is completed
+/// the way the picture shows its beginning (the tan margin already slants down to the left there, 2.5 px per row): below line 18
+/// the margin goes on down to the bottom-left corner, its outer rows are the right end's profile mirrored (tan, outline, the blue and
+/// red border with its dashes), the corner between it and the bed is the border's red, the bottom border rows go on with their
+/// 7-px dash pattern and the bottom margin runs out to the corner. `CARPET_EXT` px are added to the left.
+const CARPET_EXT: usize = 56;
+
+fn extend_carpet(im: &image::Image) -> image::Image {
+    let (w, h, ext) = (im.width, im.height, CARPET_EXT);
+    let nw = w + ext;
+    let mut px = vec![0u8; nw * h];
+    for y in 0..h {
+        px[y * nw + ext..(y + 1) * nw].copy_from_slice(&im.pixels[y * w..(y + 1) * w]);
+    }
+    if w >= 233 && h >= 41 {
+        let at = |x: usize, y: usize| im.pixels[y * w + x];
+        let (red, tan) = (at(0, 35), at(0, 40));
+        for r in 19..41usize {
+            let xe = ((15.0 - 2.5 * (r as f32 - 12.0)).floor() as i32 + ext as i32).max(0) as usize;
+            if r >= 37 {
+                px[r * nw + xe..r * nw + ext].fill(tan);
+                continue;
+            }
+            let xt = (0..w).rev().find(|&x| at(x, r) != 0).unwrap_or(w - 1).max(14);
+            for i in 0..14 {
+                if xe + i < ext {
+                    px[r * nw + xe + i] = at(xt - i, r);
+                }
+            }
+            for x in xe + 14..ext {
+                px[r * nw + x] = if r >= 34 { at(150 + (x as i32 - ext as i32 - 150).rem_euclid(7) as usize, r) } else { red };
+            }
+        }
+    }
+    image::Image { width: nw, height: h, bpp: im.bpp, pixels: px }
 }
 
 /// Material of an original image: colour 0 transparent, unlit like the level sprites.
@@ -233,6 +471,7 @@ fn material(c: &mut Cut, imgs: &mut Assets<Image>, mats: &mut Assets<StandardMat
     let dat = match file { 0 => c.pv.as_ref(), 1 => c.kid.as_ref(), _ => c.prince.as_ref() }?;
     let pal = image::palette(dat.get(pal_id)?)?;
     let im = image::decode(dat.get(id)?)?;
+    let im = if (file, id) == (0, 981) { extend_carpet(&im) } else { im };
     let rgba: Vec<u8> = im.pixels.iter().flat_map(|&p| {
         let [r, g, b] = pal.get(p as usize).copied().unwrap_or([255, 0, 255]);
         [r, g, b, if p == 0 { 0 } else { 255 }]
@@ -267,13 +506,15 @@ fn voxel(c: &mut Cut, meshes: &mut Assets<Mesh>, file: u8, id: u16, pal_id: u16,
 }
 
 /// Voxel actors stand a little behind the sprite depth would put their centre: their back clears the bed carpet (z 0.52)
-/// and the figure stays behind the hourglass, which moves to `GLASS_Z_VOXEL`.
+/// and the figure stays behind the hourglass.
 const VOXEL_DZ: f32 = 0.04;
-const GLASS_Z_VOXEL: f32 = 0.84;
 
-/// Place a sprite: left edge `x` (world), bottom `y`, mirrored when `flip`.
+/// Place a sprite on the plane `z`: left edge `x` and bottom `y` are those of the picture plane (z 0, `wx` / `wy`); the plane's
+/// perspective scale moves and sizes it so it lands on the same screen position. Mirrored when `flip`.
 fn place(t: &mut Transform, x: f32, y: f32, z: f32, w: f32, h: f32, flip: bool) {
-    let (sw, sh) = (w / 32.0, h * TILE_H / pop_core::level::TILE_H_PX as f32);
+    let k = far_scale(-z);
+    let (x, y) = (CAM_X + (x - CAM_X) * k, CAM_Y - (CAM_Y - y) * k);
+    let (sw, sh) = (w / 32.0 * k, h * TILE_H / pop_core::level::TILE_H_PX as f32 * k);
     t.translation = ORIGIN + Vec3::new(x + sw / 2.0, y + sh / 2.0, z);
     t.scale = Vec3::new(if flip { -sw } else { sw }, sh, 1.0);
 }
@@ -383,12 +624,13 @@ pub fn render(
             let (file, id, pal) = cs.sprite(a)?;
             let file = if file == SpriteFile::Pv { 0 } else { 1 };
             let (m, w, h) = material(c, &mut imgs, &mut mats, file, id, pal)?;
-            actor(cs, a, w, h, if *slot == Slot::Kid { 0.6 } else { 0.62 }, &mut t);
+            actor(cs, a, w, h, if *slot == Slot::Kid { 0.0 } else { 0.02 }, &mut t);
             // voxel style: the same rectangle, mesh origin at its bottom-left corner, one voxel = one pixel (kid.rs `show`)
             if let Some(v) = voxels.then(|| voxel(c, &mut meshes, file, id, pal, t.scale.x < 0.0, set.smooth_normals())).flatten() {
                 let half = Vec3::new(t.scale.x.abs(), t.scale.y, 0.0) / 2.0;
+                let k = t.scale.x.abs() * 32.0 / w; // the plane's scale (place)
                 t.translation = t.translation - half + Vec3::Z * VOXEL_DZ;
-                t.scale = Vec3::new(1.0 / 32.0, TILE_H / pop_core::level::TILE_H_PX as f32, 1.0 / 32.0);
+                t.scale = Vec3::new(1.0 / 32.0, TILE_H / pop_core::level::TILE_H_PX as f32, 1.0 / 32.0) * k;
                 mesh.set_if_neq(Mesh3d(v));
                 return Some(c.voxel_mat.clone());
             }
@@ -406,9 +648,9 @@ pub fn render(
         let shown = id.and_then(|id| {
             let (m, w, h) = material(c, &mut imgs, &mut mats, 0, id, 950)?;
             if *is_stream {
-                place(&mut t, wx(160.0), wy(164.0), 0.9, w, h, false);
+                place(&mut t, wx(160.0), wy(164.0), floor_z(168.0) + 0.05, w, h, false);
             } else {
-                place(&mut t, wx(152.0), 0.0, if voxels { GLASS_Z_VOXEL } else { 0.58 + 0.2 }, w, h, false); // ybottom 168: on the floor, a little nearer
+                place(&mut t, wx(152.0), wy(168.0), floor_z(168.0), w, h, false); // ybottom 168: on the floor, where the camera sees that line
             }
             Some(m)
         });
@@ -421,12 +663,14 @@ pub fn render(
         let frame = cs.map_or(((idle / 6 + *i as u32 * 5) % 9) as u8, |cs| cs.torch[*i]);
         let shown = match vflames {
             Some((frames, fmat, rel)) => on_set.then(|| {
-                *t = Transform::from_translation(ORIGIN + Vec3::new(wx(TORCH_X[*i] + 8.0), wy(TORCH_BOTTOM), 0.0) + rel).with_scale(room::voxel_px());
+                let (fx, fy) = far(TORCH_X[*i] + 8.0, TORCH_BOTTOM);
+                let k = far_scale(-room::ARCADE_Z);
+                *t = Transform::from_translation(ORIGIN + Vec3::new(fx + rel.x * k, fy + rel.y * k, rel.z)).with_scale(room::voxel_px() * k);
                 mesh.set_if_neq(Mesh3d(frames[frame as usize % frames.len()].mesh.clone()));
                 fmat.clone()
             }),
             None => on_set.then(|| material(c, &mut imgs, &mut mats, 2, 151 + frame as u16, 150)).flatten().map(|(m, w, h)| {
-                place(&mut t, wx(TORCH_X[*i]), wy(TORCH_BOTTOM), -0.7, w, h, false);
+                place(&mut t, wx(TORCH_X[*i]), wy(TORCH_BOTTOM), room::ARCADE_Z + 0.2, w, h, false);
                 m
             }),
         };
@@ -442,7 +686,8 @@ pub fn render(
     }
     for (mut t, mut vis, mut mat) in &mut q.p4() {
         let shown = on_set.then(|| material(c, &mut imgs, &mut mats, 0, 981, 980)).flatten().map(|(m, w, h)| {
-            place(&mut t, wx(0.0), wy(BED_BOTTOM), 0.52, w, h, false);
+            let _ = (w, h);
+            *t = Transform::from_translation(ORIGIN);
             if *mode != crate::settings::RenderMode::Enhanced {
                 return m;
             }
@@ -522,19 +767,53 @@ mod tests {
         use pop_core::level::{Level, Tile};
         // VPALACE (texture_inventory 2.2): the base-200 ids plus the palace slots 1201..1213
         let palace = |id: u16| id < 1200 || (1201..=1213).contains(&id);
+        // the set's room has no tiles of its own: floor, columns and picture layers are built around it
         let l = super::chamber_level(&Level::parse(&[0u8; 4096]).expect("zero level"));
-        for idx in 0..10 {
-            let t = l.tile_at(1, idx).kind;
-            let arch = pieces(t, 0, true, palace).iter().any(|(r, _)| *r == Role::BackPanel);
-            let lattice = matches!(t, Tile::LatticeSupport | Tile::SmallLattice | Tile::LatticeLeft | Tile::LatticeRight);
-            assert_eq!(arch, lattice, "{t:?}");
-            assert_eq!(pieces(t, 0, true, palace).iter().any(|(r, _)| *r == Role::BackTop), lattice, "{t:?}");
-        }
-        assert_eq!(l.tile_at(1, 13).kind, Tile::LatticePillar);
+        assert!((0..30).all(|i| l.tile_at(1, i).kind == Tile::Empty));
         assert_eq!(tile_images(Tile::LatticePillar, 0, palace).1, Some(295));
         assert_eq!(tile_images(Tile::Pillar, 0, palace).1, Some(295));
         assert_eq!(pieces(Tile::Torch, 0, true, palace), vec![(Role::TorchStub, 346)]);
         assert!(tile_images(Tile::Floor, 0, palace).0.is_some());
+    }
+
+    /// The camera sees the painted room's things where the picture puts them: the picture plane maps one to one, the thin columns stand on
+    /// line 146 at `ARCADE_Z`, the front columns on line 200 at the depth where the floor ends on the screen, and a point on a deeper
+    /// plane lands on its own screen position (so layers and columns made for the picture line up).
+    #[test]
+    fn the_set_is_laid_out_from_the_picture() {
+        assert!(super::floor_z(166.0).abs() < 1e-4, "the actors' line is the picture plane");
+        assert!((super::floor_z(146.0) - crate::room::ARCADE_Z).abs() < 0.1, "{}", super::floor_z(146.0));
+        assert!((super::floor_z(200.0) - 2.6).abs() < 0.1, "{}", super::floor_z(200.0));
+        assert!(super::floor_z(144.0) < -3.5 && super::floor_z(144.0) > -4.2, "the far floor edge");
+        let (x, y) = super::far_at(0.0, 100.0, 50.0);
+        assert!((x - super::wx(100.0)).abs() < 1e-5 && (y - super::wy(50.0)).abs() < 1e-5);
+        // a point on a plane behind it, seen from the camera, is on the screen position of the picture's point
+        let (px, py) = super::far_at(3.3, 40.0, 120.0);
+        let k = super::far_scale(3.3);
+        assert!(((px - super::CAM_X) / k - (super::wx(40.0) - super::CAM_X)).abs() < 1e-4 && ((py - super::CAM_Y) / k - (super::wy(120.0) - super::CAM_Y)).abs() < 1e-4);
+    }
+
+    /// The carpet's completed left end keeps the picture and adds the slanted end below line 18 (checked on a made-up 240 x 41 picture).
+    #[test]
+    fn the_carpet_gets_its_left_end() {
+        let (w, h) = (240usize, 41usize);
+        let mut pixels = vec![0u8; w * h];
+        for y in 12..41 {
+            for x in 0..233 {
+                pixels[y * w + x] = 1 + ((x + y) % 7) as u8;
+            }
+        }
+        let im = pop_core::image::Image { width: w, height: h, bpp: 4, pixels: pixels.clone() };
+        let e = super::extend_carpet(&im);
+        let ext = super::CARPET_EXT;
+        assert_eq!((e.width, e.height), (w + ext, h));
+        assert!((0..h).all(|y| e.pixels[y * e.width + ext..(y + 1) * e.width] == pixels[y * w..(y + 1) * w]), "the picture is kept");
+        let row = |y: usize| &e.pixels[y * e.width..y * e.width + ext];
+        assert!(row(12).iter().all(|&p| p == 0) && row(18).iter().all(|&p| p == 0), "above line 19 nothing is added");
+        assert!(row(40).iter().filter(|&&p| p != 0).count() > 50, "the bottom margin runs out to the corner");
+        // the end slants: the first opaque pixel moves left by 2.5 px per row
+        let first = |y: usize| row(y).iter().position(|&p| p != 0).unwrap();
+        assert!(first(22) > first(30) && first(30) > first(36), "{} {} {}", first(22), first(30), first(36));
     }
 
     /// The gap left of the bed carpet: PV 981 is fully transparent exactly where PV 951 has its left front column (x 64..73,

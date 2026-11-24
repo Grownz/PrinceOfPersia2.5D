@@ -1,5 +1,9 @@
 name: Release
 
+# A tag push builds and publishes the release zip, unless the release already carries it: the usual way is to build the zip locally
+# (tools/package.ps1), push main and run `gh release create vX --target <commit> dist/PrinceOfPersia-x64.zip` (that creates the tag; see
+# docs/DEVELOPING.md), then this workflow only checks and stops. Without a local zip it builds one (about 10 minutes with the cache that
+# release-cache.yml keeps on main).
 on:
   push:
     tags: ['v*']
@@ -11,12 +15,29 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
+      - name: Does the release already carry the zip?
+        id: have
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $n = gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" --json assets --jq '[.assets[].name | select(. == "PrinceOfPersia-x64.zip")] | length' 2>$null
+          "have=$(if ($n -eq '1') { 'true' } else { 'false' })" >> $env:GITHUB_OUTPUT
+          "zip already on the release: $n"
       - uses: actions/checkout@v4
+        if: steps.have.outputs.have != 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.have.outputs.have != 'true'
+      # the release cache is written by release-cache.yml on main (tags cannot read each other's caches, only the default branch's)
       - uses: Swatinem/rust-cache@v2
-      - name: Package (exe + README only, never game data)
-        run: pwsh tools/package.ps1
+        if: steps.have.outputs.have != 'true'
+        with:
+          shared-key: release
+          save-if: false
+      - name: Package (exe + README only, never game data; the tests ran in CI)
+        if: steps.have.outputs.have != 'true'
+        run: pwsh tools/package.ps1 -SkipTests
       - name: Publish release
+        if: steps.have.outputs.have != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

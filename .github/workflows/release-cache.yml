@@ -1,0 +1,24 @@
+name: Release cache
+
+# Builds the release profile on main so that tag builds (release.yml) find their dependencies in the cache: a cache written by a tag run
+# is only visible to that tag, but the default branch's caches are visible to every ref. Runs when the dependencies change, weekly
+# (a cache that is not used for 7 days is evicted) and by hand.
+on:
+  push:
+    branches: [main]
+    paths: ['Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.github/workflows/release-cache.yml']
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+jobs:
+  cache:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+      - name: Build the release profile (fills the cache)
+        run: cargo build --release -p pop-app
