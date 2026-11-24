@@ -61,7 +61,7 @@ pub struct Settings {
     /// buttons for strike and parry, down also on stick / D-pad) or "classic" (D-pad / stick, A or X = Shift)
     pub pad_layout: String,
     /// tile images enlarged 4x with MMPX (palette kept, sampled linearly) and given a normal map derived from them (relief.rs);
-    /// needs tile_textures = original; about 20x the texture memory (126 MB instead of 6 MB); POP_RELIEF=1 turns it on
+    /// needs tile_textures = original; about 17x the texture memory (156 MB instead of 9 MB); POP_RELIEF=1 turns it on
     pub tile_relief: bool,
 }
 
