@@ -6,6 +6,7 @@ The original game data is never part of the repository or a release; see `docs/P
 ## [Unreleased]
 
 ### Changed
+- The light of a voxel torch moves with the centre of its flame's pixels (frame by frame, eased) instead of sitting at a fixed point above the holder.
 - A drunk potion's bubble light no longer vanishes at once: it flies from the bottle's place to the kid's face during the first 12 ticks of the drinking
   animation and fades exponentially until its end (21 ticks, `sim::DRINK_TICKS`).
 

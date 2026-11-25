@@ -496,9 +496,10 @@ pub struct SwordGlint(u8, u8);
 #[derive(Component)]
 pub struct TorchFlame(u8, u8);
 
-/// A voxel torch's light (room, tile index, flicker factor 0.8..1): follows the visible pixels of the flame frame.
+/// A voxel torch's light (room, tile index, flicker factor 0.8..1, lower left corner of the flame image in the room): follows the
+/// visible pixels of the flame frame in strength and in place (the centre of its pixels).
 #[derive(Component)]
-pub struct TorchLight(pub u8, pub u8, pub f32);
+pub struct TorchLight(pub u8, pub u8, pub f32, pub Vec2);
 
 /// The faint light of a potion's bubbles, in the bubbles' colour (intensity set by `enhanced::bubble_lights`).
 #[derive(Component)]
@@ -509,18 +510,24 @@ pub struct BubbleLight {
     at: Vec3,
 }
 
-/// Every frame: each torch light's strength follows the opaque pixel count of its flame frame (fewest = 80 %, most = 100 %),
+/// Every frame: each torch light's place follows the centre of its flame frame's pixels, and its strength follow the opaque pixel count of its flame frame (fewest = 80 %, most = 100 %),
 /// eased so the steps between frames blend smoothly. `enhanced::torch_shadows` multiplies it into the intensity.
-pub fn flicker(g: Res<Game>, p: Res<Palette>, time: Res<Time>, mut q: Query<&mut TorchLight>) {
-    let Some(px) = p.items.as_ref().map(|i| &i.flame_px).filter(|v| !v.is_empty()) else { return };
+pub fn flicker(g: Res<Game>, p: Res<Palette>, time: Res<Time>, mut q: Query<(&mut TorchLight, &mut Transform)>) {
+    let Some((px, at)) = p.items.as_ref().map(|i| (&i.flame_px, &i.flame_at)).filter(|(v, a)| !v.is_empty() && a.len() == v.len()) else { return };
     let (lo, hi) = (*px.iter().min().unwrap() as f32, *px.iter().max().unwrap() as f32);
     let k = 1.0 - (-time.delta_secs() * 14.0).exp();
     let (level, drawn, tick) = (&g.world.level, g.world.shared.drawn_room, g.world.tick);
-    for mut t in &mut q {
+    for (mut t, mut tr) in &mut q {
         let f = if t.0 == drawn { level.anim_frame(t.0 as usize, t.1 as usize) } else { neighbour_frame(level.tile_at(t.0 as usize, t.1 as usize).kind, tick, t.0, t.1) };
         let n = px[f.unwrap_or(0) as usize % px.len()] as f32;
         let want = 0.8 + 0.2 * if hi > lo { (n - lo) / (hi - lo) } else { 1.0 };
         t.2 += (want - t.2) * k;
+        // the light sits at the centre of the flame's pixels, eased like the strength (z is `enhanced::torch_shadows`')
+        let c = at[f.unwrap_or(0) as usize % at.len()];
+        let goal = t.3 + Vec2::new(px_w(c[0]), px_h(c[1]));
+        let now = tr.translation.truncate();
+        tr.translation.x = now.x + (goal.x - now.x) * k;
+        tr.translation.y = now.y + (goal.y - now.y) * k;
     }
 }
 
@@ -912,7 +919,8 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                 b.cmds.entity(e).insert(bevy::light::NotShadowCaster);
                 let e = b.object(&items.flames[0], &items.flame_mat, Vec3::new(x + px_w(axis - FLAME_AXIS), top.y - px_h(FLAME_SINK), TORCH_Z), 1.0);
                 b.cmds.entity(e).insert((TorchFlame(b.room as u8, idx), bevy::light::NotShadowCaster));
-                let e = b.cmds.spawn((torch_light(), TorchLight(b.room as u8, idx, 1.0), Transform::from_translation(b.origin + top + Vec3::new(0.0, 0.3, 0.6)))).id();
+                let flame_lo = b.origin.truncate() + Vec2::new(x + px_w(axis - FLAME_AXIS), top.y - px_h(FLAME_SINK));
+                let e = b.cmds.spawn((torch_light(), TorchLight(b.room as u8, idx, 1.0, flame_lo), Transform::from_translation(b.origin + top + Vec3::new(0.0, 0.3, 0.6)))).id();
                 b.tag(e);
                 return;
             }
