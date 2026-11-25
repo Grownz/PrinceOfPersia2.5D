@@ -24,6 +24,9 @@ pub struct Items {
     pub bottles: Option<[[Model; 2]; 2]>,
     /// bubble frames 1..7 (potion_fram_bubb), one mesh each
     pub bubbles: Vec<Model>,
+    /// where the bubbles are inside each bubble frame: centroid of the set pixels, (x from the left, y from the bottom) in image px;
+    /// the potion's light follows it
+    pub bubble_at: Vec<[f32; 2]>,
     /// the sword lying on the floor: PRINCE.DAT 160 plain, 161 with the glint (`Level::anim_frame` 0 / 1); empty if missing
     pub sword: Vec<Model>,
     /// emissive liquid materials [red, green, blue]
@@ -401,6 +404,16 @@ pub fn bone_sprite(skel: [&image::Image; 2], floor: [&image::Image; 2]) -> (usiz
     (cw, ch, (0..cw * ch).map(|i| px[(y0 + i / cw) * w + x0 + i % cw]).collect())
 }
 
+/// Centre of the set pixels of an image (x from the left, y from the bottom, in px); the middle of the image if none is set.
+fn centroid(w: usize, h: usize, px: &[u8]) -> [f32; 2] {
+    let set: Vec<usize> = (0..w * h).filter(|&i| px[i] != 0).collect();
+    if set.is_empty() {
+        return [w as f32 / 2.0, h as f32 / 2.0];
+    }
+    let n = set.len() as f32;
+    [set.iter().map(|&i| (i % w) as f32 + 0.5).sum::<f32>() / n, h as f32 - set.iter().map(|&i| (i / w) as f32 + 0.5).sum::<f32>() / n]
+}
+
 fn model(meshes: &mut Assets<Mesh>, w: usize, h: usize, px: &[u8], pal: &[[u8; 3]]) -> Model {
     let rgb = |p: u8| pal.get(p as usize).copied().unwrap_or([255, 0, 255]);
     let m = VoxelModel::from_image(w, h, px, false, rgb);
@@ -431,7 +444,9 @@ impl Items {
         let ims = [false, true].map(|palace| [1, 2].map(|k| pimg(bottle_image(k, palace))));
         let bottles = (!pal.is_empty() && ims.iter().flatten().all(Option::is_some)).then(|| ims.map(|set| set.map(|i| { let i = i.unwrap(); model(meshes, i.width, i.height, &i.pixels, &pal) })));
         // 1-bit frames: every set pixel is index 1, coloured by the material
-        let bubbles: Vec<Model> = (166..=172).filter_map(pimg).map(|i| model(meshes, i.width, i.height, &i.pixels, &[[0; 3], [255; 3]])).collect();
+        let bubble_imgs: Vec<_> = (166..=172).filter_map(pimg).collect();
+        let bubble_at: Vec<[f32; 2]> = bubble_imgs.iter().map(|i| centroid(i.width, i.height, &i.pixels)).collect();
+        let bubbles: Vec<Model> = bubble_imgs.iter().map(|i| model(meshes, i.width, i.height, &i.pixels, &[[0; 3], [255; 3]])).collect();
         // A910: chtab 1 image 10 + glint, 32 px wide, bottom 3 px above the tile's floor line, at the tile's left edge
         let sword: Vec<Model> = [160, 161].into_iter().filter_map(pimg).filter(|i| !pal.is_empty() && i.bpp == 4).map(|i| model(meshes, i.width, i.height, &i.pixels, &pal)).collect();
         for (what, ok) in [("floor sword (PRINCE.DAT 160/161)", sword.len() == 2), ("dungeon skeleton (VDUNGEON 1230/1231)", skeleton[0].is_some()), ("potion bottles (PRINCE.DAT 162..165)", bottles.is_some()), ("potion bubbles (PRINCE.DAT 166..172)", bubbles.len() == 7)] {
@@ -498,7 +513,7 @@ impl Items {
             let c = Color::srgb_u8(r, g, b);
             mats.add(StandardMaterial { base_color: c, emissive: c.to_linear() * 3.0, perceptual_roughness: 0.4, ..default() })
         });
-        Items { mat: mats.add(StandardMaterial { perceptual_roughness: 0.6, ..default() }), skeleton, bottles, bubbles: if bubbles.len() == 7 { bubbles } else { vec![] }, sword: if sword.len() == 2 { sword } else { vec![] }, glow, columns, objects, flame_px: if flames.len() == 9 { flame_px } else { vec![] }, flames: if flames.len() == 9 { flames } else { vec![] }, flame_mat: mats.add(StandardMaterial { unlit: true, ..default() }) }
+        Items { mat: mats.add(StandardMaterial { perceptual_roughness: 0.6, ..default() }), skeleton, bottles, bubble_at: if bubbles.len() == 7 { bubble_at } else { vec![] }, bubbles: if bubbles.len() == 7 { bubbles } else { vec![] }, sword: if sword.len() == 2 { sword } else { vec![] }, glow, columns, objects, flame_px: if flames.len() == 9 { flame_px } else { vec![] }, flames: if flames.len() == 9 { flames } else { vec![] }, flame_mat: mats.add(StandardMaterial { unlit: true, ..default() }) }
     }
 }
 
@@ -812,5 +827,21 @@ mod tests {
         assert!(a.pixels.iter().zip(&b.pixels).any(|(x, y)| x != y), "the glint frame differs");
         let m = VoxelModel::from_image(a.width, a.height, &a.pixels, false, |_| [0; 3]);
         assert_eq!(m.front(), a.pixels);
+    }
+}
+
+#[cfg(test)]
+mod centroid_tests {
+    use super::centroid;
+
+    #[test]
+    fn centroid_is_measured_from_the_bottom_left() {
+        // 4 x 3 image: one set pixel in the top row, column 3 -> x 3.5, y 3 - 0.5 = 2.5 from the bottom
+        let mut px = [0u8; 12];
+        px[3] = 1;
+        assert_eq!(centroid(4, 3, &px), [3.5, 2.5]);
+        px[8] = 1; // bottom row, column 0: the mean of both
+        assert_eq!(centroid(4, 3, &px), [2.0, 1.5]);
+        assert_eq!(centroid(4, 3, &[0; 12]), [2.0, 1.5], "no pixel: the middle");
     }
 }

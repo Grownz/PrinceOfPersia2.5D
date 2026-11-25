@@ -3,6 +3,12 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.6.11] - 2026-11-25
+
+### Changed
+- Potions stand in the middle of their tile instead of at its front edge; their bubble light follows the bubbles.
+- Sword-clash sparks burn out: random life 1.5-2 s, the glow cools from yellow-white to dark red and goes out instead of staying orange until the end.
+
 ## [0.6.10] - 2026-11-25
 
 ### Added

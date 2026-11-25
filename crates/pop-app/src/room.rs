@@ -502,7 +502,12 @@ pub struct TorchLight(pub u8, pub u8, pub f32);
 
 /// The faint light of a potion's bubbles, in the bubbles' colour (intensity set by `enhanced::bubble_lights`).
 #[derive(Component)]
-pub struct BubbleLight;
+pub struct BubbleLight {
+    room: u8,
+    idx: u8,
+    /// the bubble image's lower left corner in the room (it moves inside the frames, the light follows)
+    at: Vec3,
+}
 
 /// Every frame: each torch light's strength follows the opaque pixel count of its flame frame (fewest = 80 %, most = 100 %),
 /// eased so the steps between frames blend smoothly. `enhanced::torch_shadows` multiplies it into the intensity.
@@ -558,6 +563,7 @@ pub fn animate(
     mut bubbles: Query<(&Bubbles, &mut Mesh3d), Without<TorchFlame>>,
     mut flames: Query<(&TorchFlame, &mut Mesh3d), Without<Bubbles>>,
     mut swords: Query<(&SwordGlint, &mut Mesh3d), (Without<Bubbles>, Without<TorchFlame>)>,
+    mut lights: Query<(&BubbleLight, &mut Transform), (Without<Loose>, Without<Falling>)>,
 ) {
     let a = g.world.alpha();
     for (l, mut t) in &mut loose {
@@ -578,6 +584,13 @@ pub fn animate(
             if m.0 != *want {
                 m.0 = want.clone();
             }
+        }
+    }
+    // the light of a potion moves with its bubbles (the centre of the set pixels of the frame shown)
+    if let Some(at) = p.items.as_ref().map(|i| &i.bubble_at).filter(|a| !a.is_empty()) {
+        for (l, mut t) in &mut lights {
+            let c = at[anim(l.room, l.idx).unwrap_or(1).clamp(1, 7) as usize - 1];
+            t.translation = l.at + Vec3::new(px_w(c[0]), px_h(c[1]), 0.3);
         }
     }
     if let Some(frames) = p.items.as_ref().map(|i| &i.sword).filter(|f| !f.is_empty()) {
@@ -786,7 +799,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             floor(b, &fl);
             let (big, colour) = crate::items::potion_look(t.modifier >> 5);
             match b.items.and_then(|(i, _)| Some((i, i.bottles.clone()?))) {
-                // bottle in front of the figures (the original draws it as a fore piece), bubbles on its neck in the
+                // bottle in the middle of the tile (the original draws it as a fore piece), bubbles on its neck in the
                 // potion's colour (emissive), placed as the original draws them (items::POTION_X / BUBBLE_DX)
                 Some((i, bottles)) => {
                     let set = b.items.map_or(0, |(_, s)| s);
@@ -798,7 +811,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                         let e = b.item(f, &i.glow[c], at);
                         b.cmds.entity(e).insert((Bubbles(b.room as u8, idx), bevy::light::NotShadowCaster));
                         let [r, g, bl] = crate::items::GLOW[c];
-                        let e = b.cmds.spawn((BubbleLight, PointLight { color: Color::srgb_u8(r, g, bl), intensity: 0.0, range: 2.5, shadow_maps_enabled: false, ..default() }, Transform::from_translation(b.origin + at + Vec3::new(0.0, 0.1, 0.3)))).id();
+                        let e = b.cmds.spawn((BubbleLight { room: b.room as u8, idx, at: b.origin + at }, PointLight { color: Color::srgb_u8(r, g, bl), intensity: 0.0, range: 2.5, shadow_maps_enabled: false, ..default() }, Transform::from_translation(b.origin + at + Vec3::new(0.0, 0.1, 0.3)))).id();
                         b.tag(e);
                     }
                 }
@@ -920,9 +933,10 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
 /// A torch sits one column right of its tile in the original's picture (tiles to the right, in units of a tile).
 const TORCH_DX: f32 = 1.0;
 
-/// Depth of the voxel items' sprite plane: the skeleton behind the figures (VOXEL_Z 0.25), the bottle in front of them.
+/// Depth of the voxel items' sprite plane: the skeleton behind the figures (VOXEL_Z 0.25), the bottle in the middle of the tile (blocks span -0.5..0.5; it
+/// used to stand at the front edge at 0.4). A potion tile holds nothing else, so no pillar or gate shares its place.
 const SKELETON_Z: f32 = -0.1;
-const POTION_Z: f32 = 0.4;
+const POTION_Z: f32 = 0.0;
 const SWORD_Z: f32 = 0.3;
 /// Depth of the voxel columns' axis: behind the figures (VOXEL_Z 0.25, about 0.06 deep behind it), so the widest base
 /// (big pillar, radius 11.5 px = 0.36) ends at z 0.16 and the kid never cuts through a column.
