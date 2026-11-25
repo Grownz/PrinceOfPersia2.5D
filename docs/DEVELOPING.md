@@ -143,3 +143,6 @@ in-game Settings menu (Esc), see [controls.md](controls.md).
 - `camera_scroll`: `smooth` (default: a short eased pan to the next room) or `flip` (the original's hard cut); env `POP_CAMERA`.
 - `motion_smoothing`: `position` (default: kid and guard drawn between the last two logic frames, 60 Hz motion, one logic frame
   / 83 ms of display delay) or `off` (the original's 12 Hz motion); env `POP_SMOOTH`.
+- `quick_input` (on by default, Settings > Video): `World::tick_now` lets a tick start after 2 of its 5 steps when a direction key arrives while the kid stands
+  (frame 15, action 0, no sword); 3-tick cooldown. Measured in the sim: a key changes the pose on the tick that reads it (`input_latency_in_ticks`,
+  ignored test), so the wait for the tick is the delay it removes. `low_latency_present` (off, restart): `AutoNoVsync` and `desired_maximum_frame_latency` 1.

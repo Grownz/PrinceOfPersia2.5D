@@ -63,6 +63,11 @@ pub struct Settings {
     /// tile images enlarged 4x with MMPX (palette kept, sampled linearly) and given a normal map derived from them (relief.rs);
     /// needs tile_textures = original; about 17x the texture memory (156 MB instead of 9 MB); POP_RELIEF=1 turns it on
     pub tile_relief: bool,
+    /// on by default. A direction key pressed while the kid stands idle starts the 12 Hz logic tick at once instead of at the next
+    /// one (0-83 ms, 42 ms on average, less delay); the tick itself is unchanged, only that one frame is shorter
+    pub quick_input: bool,
+    /// off by default, needs a restart. No vsync (tearing possible) and one frame in flight: 8-33 ms less delay between the logic and the screen
+    pub low_latency_present: bool,
 }
 
 pub const CAMERA_SCROLLS: [&str; 2] = ["smooth", "flip"];
@@ -172,7 +177,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.5, muted: false, sound: "adlib".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, external_terminal: false, render_mode: "enhanced".into(), character_style: "voxel".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "low".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into(), pad_layout: "modern".into(), tile_relief: false }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.5, muted: false, sound: "adlib".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, external_terminal: false, render_mode: "enhanced".into(), character_style: "voxel".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "low".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into(), pad_layout: "modern".into(), tile_relief: false, quick_input: true, low_latency_present: false }
     }
 }
 
@@ -224,6 +229,8 @@ impl Settings {
             motion_smoothing: field(&o, "motion_smoothing", d.motion_smoothing, |s| MOTION_SMOOTHINGS.contains(&s.as_str())),
             pad_layout: field(&o, "pad_layout", d.pad_layout, |s| PAD_LAYOUTS.contains(&s.as_str())),
             tile_relief: field(&o, "tile_relief", d.tile_relief, |_| true),
+            quick_input: field(&o, "quick_input", d.quick_input, |_| true),
+            low_latency_present: field(&o, "low_latency_present", d.low_latency_present, |_| true),
         }
     }
 
@@ -534,6 +541,15 @@ mod tests {
         assert_eq!((s.motion_smoothing.as_str(), s.volume), ("position", 0.5));
         assert!(smooth_motion("position", None) && !smooth_motion("off", None));
         assert!(!smooth_motion("position", Some("off")) && smooth_motion("off", Some("position")));
+    }
+
+    #[test]
+    fn latency_options_parse_and_defaults() {
+        let d = Settings::default();
+        assert!(d.quick_input && !d.low_latency_present);
+        let s = Settings::parse(r#"{"quick_input": true, "low_latency_present": true}"#);
+        assert!(s.quick_input && s.low_latency_present);
+        assert_eq!(Settings::parse(&s.to_json()), s);
     }
 
     #[test]

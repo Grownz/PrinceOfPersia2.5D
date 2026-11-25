@@ -3,6 +3,13 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [0.6.10] - 2026-11-25
+
+### Added
+- Input latency options: `quick_input` (on by default) starts the logic tick at once when a direction key arrives while the kid stands idle (saves
+  0-83 ms, 42 ms on average, the tick itself is unchanged); `low_latency_present` (off by default) turns vsync off and keeps one frame in flight (restart needed,
+  tearing possible). The ignored test `input_latency_in_ticks` prints the ticks from key to pose and movement.
+
 ## [0.6.9] - 2026-11-25
 
 ### Fixed

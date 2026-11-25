@@ -907,3 +907,45 @@ fn shift_next_to_a_potion_picks_it_up() {
     tick(&mut w, Keys { shift: true, ..NONE }, 30);
     assert_ne!(w.level.tile_at(1, 13).kind, Tile::Potion, "the potion is gone");
 }
+
+/// Input latency of the sim (run with `--ignored --nocapture`): ticks from the key press to the first changed pose and the first movement,
+/// for some actions of a standing kid. Tick 1 = the tick that reads the key.
+#[test]
+#[ignore]
+fn input_latency_in_ticks() {
+    if crate::no_game_data() { return; }
+    let k = |l, r, u, d, s| Keys { left: l, right: r, up: u, down: d, shift: s };
+    let cases = [("run right", k(false, true, false, false, false)), ("turn left", k(true, false, false, false, false)), ("jump up", k(false, false, true, false, false)),
+        ("crouch", k(false, false, false, true, false)), ("careful step", k(false, true, false, false, true)), ("jump forward", k(false, true, true, false, false))];
+    for (name, keys) in cases {
+        let mut w = world(3, &[], &[]);
+        let mut n = 0;
+        while !(w.kid.frame == 15 && w.kid.action == 0) { tick(&mut w, NONE, 1); n += 1; assert!(n < 2000); }
+        tick(&mut w, NONE, 3);
+        let (f0, x0, y0) = (w.kid.frame, w.kid.x, w.kid.y);
+        let (mut pose, mut mv) = (None, None);
+        for t in 1..=40 {
+            tick(&mut w, keys, 1);
+            if pose.is_none() && w.kid.frame != f0 { pose = Some(t); }
+            if mv.is_none() && (w.kid.x != x0 || w.kid.y != y0) { mv = Some(t); }
+        }
+        println!("{name:14} first new pose on tick {pose:?}, first movement on tick {mv:?}");
+    }
+}
+
+/// tick_now (quick_input): a standing kid's tick can start after 2 steps of the frame; a running kid's cannot; the tick is the same as a late one.
+#[test]
+fn tick_now_only_for_a_standing_kid() {
+    if crate::no_game_data() { return; }
+    let mut w = world(3, &[], &[]);
+    let mut n = 0;
+    while !(w.kid.frame == 15 && w.kid.action == 0) { tick(&mut w, NONE, 1); n += 1; assert!(n < 2000); }
+    tick(&mut w, NONE, 2);
+    assert!(!w.tick_now(), "sub = 0 right after a tick: too early");
+    assert!(!w.step(NONE) && !w.step(NONE));
+    let t = w.tick;
+    assert!(w.tick_now() && w.step(RIGHT) && w.tick == t + 1, "the tick runs at the next step");
+    assert_ne!(w.kid.frame, 15, "the key of that tick starts the run");
+    while !w.step(RIGHT) {}
+    assert!(!w.step(RIGHT) && !w.step(RIGHT) && !w.tick_now(), "a running kid keeps the original timing");
+}

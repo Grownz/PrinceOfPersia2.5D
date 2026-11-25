@@ -173,7 +173,9 @@ fn main() {
         resolution: res.as_deref().and_then(perf::parse_res).unwrap_or((set.width.max(320), set.height.max(200))).into(),
         mode: if res.as_deref() == Some("full") || (res.is_none() && set.borderless()) { WindowMode::BorderlessFullscreen(MonitorSelection::Current) } else { WindowMode::Windowed },
         // POP_PERF / POP_BENCH measure the real frame cost, so they turn vsync off (Immediate where the surface has it)
-        present_mode: if perf || bench { PresentMode::AutoNoVsync } else { PresentMode::AutoVsync },
+        present_mode: if perf || bench || set.low_latency_present { PresentMode::AutoNoVsync } else { PresentMode::AutoVsync },
+        // low_latency_present: one frame in flight instead of the default two (wgpu surface setting)
+        desired_maximum_frame_latency: if set.low_latency_present { std::num::NonZeroU32::new(1) } else { None },
         resizable: true,
         ..default()
     };
@@ -215,8 +217,8 @@ fn main() {
         .add_systems(OnExit(flow::Screen::Paused), audio::resume)
         .add_systems(
             FixedUpdate,
-            (audio::before_step, |mut g: ResMut<Game>, a: Res<kid::KidAssets>, mut latch: ResMut<kid::Latch>, keys: Res<ButtonInput<KeyCode>>, map: Res<settings::KeyMap>, pads: Query<&Gamepad>| {
-                kid::fixed_step(&mut g, &a, &mut latch, kid::pressed(&keys, &map, &pads));
+            (audio::before_step, |mut g: ResMut<Game>, a: Res<kid::KidAssets>, mut latch: ResMut<kid::Latch>, keys: Res<ButtonInput<KeyCode>>, map: Res<settings::KeyMap>, pads: Query<&Gamepad>, set: Res<settings::Settings>| {
+                kid::fixed_step(&mut g, &a, &mut latch, kid::pressed(&keys, &map, &pads), set.quick_input);
             }, audio::fixed)
                 .chain()
                 .run_if(playing()),

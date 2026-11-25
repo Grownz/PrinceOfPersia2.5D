@@ -140,6 +140,9 @@ independent, the neighbouring rooms visible at the margins) or `flip` (the origi
 `motion_smoothing`: `position` (default: kid, guard and shadow are drawn between the last two 12 Hz logic frames, so they move at
 60 Hz) or `off` (the original's 12 Hz motion); env `POP_SMOOTH=off|position` overrides. Costs one logic frame (83 ms) of
 display delay; see "Display interpolation" in docs/mechanics.md.
+`quick_input` (on by default): a direction key pressed while the kid stands idle starts the 12 Hz logic tick at once instead of at the next one (0-83 ms, 42 ms on
+average, less delay). The tick is unchanged, only that one frame is shorter; a running kid keeps the original timing. `low_latency_present` (off, restart
+needed): no vsync (tearing possible) and one frame in flight, 8-33 ms less delay between the logic and the screen.
 Upside-down (the invert potion; in the shipped levels raw potion modifier 4 sits in level 9 rooms 7 and 10, INFERRED kind 4): the picture is mirrored top to bottom as in the original; the hit points and
 texts stay upright and the controls are not swapped (original: display only, docs/edge_cases.md 5.1).
 

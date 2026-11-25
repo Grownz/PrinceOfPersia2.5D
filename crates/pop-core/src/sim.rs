@@ -314,6 +314,18 @@ impl World {
         self.sub + 1 >= if self.sub == 0 { self.next_frame_len() } else { self.frame_len }
     }
 
+    /// Input latency option: makes the next `step` run the logic tick instead of waiting out the rest of the frame. Only for a
+    /// controlled kid standing idle (frame 15, action 0, no sword), so no motion is cut short, and only after 2 steps of the frame.
+    /// The tick itself is unchanged; only the wall time of this one frame gets shorter. Returns whether it did.
+    pub fn tick_now(&mut self) -> bool {
+        let k = &self.kid;
+        if self.sub < 2 || self.sub + 1 >= self.frame_len || !k.controlled || !k.alive || k.sword != 0 || k.action != 0 || k.frame != 15 {
+            return false;
+        }
+        self.sub = self.frame_len - 1;
+        true
+    }
+
     /// Sequence viewer: play sequence `seq` without control and physics.
     pub fn kid_start_seq(&mut self, seq: usize) {
         let env = mk_env(&self.data, &self.level, self.guard_type);

@@ -154,7 +154,7 @@ pub struct Opt {
 const ON_OFF: &[&str] = &["true", "false"];
 const PERCENT: Ctl = Ctl::Slider { min: 0, max: 100, step: 5 };
 
-pub const OPTS: [Opt; 20] = [
+pub const OPTS: [Opt; 22] = [
     Opt { key: "render_mode", label: "Rendering", values: &["classic", "enhanced"], live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "character_style", label: "Characters", values: &settings::CHARACTER_STYLES, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "camera_scroll", label: "Room change", values: &settings::CAMERA_SCROLLS, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
@@ -166,6 +166,8 @@ pub const OPTS: [Opt; 20] = [
     Opt { key: "sound", label: "Sound set", values: &["synth", "original", "adlib", "soundfont"], live: true, tab: Tab::Audio, ctl: Ctl::Dropdown },
     Opt { key: "soundfont", label: "SoundFont", values: &["musescore", "fluidr3"], live: true, tab: Tab::Audio, ctl: Ctl::Dropdown },
     Opt { key: "tile_textures", label: "Tile textures", values: &settings::TILE_TEXTURES, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
+    Opt { key: "quick_input", label: "Quick input (start at once)", values: ON_OFF, live: true, tab: Tab::Video, ctl: Ctl::Checkbox },
+    Opt { key: "low_latency_present", label: "Low latency (no vsync, restart)", values: ON_OFF, live: false, tab: Tab::Video, ctl: Ctl::Checkbox },
     Opt { key: "tile_relief", label: "Tile relief (MMPX, normal maps)", values: ON_OFF, live: true, tab: Tab::Graphics, ctl: Ctl::Checkbox },
     Opt { key: "column_style", label: "Columns", values: &settings::COLUMN_STYLES, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
     Opt { key: "object_style", label: "Objects", values: &settings::OBJECT_STYLES, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
@@ -916,7 +918,7 @@ mod tests {
         m.nav(Nav::Right, &mut s);
         m.nav(Nav::Right, &mut s);
         assert_eq!(s.sound, "synth");
-        assert!(OPTS.iter().all(|o| o.live), "every option applies at runtime, none carries the restart badge");
+        assert!(OPTS.iter().all(|o| o.live || o.key == "low_latency_present"), "every option applies at runtime, only the window present mode carries the restart badge");
         assert_eq!(shown("sound", "adlib"), "Adlib");
     }
 
@@ -934,7 +936,7 @@ mod tests {
         assert_eq!(m.tab, Tab::Video, "Q / E, LB / RB");
         m.nav(Nav::Down, &mut s);
         assert_eq!(m.rows()[m.sel], Row::Opt(0));
-        for _ in 0..6 {
+        for _ in 0..8 {
             m.nav(Nav::Down, &mut s);
         }
         assert_eq!(m.rows()[m.sel], Row::Item(Item::Back), "Back is last");
@@ -946,10 +948,10 @@ mod tests {
         m.focus(2);
         assert_eq!(m.sel, 2);
         assert_eq!(m.slot_idx(0), Some(1));
-        assert_eq!(m.slot_idx(8), None);
+        assert_eq!(m.slot_idx(10), None);
         m.scroll(3);
         assert_eq!(m.top, 0, "everything fits");
-        assert_eq!(m.visible().len(), 7);
+        assert_eq!(m.visible().len(), 9);
         // a tab click focuses the strip
         m.focus(0);
         m.set_tab(2);

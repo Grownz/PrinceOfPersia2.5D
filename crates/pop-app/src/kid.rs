@@ -59,7 +59,7 @@ pub(crate) fn palace(level: usize) -> bool {
 
 /// Keys seen since the last logic tick (a tap shorter than one tick must not be lost), and the `Game::gen` they belong to.
 #[derive(Resource, Default)]
-pub struct Latch(Keys, u32);
+pub struct Latch(Keys, u32, u64); // the u64: tick of the last early tick (quick_input)
 
 impl KidAssets {
     pub fn load(dir: &str) -> Self {
@@ -328,7 +328,7 @@ pub fn keys(k: Res<ButtonInput<KeyCode>>, m: Res<KeyMap>, pads: Query<&Gamepad>,
 }
 
 /// 60 Hz step of the world; on logic ticks the latched keys are consumed (or the test script is played).
-pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: Keys) {
+pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: Keys, quick: bool) {
     // test hook: POP_WARMUP=n holds the world for n steps (60 Hz), so POP_SHOT_TICK screenshots wait out the shader compile
     static WARM: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     if WARM.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < std::env::var("POP_WARMUP").ok().and_then(|v| v.parse().ok()).unwrap_or(0) {
@@ -344,6 +344,11 @@ pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: Keys) {
         // a new world: taps latched before it (the key that skipped a card, started the game or ended the demo) must not reach
         // its first tick; keys still held count
         (latch.0, latch.1) = (held, g.gen);
+    }
+    // quick_input: a direction key arriving while the kid stands idle starts the tick now instead of up to 83 ms later; the cooldown
+    // (3 ticks) keeps a key that does nothing from speeding the game up
+    if quick && (latch.0.left || latch.0.right || latch.0.up || latch.0.down) && g.world.tick >= latch.2 + 3 && g.world.tick_now() {
+        latch.2 = g.world.tick;
     }
     if g.world.next_is_tick() {
         let env = mk_env(&a.data, &g.world.level, g.world.guard_type);
