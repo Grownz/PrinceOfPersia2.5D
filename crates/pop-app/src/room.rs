@@ -394,12 +394,19 @@ fn spawn_tile(b: &mut B, level: &Level, room: usize, idx: usize) {
         let lift = match t.kind { Tile::DropButton | Tile::RaiseButton => plate_lift(level.link_timer(t.modifier)), _ => 0.0 };
         tile(b, x, y, t, lift, idx as u8);
     }
-    // the original's background piece from the left neighbour, on the back wall (not in the cutscene set)
+    // the original's background piece from the left neighbour: flat on the back wall, a palace tapestry turned like the gates (not in the cutscene set)
     let (lk, lm) = left_tile(level, room, idx);
     if let Some((d, up)) = b.tiles.filter(|_| !b.chamber).and_then(|s| s.decor(lk, lm, t.kind)) {
-        // flat on the wall: its shadow would be invisible, and each cut-out material is its own shadow draw
-        let lo = Vec3::new(x, y + px_h(up), BACK_Z);
-        let e = b.put_id(&d.mat, lo, lo + Vec3::new(px_w(d.w), px_h(d.h), 0.004));
+        // a tapestry (right of a door top) is turned like the gates: a thin plate in the y-z plane against the door post's right face, the image's width spread over the
+        // depth from the back wall to the floor's front edge (the cut-out material is its own shadow draw: no shadow)
+        let e = if matches!(lk, Tile::Doortop | Tile::DoortopWithFloor) {
+            let lo = Vec3::new(x, y + px_h(up), BACK_WALL.1);
+            b.put_id(&d.mat, lo, Vec3::new(x + TAPESTRY_THICK, lo.y + px_h(d.h), SLAB_FRONT))
+        } else {
+            // the other background pieces (ornament bands, wall marks) stay flat on the back wall
+            let lo = Vec3::new(x, y + px_h(up), BACK_Z);
+            b.put_id(&d.mat, lo, lo + Vec3::new(px_w(d.w), px_h(d.h), 0.004))
+        };
         b.cmds.entity(e).insert(bevy::light::NotShadowCaster);
     }
     b.cur = None;
@@ -987,32 +994,36 @@ fn back_panel(b: &mut B, piece: &dyn Fn(Role) -> Option<Tex>, x: f32, y: f32, li
 pub const GATE_X: f32 = 11.5 / 14.0;
 
 /// Gate bars as boxes (lo, hi) relative to (tile left x, floor y, z 0): turned 90 degrees about the vertical axis, so the
-/// gate is a grille in the y-z plane across the corridor at GATE_X, from the door post's front face (z -0.15) to the
-/// floor's front edge. Four vertical bars along z plus a bottom rail and a middle rail, slightly thick along x so the gate
+/// gate is a grille in the y-z plane across the corridor at GATE_X, from the door post's front face (z -0.65) to the
+/// floor's front edge (0.5). Four vertical bars along z plus a bottom rail and a middle rail, slightly thick along x so the gate
 /// reads edge-on from the game camera. Runtime modifier 0 = closed .. 188 = open (docs/tiles.md 3): the grille slides up.
 pub fn gate_bars(modifier: u8) -> Vec<(Vec3, Vec3)> {
+    let (z0, z1) = (GATE_Z1, GATE_Z0);
     let open = (modifier as f32 / 188.0).clamp(0.0, 1.0);
     let (bottom, top) = (open * TILE_H * 0.8, TILE_H * 0.95);
     let (x0, x1) = (GATE_X - 0.03, GATE_X + 0.03);
     let mut v: Vec<(Vec3, Vec3)> = (0..4)
         .map(|i| {
-            let z = -0.1 + i as f32 * 0.5 / 3.0;
+            let z = z0 + 0.05 + i as f32 * (z1 - z0 - 0.1) / 3.0;
             (Vec3::new(x0, bottom, z - 0.025), Vec3::new(x1, top, z + 0.025))
         })
         .collect();
     for y in [bottom + 0.02, (bottom + top) / 2.0] {
-        v.push((Vec3::new(x0 + 0.005, y, -0.15), Vec3::new(x1 - 0.005, y + 0.05, 0.45)));
+        v.push((Vec3::new(x0 + 0.005, y, z0), Vec3::new(x1 - 0.005, y + 0.05, z1)));
     }
     v
 }
 
 /// The voxel gate: a barrier plane across the corridor like the procedural grille (x GATE_X, z from the floor's front edge
-/// 0.45 back to the door post's front face -0.15). The original's 24 px wide sprite is an oblique drawing whose horizontal
+/// 0.5 back to the door post's front face -0.65). The original's 24 px wide sprite is an oblique drawing whose horizontal
 /// axis is the corridor depth, so the model is turned 90 degrees about the vertical axis (image x -> -z, scaled to that
 /// span; image y -> y at the exact pixel pitch; a few voxels thick in x). `gate_rise - 1` px over the floor, rebuilt when
 /// the modifier changes (docs/texture_inventory.md 21). False: no models (procedural grille).
-const GATE_Z0: f32 = 0.45;
-const GATE_Z1: f32 = -0.15;
+const GATE_Z0: f32 = SLAB_FRONT;
+const GATE_Z1: f32 = BACK_WALL.1 + POST_W;
+/// Thickness of a tapestry plate (x), and the door post's width and depth (8 px); the post stands against the back wall.
+const TAPESTRY_THICK: f32 = 0.02;
+const POST_W: f32 = 8.0 / 32.0;
 
 fn gate_voxel(b: &mut B, x: f32, y: f32, modifier: u8) -> bool {
     let Some((items, o)) = b.objects() else { return false };
@@ -1045,12 +1056,12 @@ fn exit_voxel(b: &mut B, x: f32, y: f32, t: TileRef, f: &Tex) {
     }
 }
 
-/// The door post image (record +9, 8 px wide) at the right edge of the cell, standing on the back half of the floor
-/// (z -0.4 .. -0.15, the gate grille starts at its front): a voxel column, or the image on a box (flat style).
+/// The door post image (record +9, 8 px wide) at the right edge of the cell, standing against the back wall
+/// (z -0.9 .. -0.65, the gate grille starts at its front): a voxel column, or the image on a box (flat style).
 fn door_post(b: &mut B, d: &Tex, x: f32, y: f32, kind: Tile, modifier: u8) {
     let w = px_w(d.w);
-    if !b.voxel_column(b.tiles.and_then(|s| s.extra_id(kind, modifier)), x + 1.0 - w, y, y + TILE_H, -0.4 + w / 2.0) {
-        b.put(&d.mat, Vec3::new(x + 1.0 - w, y, -0.4), Vec3::new(x + 1.0, y + TILE_H, -0.4 + w));
+    if !b.voxel_column(b.tiles.and_then(|s| s.extra_id(kind, modifier)), x + 1.0 - w, y, y + TILE_H, BACK_WALL.1 + w / 2.0) {
+        b.put(&d.mat, Vec3::new(x + 1.0 - w, y, BACK_WALL.1), Vec3::new(x + 1.0, y + TILE_H, BACK_WALL.1 + w));
     }
 }
 
@@ -1260,7 +1271,7 @@ mod tests {
         for (lo, hi) in &closed {
             // thin along x at the gate's collision position, long along z or y
             assert!(lo.x >= 10.0 / 14.0 && hi.x <= 13.0 / 14.0 && hi.x - lo.x < 0.1, "{lo} {hi}");
-            assert!(lo.z >= -0.15 && hi.z <= 0.45);
+            assert!(lo.z >= GATE_Z1 && hi.z <= GATE_Z0, "{lo} {hi}");
         }
         assert!(closed.iter().any(|(lo, hi)| hi.z - lo.z > 0.5), "a rail spans the corridor");
         assert_eq!(closed.iter().filter(|(lo, hi)| hi.y - lo.y > 1.0).count(), 4, "four vertical bars");

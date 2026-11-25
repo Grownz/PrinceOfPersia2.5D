@@ -103,7 +103,7 @@ The wall hangings in the palace levels are VPALACE 1278 / 1280 / 1282 (32x62, 32
 The record table does not name them. Search (all palace screenshots, 24 sample pixels then a 97 % match): 36 cells, every one in the
 cell to the right of a Doortop (12) or DoortopWithFloor (7) - across a room link in column 0 - bottom edge on the row's floor line, x at
 the cell's left edge. Which image is chosen by the **left neighbour's modifier**: 0 = 1278, 1 = 1280, 2 = 1282 (36 of 36 cells; the
-original's table `ds:27A2` = 4E 50 52 00 00 51 53). Palace only; nothing in front of a wall. The port draws them in `tiles::back_decor`
+original's table `ds:27A2` = 4E 50 52 00 00 51 53). Palace only; nothing in front of a wall. The port draws them in `tiles::back_decor` (as a plate turned like the gates, in the y-z plane against the post, back wall to floor front since 0.6.12)
 (cut at the floor surface like the exit frames); `render2d.decor` has the same rule. Effect on the 2D model (palace levels 4, 5, 6, 10, 11,
 14): 95.8 % -> 96.0 % explained (rules only 90.0 % -> 90.2 %), rooms below 95 %: 34 -> 30.
 

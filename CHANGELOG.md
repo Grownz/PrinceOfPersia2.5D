@@ -6,6 +6,7 @@ The original game data is never part of the repository or a release; see `docs/P
 ## [Unreleased]
 
 ### Changed
+- Palace tapestries are turned like the gates (plate in the y-z plane next to the door post, from the back wall to the floor's front edge); door posts now stand against the back wall, and gates reach from the post's front face to the floor's front edge (they stopped at z 0.45 and began at -0.15).
 - The light of a voxel torch moves with the centre of its flame's pixels (frame by frame, eased) instead of sitting at a fixed point above the holder.
 - A drunk potion's bubble light no longer vanishes at once: it flies from the bottle's place to the kid's face during the first 12 ticks of the drinking
   animation and fades exponentially until its end (21 ticks, `sim::DRINK_TICKS`).
