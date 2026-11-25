@@ -3,7 +3,7 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
-## [Unreleased]
+## [0.6.12] - 2026-11-25
 
 ### Changed
 - Palace tapestries are turned like the gates (plate in the y-z plane next to the door post, from the back wall to the floor's front edge); door posts now stand against the back wall, and gates reach from the post's front face to the floor's front edge (they stopped at z 0.45 and began at -0.15).
