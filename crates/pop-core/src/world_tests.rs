@@ -949,3 +949,23 @@ fn tick_now_only_for_a_standing_kid() {
     while !w.step(RIGHT) {}
     assert!(!w.step(RIGHT) && !w.step(RIGHT) && !w.tick_now(), "a running kid keeps the original timing");
 }
+
+/// The drinking animation: the pick-up tick shows frame 191, the kid stands again (frame 15) `DRINK_TICKS` ticks later; the app fades the
+/// potion's bubble light over exactly this time.
+#[test]
+fn drink_animation_lasts_drink_ticks() {
+    if crate::no_game_data() { return; }
+    let mut w = world(3, &[], &[]);
+    tick(&mut w, NONE, 10);
+    let col = w.kid.col(&crate::sim::mk_env(&w.data, &w.level, w.guard_type));
+    w.set_tile_for_test(1, 10 + col as u8, Tile::Potion);
+    w.set_mod_for_test(1, 10 + col as u8, 1 << 5);
+    let down = Keys { down: true, ..NONE };
+    for _ in 0..20 { if w.kid.frame == 109 { break; } tick(&mut w, down, 1); }
+    tick(&mut w, Keys { shift: true, ..down }, 1);
+    assert_eq!(w.kid.frame, 191, "the pick-up tick");
+    assert_eq!(w.level.tile_at(1, 10 + col as usize).kind, Tile::Floor, "the potion is gone at once");
+    let mut ticks = 0;
+    while w.kid.frame != 15 { tick(&mut w, NONE, 1); ticks += 1; assert!(ticks < 60); }
+    assert_eq!(ticks, crate::sim::DRINK_TICKS);
+}

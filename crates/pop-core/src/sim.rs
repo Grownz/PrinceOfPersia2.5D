@@ -16,6 +16,8 @@ mod combat;
 pub use combat::{GuardSlot, ShadowState, GUARD_TYPE, mk_env};
 
 pub const TICKS_PER_SEC: u32 = 12;
+/// Logic ticks from the pick-up of a potion (frame 191) until the kid stands again (frame 15); checked in world_tests.
+pub const DRINK_TICKS: usize = 21;
 /// 60 Hz steps per logic frame normally; `SWORD_SUBSTEPS` while the kid's sword is drawn (0000:4D6A, docs/edge_cases.md 5.2)
 pub const SUBSTEPS: u32 = 5;
 pub const SWORD_SUBSTEPS: u32 = 6;

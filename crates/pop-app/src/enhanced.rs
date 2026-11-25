@@ -225,7 +225,7 @@ const ENHANCED_TORCH_Z: f32 = -0.6;
 
 /// Every frame: in enhanced mode the `n` torches nearest to the view cast shadows, the rest stay shadowless (a point
 /// shadow is 6 cube faces); in classic every light is back to `room::torch_light`'s values and its classic position.
-pub fn torch_shadows(mut cmds: Commands, mode: Res<RenderMode>, set: Res<Settings>, cam: Query<&GlobalTransform, With<Camera3d>>, mut lights: Query<(Entity, &mut Transform, &mut PointLight, Option<&ClassicZ>, Option<&crate::room::TorchLight>), (Without<crate::room::BubbleLight>, Without<crate::particles::Spark>)>) {
+pub fn torch_shadows(mut cmds: Commands, mode: Res<RenderMode>, set: Res<Settings>, cam: Query<&GlobalTransform, With<Camera3d>>, mut lights: Query<(Entity, &mut Transform, &mut PointLight, Option<&ClassicZ>, Option<&crate::room::TorchLight>), (Without<crate::room::BubbleLight>, Without<crate::particles::Spark>, Without<Drinking>)>) {
     let enhanced = *mode == RenderMode::Enhanced;
     let n = if enhanced { torch_count(&set) } else { 0 };
     let focus = cam.single().map_or(Vec2::ZERO, |t| t.translation().truncate());
@@ -257,6 +257,56 @@ const BUBBLE_LIGHT: f32 = 24_000.0;
 /// Bubble lights that shine at once (the nearest to the view): each casts shadows so it cannot shine through walls and
 /// slabs; the farther ones are off. With shadows off (`shadow_quality`) none shines, as it would leak.
 const BUBBLE_LIGHTS: usize = 2;
+
+/// A potion's light after the potion was drunk: it flies from the bottle's place to the kid's face during the first `DRINK_FLY`
+/// ticks of the animation and fades exponentially until its end (`DRINK_TICKS`), then goes out.
+#[derive(Component)]
+pub struct Drinking {
+    start: u64,
+    from: Vec3,
+    intensity: f32,
+}
+
+impl Drinking {
+    pub fn new(start: u64, from: Vec3, intensity: f32) -> Self {
+        Drinking { start, from, intensity }
+    }
+}
+
+const DRINK_FLY: f32 = 12.0;
+/// e^-DRINK_FADE of the light is left at the end of the animation.
+const DRINK_FADE: f32 = 5.0;
+/// Where the flask is at the mouth, relative to the kid sprite's centre (world units, the kid is about 1.5 tall) and in front of him.
+const MOUTH: Vec3 = Vec3::new(0.12, 0.3, 0.3);
+
+/// (position share along the flight, intensity share) of a drinking light `t` ticks after the pick-up; None once the animation is over.
+fn drinking_at(t: f32) -> Option<(f32, f32)> {
+    let end = pop_core::sim::DRINK_TICKS as f32;
+    if !(0.0..end).contains(&t) {
+        return None;
+    }
+    let u = (t / DRINK_FLY).min(1.0);
+    Some((u * u * (3.0 - 2.0 * u), (-DRINK_FADE * t / end).exp()))
+}
+
+pub fn drinking_lights(
+    mut cmds: Commands,
+    g: Res<crate::Game>,
+    kid: Query<&Transform, With<crate::kid::KidSprite>>,
+    mut q: Query<(Entity, &Drinking, &mut Transform, &mut PointLight), Without<crate::kid::KidSprite>>,
+) {
+    let Ok(k) = kid.single() else { return };
+    let now = g.world.tick as f32 + g.world.alpha();
+    let dir = if g.world.kid.facing_left { -1.0 } else { 1.0 };
+    for (e, d, mut t, mut l) in &mut q {
+        let Some((fly, fade)) = drinking_at(now - d.start as f32) else {
+            cmds.entity(e).despawn();
+            continue;
+        };
+        t.translation = d.from.lerp(k.translation + MOUTH * Vec3::new(dir, 1.0, 1.0), fly);
+        l.intensity = d.intensity * fade;
+    }
+}
 
 /// The bubbles' faint coloured light shines in enhanced mode only.
 pub fn bubble_lights(mode: Res<RenderMode>, set: Res<Settings>, cam: Query<&GlobalTransform, With<Camera3d>>, mut q: Query<(&Transform, &mut PointLight), With<crate::room::BubbleLight>>) {
@@ -461,6 +511,17 @@ pub fn watchdog(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A drunk potion's light: starts at the bottle, arrives at the kid after DRINK_FLY ticks, only ever gets darker and is out at the end.
+    #[test]
+    fn drinking_light_flies_then_fades_out() {
+        assert_eq!(drinking_at(0.0), Some((0.0, 1.0)));
+        assert_eq!(drinking_at(DRINK_FLY).unwrap().0, 1.0);
+        assert_eq!(drinking_at(DRINK_FLY + 3.0).unwrap().0, 1.0, "then it follows the kid");
+        let ts: Vec<f32> = (0..210).map(|i| i as f32 / 10.0).collect();
+        assert!(ts.windows(2).all(|w| drinking_at(w[1]).unwrap().1 < drinking_at(w[0]).unwrap().1 && drinking_at(w[1]).unwrap().0 >= drinking_at(w[0]).unwrap().0));
+        assert!(drinking_at(20.9).unwrap().1 < 0.01 && drinking_at(21.0).is_none() && drinking_at(-0.1).is_none());
+    }
 
     #[test]
     fn nearest_picks_closest_lights_in_order() {

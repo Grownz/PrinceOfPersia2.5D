@@ -243,7 +243,7 @@ fn main() {
                 fullscreen,
                 char_style_key,
                 (kid::live_look, cutscene::live_look, (room::palette_live, cutscene::chamber_live).chain()), // settings that apply live
-                (enhanced::mode_key, enhanced::watchdog, enhanced::apply, enhanced::sun_brightness, room::flicker, enhanced::torch_shadows, enhanced::bubble_lights, particles::clash_sparks, particles::sparks).chain(),
+                (enhanced::mode_key, enhanced::watchdog, enhanced::apply, enhanced::sun_brightness, room::flicker, enhanced::torch_shadows, enhanced::bubble_lights, particles::clash_sparks, particles::sparks, enhanced::drinking_lights).chain(),
                 perf_log.run_if(move || perf),
                 (perf::overlay, perf::bench, perf::casters),
                 screenshot_and_quit,

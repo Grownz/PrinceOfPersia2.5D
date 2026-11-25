@@ -1070,7 +1070,7 @@ pub struct Built(Vec<(usize, Vec3, Vec<TileKey>)>);
 pub fn rebuild_on_change(
     mut cmds: Commands,
     g: Res<Game>,
-    old: Query<(Entity, Option<&TileOf>, Has<Falling>), With<RoomEntity>>,
+    old: Query<(Entity, Option<&TileOf>, Has<Falling>, Has<BubbleLight>, Option<&PointLight>, &Transform), With<RoomEntity>>,
     p: Res<Palette>,
     mut last: Local<(usize, usize, u32, u32)>,
     mut built: Local<Built>,
@@ -1113,9 +1113,17 @@ pub fn rebuild_on_change(
             }
         }
     }
-    for (e, t, falling) in &old {
+    // the kid drinks (frames 191..=205 of the pick-up tick on): the light of the potion that just vanished is kept and flies to him
+    let drinking = (191..=205).contains(&(g.world.kid.frame as i32));
+    for (e, t, falling, bubble, light, tr) in &old {
         if falling || t.is_some_and(|t| changed.contains(t)) {
-            cmds.entity(e).despawn();
+            let gone = t.is_some_and(|t| level.tile_at(t.0 as usize, t.1 as usize).kind != Tile::Potion);
+            match light {
+                Some(l) if bubble && drinking && gone && l.intensity > 0.0 => {
+                    cmds.entity(e).remove::<(RoomEntity, TileOf, BubbleLight)>().insert(crate::enhanced::Drinking::new(g.world.tick, tr.translation, l.intensity));
+                }
+                _ => cmds.entity(e).despawn(),
+            }
         }
     }
     for (room, origin, _) in &built.0 {

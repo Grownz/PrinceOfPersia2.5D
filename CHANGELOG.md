@@ -3,6 +3,12 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [Unreleased]
+
+### Changed
+- A drunk potion's bubble light no longer vanishes at once: it flies from the bottle's place to the kid's face during the first 12 ticks of the drinking
+  animation and fades exponentially until its end (21 ticks, `sim::DRINK_TICKS`).
+
 ## [0.6.11] - 2026-11-25
 
 ### Changed
