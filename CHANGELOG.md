@@ -6,6 +6,8 @@ The original game data is never part of the repository or a release; see `docs/P
 ## [Unreleased]
 
 ### Added
+- Option `cinematic_fights` (Settings > Graphics, off by default, enhanced modes only): while the prince has his sword drawn against a guard in the same room the camera zooms smoothly on the middle of the two (at most 1.8x, both always in the picture with a margin); a sword hit sprays blood from the blade tip that stays on the floor, a killed figure gets a growing pool; each hit makes the attacker's sword bloodier (flecked, then covered), sheathing cleans it. `World::hits` reports every landed sword hit (`sim::Hit`).
+- Debug hook `POP_SET=...,guard=TILE`: one guard on that tile of the start room, a plain floor row and a sword for the kid (sword-fight screenshots).
 - Dev profile: dependencies are built with `debug = "line-tables-only"` (cold debug build 24 % faster, `target/debug` about 47 % smaller; no variable info inside Bevy).
 - `tools/hygiene.ps1`, run at the end of `tools/package.ps1`: removes merged, clean, unused agent worktrees and the incremental caches (`target/*/incremental`).
 

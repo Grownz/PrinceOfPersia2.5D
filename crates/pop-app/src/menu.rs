@@ -154,7 +154,7 @@ pub struct Opt {
 const ON_OFF: &[&str] = &["true", "false"];
 const PERCENT: Ctl = Ctl::Slider { min: 0, max: 100, step: 5 };
 
-pub const OPTS: [Opt; 22] = [
+pub const OPTS: [Opt; 23] = [
     Opt { key: "render_mode", label: "Rendering", values: &["classic", "enhanced"], live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "character_style", label: "Characters", values: &settings::CHARACTER_STYLES, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "camera_scroll", label: "Room change", values: &settings::CAMERA_SCROLLS, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
@@ -177,6 +177,7 @@ pub const OPTS: [Opt; 22] = [
     Opt { key: "sun_brightness", label: "Sun light (enhanced)", values: &settings::SUN_BRIGHTNESS, live: true, tab: Tab::Graphics, ctl: Ctl::Steps },
     Opt { key: "pad_layout", label: "Controller layout", values: &settings::PAD_LAYOUTS, live: true, tab: Tab::Controller, ctl: Ctl::Dropdown },
     Opt { key: "ssao", label: "SSAO (enhanced)", values: ON_OFF, live: true, tab: Tab::Graphics, ctl: Ctl::Checkbox },
+    Opt { key: "cinematic_fights", label: "Cinematic fights (enhanced)", values: ON_OFF, live: true, tab: Tab::Graphics, ctl: Ctl::Checkbox },
 ];
 
 /// The settings.json value of `key` as text ("classic", "true", "0.7").

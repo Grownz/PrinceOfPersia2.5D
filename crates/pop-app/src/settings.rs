@@ -68,6 +68,8 @@ pub struct Settings {
     pub quick_input: bool,
     /// off by default, needs a restart. No vsync (tearing possible) and one frame in flight: 8-33 ms less delay between the logic and the screen
     pub low_latency_present: bool,
+    /// off by default, enhanced mode only: zoom on a sword fight in one room, blood on hits and pools under the dead, bloody swords
+    pub cinematic_fights: bool,
 }
 
 pub const CAMERA_SCROLLS: [&str; 2] = ["smooth", "flip"];
@@ -177,7 +179,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.5, muted: false, sound: "adlib".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, external_terminal: false, render_mode: "enhanced".into(), character_style: "voxel".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "low".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into(), pad_layout: "modern".into(), tile_relief: false, quick_input: true, low_latency_present: false }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.5, muted: false, sound: "adlib".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, external_terminal: false, render_mode: "enhanced".into(), character_style: "voxel".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "low".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into(), pad_layout: "modern".into(), tile_relief: false, quick_input: true, low_latency_present: false, cinematic_fights: false }
     }
 }
 
@@ -231,6 +233,7 @@ impl Settings {
             tile_relief: field(&o, "tile_relief", d.tile_relief, |_| true),
             quick_input: field(&o, "quick_input", d.quick_input, |_| true),
             low_latency_present: field(&o, "low_latency_present", d.low_latency_present, |_| true),
+            cinematic_fights: field(&o, "cinematic_fights", d.cinematic_fights, |_| true),
         }
     }
 
@@ -546,7 +549,8 @@ mod tests {
     #[test]
     fn latency_options_parse_and_defaults() {
         let d = Settings::default();
-        assert!(d.quick_input && !d.low_latency_present);
+        assert!(d.quick_input && !d.low_latency_present && !d.cinematic_fights);
+        assert!(Settings::parse(r#"{"cinematic_fights": true}"#).cinematic_fights);
         let s = Settings::parse(r#"{"quick_input": true, "low_latency_present": true}"#);
         assert!(s.quick_input && s.low_latency_present);
         assert_eq!(Settings::parse(&s.to_json()), s);

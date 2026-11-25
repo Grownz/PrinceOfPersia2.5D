@@ -28,6 +28,31 @@ pub struct View {
     /// (level, world generation, shown room) the last time `follow` ran
     seen: (usize, u32, usize),
     upside: bool,
+    /// cinematic fights: the smoothed camera shift from the room's centre and the zoom beyond 1 (both 0 = the plain camera)
+    focus: Vec2,
+    zoom: f32,
+}
+
+/// Cinematic fights: the zoom never goes beyond this, and the fighters keep this margin (world units) to the picture's edge.
+const MAX_ZOOM: f32 = 1.8;
+const MARGIN_X: f32 = 1.2;
+const HALF_H: f32 = 1.3;
+/// Per second: how fast the camera approaches (or leaves) the fight.
+const FIGHT_RATE: f32 = 3.0;
+/// The look-at point of `game_camera` (room centre).
+const LOOK: Vec2 = Vec2::new(5.0, 3.0);
+
+/// The camera aim for a fight between two figures standing at `a` and `b` (image centre x, bottom y): the shift of the look-at
+/// point (to the middle of the two) and the zoom beyond 1. The zoom is as strong as both stay in the picture with the margins
+/// (the sword's reach, the figures' height), up to MAX_ZOOM; never below the plain camera.
+pub fn fight_aim(a: Vec2, b: Vec2, aspect: f32) -> (Vec2, f32) {
+    let d = crate::game_camera(aspect).translation.z;
+    let half_h = d * (std::f32::consts::FRAC_PI_8).tan();
+    let half_w = half_h * aspect;
+    let mid = (a + b) / 2.0 + Vec2::new(0.0, 0.8);
+    let need_w = (a.x - b.x).abs() / 2.0 + MARGIN_X;
+    let z = (half_w / need_w).min(half_h / (HALF_H + (a.y - b.y).abs() / 2.0)).clamp(1.0, MAX_ZOOM);
+    (mid - LOOK, z - 1.0)
 }
 
 /// Smoothstep: zero speed at both ends, so the pan neither jerks off nor snaps in.
@@ -54,7 +79,17 @@ fn room_size() -> Vec2 {
 }
 
 /// Every frame, before the camera is placed: start a pan when the shown room changed, advance it, take the upside flag.
-pub fn follow(time: Res<Time>, g: Res<Game>, set: Res<crate::settings::Settings>, mut v: ResMut<View>) {
+#[allow(clippy::too_many_arguments)]
+pub fn follow(
+    time: Res<Time>,
+    g: Res<Game>,
+    set: Res<crate::settings::Settings>,
+    mode: Res<crate::settings::RenderMode>,
+    state: Res<State<crate::flow::Screen>>,
+    gore: Res<crate::blood::Gore>,
+    win: Single<&Window, With<bevy::window::PrimaryWindow>>,
+    mut v: ResMut<View>,
+) {
     let now = (g.level, g.gen, g.room);
     if v.seen != now {
         let old = v.seen.2;
@@ -66,11 +101,23 @@ pub fn follow(time: Res<Time>, g: Res<Game>, set: Res<crate::settings::Settings>
     }
     v.t += time.delta_secs();
     v.upside = g.world.upside;
+    // cinematic fights: the kid has drawn his sword against a living guard in the shown room
+    let fight = (set.cinematic_fights && *mode != crate::settings::RenderMode::Classic && *state.get() == crate::flow::Screen::Playing && !g.world.upside && g.world.kid.sword == 2 && g.world.kid.alive && g.world.kid.room as usize == g.room)
+        .then_some(())
+        .and_then(|_| g.world.guard.as_ref().filter(|k| k.alive && k.room as usize == g.room))
+        .and_then(|_| gore.bodies[0].zip(gore.bodies[1]));
+    let (focus, zoom) = fight.map_or((Vec2::ZERO, 0.0), |(a, b)| fight_aim(a, b, win.width() / win.height().max(1.0)));
+    let k = 1.0 - (-FIGHT_RATE * time.delta_secs()).exp();
+    v.focus = v.focus.lerp(focus, k);
+    v.zoom += (zoom - v.zoom) * k;
 }
 
 /// The level camera for this window aspect: `game_camera` moved by the pan.
 pub fn transform(aspect: f32, v: &View) -> Transform {
     let mut t = crate::game_camera(aspect);
+    // the fight shifts the aim point and moves the camera closer along its line of sight (same direction, so no new rotation)
+    let look = LOOK.extend(0.0);
+    t.translation = look + v.focus.extend(0.0) + (t.translation - look) / (1.0 + v.zoom);
     t.translation += pan_offset(v.from, v.t).extend(0.0);
     t
 }
@@ -149,6 +196,21 @@ mod tests {
         // frame rate independent: the offset depends on the elapsed time only
         let at = |fps: f32| (0..(fps * 0.2) as usize).fold(0.0, |t, _| t + 1.0 / fps);
         assert!((pan_offset(from, at(30.0)) - pan_offset(from, at(240.0))).length() < 1e-3);
+    }
+
+    #[test]
+    fn a_fight_zooms_but_keeps_both_fighters_in_the_picture() {
+        let aspect = 16.0 / 9.0;
+        let half_h = crate::game_camera(aspect).translation.z * (std::f32::consts::FRAC_PI_8).tan();
+        let half_w = half_h * aspect;
+        // close together: the full zoom, aimed at the middle
+        let (f, z) = fight_aim(Vec2::new(4.0, 1.0), Vec2::new(5.0, 1.0), aspect);
+        assert!((z - (MAX_ZOOM - 1.0)).abs() < 1e-5 && (f - (Vec2::new(4.5, 1.8) - LOOK)).length() < 1e-5);
+        // far apart: less zoom, and at that zoom both still lie inside the picture with the margin
+        let (_, z) = fight_aim(Vec2::new(1.0, 1.0), Vec2::new(7.5, 1.0), aspect);
+        assert!(z < MAX_ZOOM - 1.0 && 3.25 + MARGIN_X <= half_w / (1.0 + z) + 1e-4);
+        // wider than the picture: no zoom at all, never a zoom out
+        assert_eq!(fight_aim(Vec2::new(-30.0, 1.0), Vec2::new(40.0, 1.0), aspect).1, 0.0);
     }
 
     #[test]

@@ -12,7 +12,7 @@
 //! (plus rt_experimental in a `--features solari` build started in that mode, docs/r3_solari.md),
 //! F6 sprite / voxel characters,
 //! F7 (debug text on, or POP_DEBUG_CAM=1) a closer, turned camera on the kid (POP_CAM_ANGLE="degrees[,distance]").
-//! POP_CAMERA=smooth|flip overrides settings.json "camera_scroll" (camera.rs). POP_SET="start=ROOM:TILE,door=N,upside=1"
+//! POP_CAMERA=smooth|flip overrides settings.json "camera_scroll" (camera.rs). POP_SET="start=ROOM:TILE,door=N,upside=1,guard=TILE"
 //! (with POP_LEVEL; "gate=N" sets every gate's opening, "exit=1" opens every exit door so "up" in front of it climbs the stairs) changes the first world for screenshots (`debug_set`). POP_MENU = main, settings (video, audio, graphics, downloads), controls, hof, name
 //! or attract opens a menu page or a hall-of-fame screen at once (`flow::debug_menu`).
 mod atlas;
@@ -30,6 +30,7 @@ mod menu;
 mod menu_ui;
 mod mixer;
 mod music;
+mod blood;
 mod particles;
 mod perf;
 mod relief;
@@ -203,6 +204,7 @@ fn main() {
         .insert_resource(kid::Latch::default())
         .init_resource::<particles::Clash>()
         .init_resource::<particles::Swords>()
+        .init_resource::<blood::Gore>()
         .insert_resource(assets)
         .init_resource::<flow::Flow>()
         .init_resource::<menu_ui::MenuUi>()
@@ -243,7 +245,7 @@ fn main() {
                 fullscreen,
                 char_style_key,
                 (kid::live_look, cutscene::live_look, (room::palette_live, cutscene::chamber_live).chain()), // settings that apply live
-                (enhanced::mode_key, enhanced::watchdog, enhanced::apply, enhanced::sun_brightness, room::flicker, enhanced::torch_shadows, enhanced::bubble_lights, particles::clash_sparks, particles::sparks, enhanced::drinking_lights).chain(),
+                (enhanced::mode_key, enhanced::watchdog, enhanced::apply, enhanced::sun_brightness, room::flicker, enhanced::torch_shadows, enhanced::bubble_lights, particles::clash_sparks, particles::sparks, enhanced::drinking_lights, blood::spawn, blood::motion).chain(),
                 perf_log.run_if(move || perf),
                 (perf::overlay, perf::bench, perf::casters),
                 screenshot_and_quit,
@@ -430,7 +432,17 @@ fn debug_set(a: &kid::KidAssets, level: &Level, n: usize) -> sim::World {
     if let Some((r, t)) = val("start").as_deref().and_then(|v| v.split_once(':')).and_then(|(r, t)| Some((r.parse().ok()?, t.parse().ok()?))) {
         (l.start_room, l.start_tile) = (r, t);
     }
+    // guard=TILE: the only guard stands on that tile of the start room, facing left, skill 3 (sword-fight screenshots)
+    if let Some(t) = val("guard").and_then(|v| v.parse::<u8>().ok()) {
+        l.guards = vec![pop_core::level::Guard { room: l.start_room, tile: t, dir: 255, skill: 3, colour: 0 }];
+        l.start_dir = 0;
+        // a plain floor row 1 in that room, nothing else in it
+        for i in 0..30 {
+            l.set_tile(l.start_room as usize, i, if (10..20).contains(&i) { pop_core::level::Tile::Floor } else { pop_core::level::Tile::Empty });
+        }
+    }
     let mut w = sim::World::new(a.data.clone(), l, n);
+    w.kid.have_sword |= val("guard").is_some(); // the fight hook: the kid can draw his sword at once
     w.leveldoor_open = val("door").and_then(|v| v.parse().ok()).unwrap_or(w.leveldoor_open);
     // exit=1: every exit door stands open and the level counts as started elsewhere, so "up" in front of it climbs the stairs
     if val("exit").as_deref() == Some("1") {

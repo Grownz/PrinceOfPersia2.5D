@@ -147,6 +147,10 @@ in-game Settings menu (Esc), see [controls.md](controls.md).
 - `camera_scroll`: `smooth` (default: a short eased pan to the next room) or `flip` (the original's hard cut); env `POP_CAMERA`.
 - `motion_smoothing`: `position` (default: kid and guard drawn between the last two logic frames, 60 Hz motion, one logic frame
   / 83 ms of display delay) or `off` (the original's 12 Hz motion); env `POP_SMOOTH`.
+- `cinematic_fights` (off by default, Settings > Graphics, enhanced modes only; `blood.rs`, `camera::fight_aim`, `kid::bloody`): `World::hits` (`sim::Hit`: victim, room, x, y, side of the attacker, killed) is
+  drained every frame by `blood::spawn`, also when the option is off. Blood sprays from the attacker's drawn sword tip (`Swords`), droplets fall ballistically and stay as flat spots (at most 500,
+  the oldest go first); a killed figure's pool starts growing when its body lies on a dead frame. Blood belongs to the shown room and is removed on a room or level change. The sword's blood level
+  (0..2) repaints the blade's grey pixels red in the sword picture (`KidAssets` colour key of kind 254). The zoom needs both fighters drawn in the shown room and the kid's sword drawn.
 - `quick_input` (on by default, Settings > Video): `World::tick_now` lets a tick start after 2 of its 5 steps when a direction key arrives while the kid stands
   (frame 15, action 0, no sword); 3-tick cooldown. Measured in the sim: a key changes the pose on the tick that reads it (`input_latency_in_ticks`,
   ignored test), so the wait for the tick is the delay it removes. `low_latency_present` (off, restart): `AutoNoVsync` and `desired_maximum_frame_latency` 1.

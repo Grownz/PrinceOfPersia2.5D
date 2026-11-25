@@ -553,9 +553,11 @@ impl World {
                 self.kid.action = 1; // the kid wins a double hit
             }
             g.hurt_by_sword(&env);
+            self.hits.push(Hit::of(g, &self.kid, true));
             self.shared.refrac = REFRACTIMER[(g.skill as usize).min(11)];
         } else if self.kid.action == 99 {
             self.kid.hurt_by_sword(&env);
+            self.hits.push(Hit::of(&self.kid, g, false));
         }
     }
 
@@ -568,6 +570,27 @@ impl World {
             g.hp = (g.hp + g.hp_delta).clamp(0, g.hp_max);
         }
         self.kid.hp = (self.kid.hp + self.kid.hp_delta).clamp(0, self.kid.hp_max);
+    }
+}
+
+/// A sword hit that landed: where the victim stands (original units) and from which side it was struck.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hit {
+    /// the victim is the guard (else the kid)
+    pub guard: bool,
+    pub room: u8,
+    pub x: u8,
+    pub y: u8,
+    /// the attacker stands to the left of the victim
+    pub from_left: bool,
+    /// the hit killed the victim
+    pub dead: bool,
+}
+
+impl Hit {
+    /// Read right after `vic.hurt_by_sword`: the damage is in `hp_delta` until do_delta_hp.
+    fn of(vic: &Kid, att: &Kid, guard: bool) -> Hit {
+        Hit { guard, room: vic.room, x: vic.x, y: vic.y, from_left: att.x < vic.x, dead: vic.hp + vic.hp_delta <= 0 }
     }
 }
 
@@ -727,10 +750,13 @@ mod tests {
         w.kid.frame = 154;
         w.kid.action = 1;
         let (hp0, _) = (w.guard.as_ref().unwrap().hp, env_gt);
+        w.hits.clear();
         w.check_sword_hurting();
         assert_eq!(w.guard.as_ref().unwrap().action, 99, "hit marks the victim");
         w.check_sword_hurt();
         assert_eq!(w.guard.as_ref().unwrap().hp_delta, -1);
+        let gx = w.guard.as_ref().unwrap().x;
+        assert_eq!(w.hits, [Hit { guard: true, room: w.guard.as_ref().unwrap().room, x: gx, y: w.guard.as_ref().unwrap().y, from_left: true, dead: false }]);
         w.do_delta_hp();
         assert_eq!(w.guard.as_ref().unwrap().hp, hp0 - 1);
     }

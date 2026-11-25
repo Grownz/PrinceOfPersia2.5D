@@ -227,6 +227,23 @@ fn posed_model(im: &image::Image, pal: &[[u8; 3]], mirrored: bool, hang: Hang) -
     }
 }
 
+/// Blood on a sword picture (cinematic fights): level 1 puts flecks on the grey blade pixels, level 2 covers the blade. Two reds
+/// are appended to the palette; the golden hilt stays.
+fn bloody(im: &mut image::Image, pal: &mut Vec<[u8; 3]>, level: u8) {
+    let Ok(base) = u8::try_from(pal.len()) else { return };
+    pal.extend([[150, 12, 16], [96, 6, 10]]);
+    let w = im.width as usize;
+    for (i, p) in im.pixels.iter_mut().enumerate() {
+        let Some(c) = pal.get(*p as usize) else { continue };
+        let (hi, lo) = (c.iter().max().copied().unwrap_or(0), c.iter().min().copied().unwrap_or(0));
+        let blade = *p != 0 && hi - lo < 48 && hi > 80;
+        let fleck = (i % w) * 5 + (i / w) * 7 + (i % w) * (i / w);
+        if blade && (level >= 2 || fleck % 3 == 0) {
+            *p = base + (i % 2) as u8;
+        }
+    }
+}
+
 /// The decoded image and its palette (see `material_for`).
 fn decoded(a: &KidAssets, kind: u8, n: u8, pal_palace: bool, colour: u8) -> Option<(image::Image, Vec<[u8; 3]>)> {
     let coloured: Vec<[u8; 3]>;
@@ -245,8 +262,12 @@ fn decoded(a: &KidAssets, kind: u8, n: u8, pal_palace: bool, colour: u8) -> Opti
             (a.gdats.get(kind as usize)?, a.gpals.get(pi)?)
         }
     };
-    let im = image::decode(dat.get(match kind { 255 => 401, 254 => 701, _ => 751 } + n as u16)?)?;
-    Some((im, pal.clone()))
+    let mut im = image::decode(dat.get(match kind { 255 => 401, 254 => 701, _ => 751 } + n as u16)?)?;
+    let mut pal = pal.clone();
+    if kind == 254 && colour > 0 {
+        bloody(&mut im, &mut pal, colour);
+    }
+    Some((im, pal))
 }
 
 /// Drawing rule (docs/mechanics.md 7.3). KID.DAT images face LEFT as stored; the engine mirrors them when the kid faces right.
@@ -416,6 +437,7 @@ fn draw_char(
     gtype: i8,
     level_no: usize,
     (slot, dt): (usize, f32),
+    centre: &mut Option<Vec2>,
     imgs: &mut Assets<Image>,
     mats: &mut Assets<StandardMaterial>,
     vx: &mut Voxels,
@@ -433,6 +455,7 @@ fn draw_char(
     let key = (kind, f.image, k.charid == 1 && !guard_img, palace(level_no), k.colour);
     let Some((m, w, h)) = (f.image != 255 && !stairs_gone(k.frame)).then(|| material_for(a, imgs, mats, key.0, key.1, key.2, key.3, key.4)).flatten() else {
         *vis = Visibility::Hidden;
+        *centre = None;
         return None;
     };
     *vis = Visibility::Inherited;
@@ -449,6 +472,7 @@ fn draw_char(
     if k.hp_delta < 0 && mat.0 == a.voxel_mat {
         mat.0 = a.voxel_flash.clone();
     }
+    *centre = Some(Vec2::new(cx, p.y));
     Some(p)
 }
 
@@ -585,6 +609,7 @@ fn sword_shown(k: &Kid) -> bool {
 fn draw_sword(
     k: &Kid,
     body: Option<Vec2>,
+    blood: u8,
     a: &mut KidAssets,
     level: &pop_core::level::Level,
     gtype: i8,
@@ -604,7 +629,7 @@ fn draw_sword(
         *vis = Visibility::Hidden;
         return None;
     };
-    let Some((m, w, h)) = (img != 255).then(|| material_for(a, imgs, mats, 254, img, false, false, 0)).flatten() else {
+    let Some((m, w, h)) = (img != 255).then(|| material_for(a, imgs, mats, 254, img, false, false, blood)).flatten() else {
         *vis = Visibility::Hidden;
         return None;
     };
@@ -615,7 +640,7 @@ fn draw_sword(
     let y = p.y - dy as f32 * crate::room::TILE_H / TILE_H_PX as f32;
     let (cx, flip) = if k.facing_left { (x + sw / 2.0, 1.0) } else { (x - sw / 2.0, -1.0) };
     // voxel sword just in front of the body's thickest layers (the original draws it over the body)
-    show(a, vx, (254, img, false, false, 0), !k.facing_left, m, Vec3::new(cx, y + sh / 2.0, 0.65), Vec2::new(flip * sw, sh), VOXEL_Z + 5.0 / 32.0, (0, false), t, mat, mesh);
+    show(a, vx, (254, img, false, false, blood), !k.facing_left, m, Vec3::new(cx, y + sh / 2.0, 0.65), Vec2::new(flip * sw, sh), VOXEL_Z + 5.0 / 32.0, (0, false), t, mat, mesh);
     Some((Vec2::new(cx, y + sh / 2.0), Vec2::new(sw, sh)))
 }
 
@@ -631,6 +656,7 @@ pub fn render(
     mut q: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d), (With<KidSprite>, Without<GuardSprite>)>,
     mut qg: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d), (With<GuardSprite>, Without<KidSprite>)>,
     mut swords: ResMut<crate::particles::Swords>,
+    mut gore: ResMut<crate::blood::Gore>,
     mut qs: Query<(&SwordSprite, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>, &mut Mesh3d), (Without<KidSprite>, Without<GuardSprite>)>,
 ) {
     let mut a = a;
@@ -648,19 +674,22 @@ pub fn render(
         if !kid_here {
             *vis = Visibility::Hidden;
         } else {
-            kid_body = draw_char(&w.kid, g.kid_prev, alpha, smooth, &mut a, &w.level, w.guard_type, w.level_no, (0, dt), &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh);
+            kid_body = draw_char(&w.kid, g.kid_prev, alpha, smooth, &mut a, &w.level, w.guard_type, w.level_no, (0, dt), &mut gore.bodies[0], &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh);
         }
     }
     if let Ok((mut t, mut vis, mut mat, mut mesh)) = qg.single_mut() {
         match &w.guard {
-            Some(gd) if gd.room as usize == g.room => guard_body = draw_char(gd, g.guard_prev, alpha, smooth, &mut a, &w.level, w.guard_type, w.level_no, (1, dt), &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh),
-            _ => *vis = Visibility::Hidden,
+            Some(gd) if gd.room as usize == g.room => guard_body = draw_char(gd, g.guard_prev, alpha, smooth, &mut a, &w.level, w.guard_type, w.level_no, (1, dt), &mut gore.bodies[1], &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh),
+            _ => {
+                *vis = Visibility::Hidden;
+                gore.bodies[1] = None;
+            }
         }
     }
     for (SwordSprite(is_guard), mut t, mut vis, mut mat, mut mesh) in &mut qs {
         let (k, body) = if *is_guard { (w.guard.as_ref(), guard_body) } else { (Some(&w.kid), kid_body) };
         match k {
-            Some(k) => swords.0[*is_guard as usize] = draw_sword(k, body, &mut a, &w.level, w.guard_type, &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh),
+            Some(k) => swords.0[*is_guard as usize] = draw_sword(k, body, gore.sword[*is_guard as usize], &mut a, &w.level, w.guard_type, &mut imgs, &mut mats, vx, &mut t, &mut vis, &mut mat, &mut mesh),
             None => {
                 *vis = Visibility::Hidden;
                 swords.0[*is_guard as usize] = None;
@@ -687,6 +716,21 @@ fn script() -> Option<&'static Vec<Keys>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn blood_flecks_then_covers_the_blade_but_not_the_hilt() {
+        // 12 grey blade pixels (palette 1) and a gold hilt pixel (palette 2)
+        let img = |p: &[u8]| pop_core::image::Image { width: 13, height: 1, bpp: 8, pixels: p.to_vec() };
+        let src: Vec<u8> = [vec![1u8; 12], vec![2]].concat();
+        let pal = vec![[0, 0, 0], [200, 200, 205], [220, 180, 40]];
+        let red = |im: &pop_core::image::Image| im.pixels.iter().filter(|&&p| p >= 3).count();
+        let (mut one, mut two) = (img(&src), img(&src));
+        super::bloody(&mut one, &mut pal.clone(), 1);
+        super::bloody(&mut two, &mut pal.clone(), 2);
+        assert!(red(&one) > 0 && red(&one) < 12, "flecks: {}", red(&one));
+        assert_eq!(red(&two), 12);
+        assert_eq!((one.pixels[12], two.pixels[12]), (2, 2), "the hilt stays");
+    }
+
     use super::*;
 
     /// Replays scripted runs on the shipped levels (random key holds: running, turning, jumping, climbing, falling, the demo

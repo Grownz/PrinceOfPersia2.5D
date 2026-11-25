@@ -13,7 +13,7 @@ use crate::level::{Level, Tile, COLS, ROWS, TILES_PER_ROOM};
 use std::sync::Arc;
 
 mod combat;
-pub use combat::{GuardSlot, ShadowState, GUARD_TYPE, mk_env};
+pub use combat::{GuardSlot, Hit,ShadowState, GUARD_TYPE, mk_env};
 
 pub const TICKS_PER_SEC: u32 = 12;
 /// Logic ticks from the pick-up of a potion (frame 191) until the kid stands again (frame 15); checked in world_tests.
@@ -189,6 +189,8 @@ pub struct World {
     pub mobs: Vec<Mob>,
     /// sound ids triggered since the consumer last cleared this list (docs/tiles.md section 9)
     pub sounds: Vec<u8>,
+    /// sword hits since the consumer last cleared this list (renderers: blood)
+    pub hits: Vec<Hit>,
     /// 0 = exit door closed, 1 = open (set when the door finished opening)
     pub leveldoor_open: u8,
     /// bumped whenever tiles, trobs or mobs changed; renderers use it to know when to rebuild
@@ -264,6 +266,7 @@ impl World {
             trobs: vec![],
             mobs: vec![],
             sounds: vec![],
+            hits: vec![],
             leveldoor_open: 0,
             version: 0,
             dirty: true,
