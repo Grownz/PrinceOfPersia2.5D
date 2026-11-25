@@ -1,7 +1,8 @@
 # Builds the release exe and packs dist/PrinceOfPersia-x64/ (exe, README.txt) plus dist/PrinceOfPersia-x64.zip.
 # Never copies Original_data or any other game file: players supply their own copy.
 # -SkipTests: only build and pack (the release workflow: CI has run the tests on that commit already)
-param([switch]$SkipTests)
+# -SkipHygiene: do not run tools/hygiene.ps1 at the end (old worktrees, incremental caches)
+param([switch]$SkipTests, [switch]$SkipHygiene)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -72,3 +73,6 @@ if ($unexpected) { throw "unexpected files in package: $($unexpected.Name -join 
 
 Compress-Archive -Path $out -DestinationPath $zip
 "{0}: {1:N1} MB" -f $zip, ((Get-Item $zip).Length / 1MB)
+
+# housekeeping: merged agent worktrees and incremental caches go (nothing unmerged or uncommitted)
+if (-not $SkipHygiene) { & (Join-Path $PSScriptRoot 'hygiene.ps1') }

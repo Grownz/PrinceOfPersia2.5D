@@ -30,6 +30,10 @@ Package: `powershell -ExecutionPolicy Bypass -File tools/package.ps1` builds the
 file. Release notes come from `CHANGELOG.md` (`tools/release_notes.ps1 v0.5.0 notes.md`). `-SkipTests` only builds and packs
 (`package.ps1` runs the CI test run `tools/test_without_data.ps1` next to the build otherwise).
 
+Hygiene: `tools/package.ps1` ends with `tools/hygiene.ps1` (`-SkipHygiene` to skip; not on CI): it removes git worktrees under `.claude/worktrees` that are
+clean, unlocked, fully merged into HEAD and unused for 24 h (with their merged branch), and the incremental caches `target/*/incremental` (a debug build
+recreates them; `-KeepCaches` keeps them). `-DryRun` only lists. Uncommitted or unmerged work is never touched; `target/debug/deps` is not cleaned (use `cargo clean`).
+
 Release: bump the versions and `CHANGELOG.md`, run `tools/package.ps1`, commit and push `main`, then publish with the local zip:
 `gh release create vX.Y.Z --target <commit> --title vX.Y.Z --notes-file notes.md dist/PrinceOfPersia-x64.zip` (this creates the tag).
 `.github/workflows/release.yml` runs on the tag, sees the zip on the release and stops after a few seconds; without a zip it builds one

@@ -3,6 +3,12 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow `Cargo.toml`.
 The original game data is never part of the repository or a release; see `docs/PROVENANCE.md`.
 
+## [Unreleased]
+
+### Added
+- Dev profile: dependencies are built with `debug = "line-tables-only"` (cold debug build 24 % faster, `target/debug` about 47 % smaller; no variable info inside Bevy).
+- `tools/hygiene.ps1`, run at the end of `tools/package.ps1`: removes merged, clean, unused agent worktrees and the incremental caches (`target/*/incremental`).
+
 ## [0.6.12] - 2026-11-25
 
 ### Changed

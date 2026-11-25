@@ -5,6 +5,9 @@ members = ["crates/pop-core", "crates/pop-app"]
 # Bevy is slow unoptimized; keep our own crates debuggable.
 [profile.dev.package."*"]
 opt-level = 3
+# dependencies keep file and line (backtraces, profilers) but no variable info: they are optimised (opt-level 3) anyway. Measured on a cold
+# `cargo build -p pop-app`: target/debug 8.65 -> 4.6 GB, the pdb 1090 -> 402 MB, 334 -> 254 s; the relink after a change did not clearly shorten
+debug = "line-tables-only"
 [profile.dev]
 opt-level = 1
 
