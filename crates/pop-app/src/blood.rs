@@ -18,6 +18,9 @@ pub struct Gore {
     shared: Option<Shared>,
 }
 
+use crate::room::{SLAB_BACK, SLAB_FRONT};
+/// Spray origin depth: the middle of the floor tiles (z -0.95..0.5), so the drops fall on them, not past the front lip.
+const SPRAY_Z: f32 = (SLAB_BACK + SLAB_FRONT) / 2.0;
 const GRAVITY: f32 = 8.0;
 const DROPS: usize = 14;
 const DROPS_KILL: usize = 26;
@@ -61,8 +64,20 @@ fn pool_radius(t: f32) -> f32 {
 }
 
 /// World y of the feet of a figure at original y `y` (row 2 floor = 0).
-fn floor_of(y: u8) -> f32 {
+pub fn floor_of(y: u8) -> f32 {
     (181.0 - y as f32) * crate::room::TILE_H / TILE_H_PX as f32
+}
+
+/// Whether a drop landing at world `x`, floor height `floor` hits a rendered floor tile of the shown room (not a gap, a wall
+/// block, a balcony or another room); the rest of the spray is gone.
+fn on_floor(level: &pop_core::level::Level, room: usize, x: f32, floor: f32) -> bool {
+    use pop_core::level::Tile::*;
+    let (col, row) = (x.floor(), 2 - (floor / crate::room::TILE_H).round() as i32);
+    if !(0.0..10.0).contains(&col) || !(0..3).contains(&row) || !(1..=pop_core::level::ROOMS).contains(&room) {
+        return false;
+    }
+    let t = level.tile_at(room, row as usize * 10 + col as usize).kind;
+    !matches!(t, Empty | BigPillarTop | Doortop | Wall | LatticeSupport | SmallLattice | LatticeLeft | LatticeRight | BalconyLeft | BalconyRight | Spikes)
 }
 
 #[derive(Clone)]
@@ -124,8 +139,8 @@ pub fn spawn(
         let (att, vic) = ((!h.guard) as usize, h.guard as usize);
         let dir = if h.from_left { 1.0 } else { -1.0 }; // the spray goes away from the attacker
         let at = match (swords.0[att], gore.bodies[vic]) {
-            (Some((c, size)), _) => Vec3::new(c.x + dir * size.x.abs() / 2.0, c.y, 0.4),
-            (None, Some(b)) => Vec3::new(b.x, b.y + 0.6, 0.4),
+            (Some((c, size)), _) => Vec3::new(c.x + dir * size.x.abs() / 2.0, c.y, SPRAY_Z),
+            (None, Some(b)) => Vec3::new(b.x, b.y + 0.6, SPRAY_Z),
             (None, None) => continue,
         };
         let floor = floor_of(h.y);
@@ -153,14 +168,19 @@ pub fn motion(
 ) {
     let dt = time.delta_secs();
     let Some(sh) = gore.shared.as_ref() else { return };
-    for (_, mut d, mut t, mut m) in &mut drops {
+    for (e, mut d, mut t, mut m) in &mut drops {
         if d.landed {
             continue;
         }
         d.vel.y -= GRAVITY * dt;
         t.translation += d.vel * dt;
         if t.translation.y <= d.floor {
+            if !on_floor(&g.world.level, g.room, t.translation.x, d.floor) {
+                cmds.entity(e).despawn();
+                continue;
+            }
             t.translation.y = d.floor + 0.004;
+            t.translation.z = t.translation.z.clamp(SLAB_BACK + 0.05, SLAB_FRONT - 0.05);
             d.landed = true;
             m.0 = sh.disc.clone();
             t.rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);

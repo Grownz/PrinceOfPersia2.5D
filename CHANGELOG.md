@@ -5,6 +5,12 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## [Unreleased]
 
+## [0.6.14] - 2026-11-26
+
+### Fixed
+- Voxel figures lying dead (kid or guard) no longer sink into the floor slab: the body is lifted until its lowest row rests on the floor.
+- Cinematic fights: blood sprays from the middle depth of the floor tiles and only lands on rendered floor tiles of the room (none past the front lip, in gaps, over walls or beyond the room).
+
 ## [0.6.13] - 2026-11-25
 
 ### Added

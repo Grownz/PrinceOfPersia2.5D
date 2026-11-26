@@ -461,7 +461,12 @@ fn draw_char(
     *vis = Visibility::Inherited;
     let (sw, sh) = (w / 32.0, h * crate::room::TILE_H / TILE_H_PX as f32);
     let cur = Snap::of(k, &env);
-    let c = if smooth && lerps(&prev, &cur) { prev.pos.lerp(cur.pos, alpha) } else { cur.pos };
+    let mut c = if smooth && lerps(&prev, &cur) { prev.pos.lerp(cur.pos, alpha) } else { cur.pos };
+    if k.is_dead() && vx.on {
+        // the lying sprite reaches a few rows below the floor line (the 2D painter lets it overlap the slab's front face); in 3D
+        // those voxels would sink into the slab, so the body is lifted until its lowest row rests on the floor
+        c.y += (crate::blood::floor_of(k.y) - (c.y - sh / 2.0)).max(0.0);
+    }
     let p = Vec2::new(if k.facing_left { c.x - sw / 2.0 } else { c.x + sw / 2.0 }, c.y - sh / 2.0); // the anchor
     // facing left: p.x is the left edge, image as stored; facing right: p.x is the right edge and the image is mirrored
     let (cx, flip) = if k.facing_left { (p.x + sw / 2.0, 1.0) } else { (p.x - sw / 2.0, -1.0) };

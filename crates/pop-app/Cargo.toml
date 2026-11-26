@@ -1,6 +1,6 @@
 [package]
 name = "pop-app"
-version = "0.6.13"
+version = "0.6.14"
 license = "MIT"
 edition = "2021"
 
