@@ -86,7 +86,11 @@ pub fn clash_sparks(
     let mut s = (time.elapsed_secs_f64().to_bits() as u32) | 1;
     for _ in 0..SPARKS {
         let (a, v) = (rnd(&mut s) * std::f32::consts::TAU, vmax * (0.35 + 0.65 * rnd(&mut s)));
-        let vel = Vec3::new(a.cos() * v, a.sin() * v, (rnd(&mut s) - 0.5) * 0.6);
+        let (vx, vy) = (a.cos() * v, a.sin() * v);
+        // lands at a random depth over the whole floor tile: the z speed carries it from the contact point to that depth in its flight time
+        let fall = (vy + (vy * vy + 2.0 * GRAVITY * (at.y - floor).max(0.0)).sqrt()) / GRAVITY;
+        let target = crate::room::SLAB_BACK + 0.05 + (crate::room::SLAB_FRONT - crate::room::SLAB_BACK - 0.1) * rnd(&mut s);
+        let vel = Vec3::new(vx, vy, if fall > 0.05 { ((target - at.z) / fall).clamp(-3.0, 3.0) } else { 0.0 });
         let mat = mats.add(StandardMaterial { base_color: Color::WHITE, unlit: true, alpha_mode: AlphaMode::Blend, ..default() });
         let light = PointLight { color: Color::srgb(1.0, 0.8, 0.45), intensity: 0.0, range: 3.0, shadow_maps_enabled: false, ..default() };
         cmds.spawn((Spark { vel, age: 0.0, life: LIFE.start() + (LIFE.end() - LIFE.start()) * rnd(&mut s), floor, mat: mat.clone() }, Mesh3d(mesh.clone()), MeshMaterial3d(mat), light, Transform::from_translation(at), bevy::light::NotShadowCaster));

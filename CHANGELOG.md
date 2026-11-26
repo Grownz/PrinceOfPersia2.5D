@@ -5,6 +5,11 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## [Unreleased]
 
+## [0.6.15] - 2026-11-26
+
+### Fixed
+- Sword-clash sparks land at a random depth over the whole floor tile, not only along its front edge.
+
 ## [0.6.14] - 2026-11-26
 
 ### Fixed
