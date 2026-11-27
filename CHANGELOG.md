@@ -5,7 +5,13 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## [Unreleased]
 
+### Added
+- Input trace for tracking down blocked direction keys: `POP_INPUT_LOG=1` or `--input-log` writes one line per logic tick to pop.log (raw keys, keys fed to the sim, kid frame, action, sword, edge flags). Off by default.
+
 ### Fixed
+- Fights: two taps of opposite directions within one logic tick (retreat, then advance; 100 ms while the sword is drawn) no longer cancel the newer one: the latch keeps the newest press, as the original's per-tick key polling did.
+- Fights: a controller stick pushed diagonally (sideways and down) is no longer read as Down, which beats advance, retreat and parry and only sheathes on the en-garde frames.
+- Keys latched before opening the pause menu no longer reach the first tick after resuming.
 - Princess chamber (intro), enhanced mode: the bed carpet was almost black. Its mesh faced down, so the double-sided lit material turned the normal away from the sun; it now faces up and is lit like the floor.
 
 ## [0.6.17] - 2026-11-27

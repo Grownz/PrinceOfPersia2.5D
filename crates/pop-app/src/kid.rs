@@ -136,7 +136,9 @@ pub fn pad_keys(layout: PadLayout, held: impl Fn(GamepadButton) -> bool, s: Vec2
     use GamepadButton::*;
     let any = |b: &[GamepadButton]| b.iter().any(|&x| held(x));
     let (left, right) = (held(DPadLeft) || s.x < -0.5, held(DPadRight) || s.x > 0.5);
-    let (up, down) = (held(DPadUp) || s.y > 0.5, held(DPadDown) || s.y < -0.5);
+    // stick down only when the stick points more down than sideways: a diagonal push to advance or retreat must not read as Down
+    // (Down beats forward, back and parry in a fight and only sheathes on the en-garde frames)
+    let (up, down) = (held(DPadUp) || s.y > 0.5, held(DPadDown) || (s.y < -0.5 && s.y.abs() > s.x.abs()));
     match layout {
         PadLayout::Classic => Keys { left, right, up, down, shift: any(&[South, West]) },
         PadLayout::Combat => Keys { left, right, up: up || any(&[South, LeftTrigger, LeftTrigger2]), down: down || held(East), shift: any(&[West, RightTrigger, RightTrigger2]) },
@@ -162,10 +164,43 @@ pub fn keypad(c: KeyCode) -> Keys {
     Keys { left, right, up, down, shift: false }
 }
 
+impl Latch {
+    /// Forget everything latched (after a pause: keys held or tapped before it must not reach the first tick).
+    pub fn reset(&mut self) {
+        self.0 = Keys::default();
+    }
+
+    /// Adds the keys down in one frame (`now`; `before` = the frame before). The control reads "left beats right" and "up beats down",
+    /// so a latched tap of the opposite key would swallow a newer press (back, then forward within one 100 ms fight tick: the
+    /// original polls the key state each tick and sees only the last one). A fresh press therefore replaces the older opposite
+    /// key unless that one is still held.
+    fn add(&mut self, now: Keys, before: Keys) {
+        let l = &mut self.0;
+        if now.left && !before.left { l.right = false; }
+        if now.right && !before.right { l.left = false; }
+        if now.up && !before.up { l.down = false; }
+        if now.down && !before.down { l.up = false; }
+        *l = Keys { left: l.left | now.left, right: l.right | now.right, up: l.up | now.up, down: l.down | now.down, shift: l.shift | now.shift };
+    }
+}
+
 /// Runs every frame: remember keys that were down at any point since the last logic tick.
-pub fn latch_keys(k: Res<ButtonInput<KeyCode>>, m: Res<KeyMap>, pads: Query<&Gamepad>, mut l: ResMut<Latch>) {
-    let p = pressed(&k, &m, &pads);
-    l.0 = Keys { left: l.0.left | p.left, right: l.0.right | p.right, up: l.0.up | p.up, down: l.0.down | p.down, shift: l.0.shift | p.shift };
+pub fn latch_keys(k: Res<ButtonInput<KeyCode>>, m: Res<KeyMap>, pads: Query<&Gamepad>, mut l: ResMut<Latch>, mut before: Local<Keys>) {
+    let now = pressed(&k, &m, &pads);
+    l.add(now, *before);
+    *before = now;
+}
+
+/// Dev hook (off by default): `POP_INPUT_LOG=1` or the argument `--input-log` writes one line per logic tick to pop.log while a key is
+/// down or the sword is drawn: the raw keys held, the keys fed to the sim, the kid's frame, action and sword and the five edge flags
+/// (left, right, up, down, shift; -1 held, 0 released, 1 consumed). For tracing "the direction keys are blocked" in fights.
+fn input_log() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("POP_INPUT_LOG").is_some() || std::env::args().any(|a| a == "--input-log"))
+}
+
+fn keys_text(k: Keys) -> String {
+    [(k.left, 'L'), (k.right, 'R'), (k.up, 'U'), (k.down, 'D'), (k.shift, 'S')].iter().map(|&(on, c)| if on { c } else { '-' }).collect()
 }
 
 /// Material of one sprite image. `kind` 255 = KID.DAT, otherwise the guard-type file; `shadow` tints it dark (the prince's shadow).
@@ -381,6 +416,10 @@ pub fn fixed_step(g: &mut Game, a: &KidAssets, latch: &mut Latch, held: Keys, qu
         keys = sc.get(g.world.tick as usize).copied().unwrap_or_default();
     }
     if g.world.step(keys) {
+        if input_log() && (keys != Keys::default() || held != Keys::default() || g.world.kid.sword != 0) {
+            let k = &g.world.kid;
+            info!("input tick {} held {} fed {} frame {} action {} sword {} flags {:?}", g.world.tick, keys_text(held), keys_text(keys), k.frame, k.action, k.sword, k.trace_flags());
+        }
         latch.0 = held;
         g.banner.0 = g.banner.0.saturating_sub(1);
         if g.world.kid.controlled {
@@ -987,6 +1026,32 @@ mod tests {
         assert!(sword_shown(&k(166, 0, 2, true)) && !sword_shown(&k(166, 0, 2, false)), "living guard (charid 2)");
     }
 
+    /// A diagonal stick push sideways-and-down is a direction, not Down; a stick that points down is Down.
+    #[test]
+    fn stick_down_needs_the_dominant_axis() {
+        let k = |s: Vec2| { let k = pad_keys(PadLayout::Combat, |_| false, s); (k.left, k.right, k.down) };
+        assert_eq!(k(Vec2::new(0.9, -0.6)), (false, true, false));
+        assert_eq!(k(Vec2::new(0.3, -0.9)), (false, false, true));
+        assert_eq!(k(Vec2::new(-0.2, -0.6)), (false, false, true));
+    }
+
+    /// Back then forward within one tick: the newer press wins, a key still held stays, a paused latch is emptied.
+    #[test]
+    fn the_latch_keeps_the_newest_opposite_press() {
+        let (none, left, right) = (Keys::default(), Keys { left: true, ..Keys::default() }, Keys { right: true, ..Keys::default() });
+        let mut l = Latch::default();
+        l.add(left, none);
+        l.add(none, left);
+        l.add(right, none);
+        assert_eq!((l.0.left, l.0.right), (false, true), "tap left, then right: only right");
+        let mut l = Latch::default();
+        l.add(left, none);
+        l.add(Keys { left: true, right: true, ..none }, left);
+        assert_eq!((l.0.left, l.0.right), (true, true), "left still held: both stay (left beats right as in the original)");
+        l.reset();
+        assert_eq!(l.0, none);
+    }
+
     #[test]
     fn pad_layouts_map_the_buttons() {
         use GamepadButton::*;
@@ -1006,7 +1071,8 @@ mod tests {
         assert_eq!(k(c, &[North], Vec2::ZERO), (false, false, false, false, false));
         // classic: the first layout
         assert_eq!(k(cl, &[South], Vec2::ZERO), (false, false, false, false, true));
-        assert_eq!(k(cl, &[East], Vec2::new(0.8, -0.8)), (false, true, false, true, false));
+        // a stick pushed as far sideways as down is sideways only (see stick_down_needs_the_dominant_axis)
+        assert_eq!(k(cl, &[East], Vec2::new(0.8, -0.8)), (false, true, false, false, false));
     }
 
     #[test]

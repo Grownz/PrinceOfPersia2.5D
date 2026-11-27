@@ -106,6 +106,7 @@ If none has the data, the window lists the folders it searched (also on stderr /
 `POP_DATA` (data folder), `POP_LEVEL` / `POP_ROOM` (skip the title), `POP_SOUND=synth|original|adlib|soundfont` (sound set),
 `POP_PERF=1` (log frame time and room rebuilds every 300 frames, vsync off), `POP_SHOT=file.png` (screenshot after
 `POP_SHOT_FRAME`, default 400 frames, or at logic tick `POP_SHOT_TICK`, then quit), `POP_SCRIPT` (scripted keys),
+`POP_INPUT_LOG=1` or the argument `--input-log` (one line per logic tick in pop.log while a key is down or the sword is drawn: raw keys, keys fed to the sim, kid frame/action/sword, the five edge flags; off by default),
 `POP_MENU=main|settings|video|audio|graphics|downloads|controls|controller|hof|name|attract` (open a menu page or a hall-of-fame screen at
 once; the pause menu with `POP_LEVEL`; `POP_MENU_SEL=<row>`, `POP_MENU_OPEN=1` opens its drop-down,
 `POP_MENU_FAKE=downloading:45|installed|confirm|delete|unpack` shows made-up SoundFont states without a download),

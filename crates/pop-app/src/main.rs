@@ -218,6 +218,7 @@ fn main() {
         .add_systems(OnEnter(flow::Screen::Title), audio::enter_title)
         .add_systems(OnEnter(flow::Screen::Cutscene), audio::enter_cutscene)
         .add_systems(OnEnter(flow::Screen::Paused), audio::pause)
+        .add_systems(OnExit(flow::Screen::Paused), |mut l: ResMut<kid::Latch>| l.reset()) // latch_keys sleeps while paused: keys latched before it are stale
         .add_systems(OnExit(flow::Screen::Paused), audio::resume)
         .add_systems(
             FixedUpdate,
