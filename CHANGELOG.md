@@ -9,6 +9,7 @@ The original game data is never part of the repository or a release; see `docs/P
 - Skipping the intro, the story pages, the cutscenes and the ending (and starting the game from the title) now takes Enter, Space or Esc on the keyboard, or B and Start (Circle and Options on a PlayStation pad) on a controller; other keys and buttons, Shift included, no longer skip. The demo still starts the game on any key (original behaviour).
 
 ### Added
+- Update window: a "Changelog (C)" button shows the release notes of every release since the running build (scrollable with the wheel, arrow keys and Page Up/Down). Once open it stays open during the download; "Hide changelog (C)" closes it. One request to GitHub's release list (last 20 releases) now provides both the offer and the notes.
 - Input trace for tracking down blocked direction keys: `POP_INPUT_LOG=1` or `--input-log` writes one line per logic tick to pop.log (raw keys, keys fed to the sim, kid frame, action, sword, edge flags). Off by default.
 
 ### Fixed
