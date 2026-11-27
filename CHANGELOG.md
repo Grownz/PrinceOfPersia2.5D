@@ -5,6 +5,9 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## [Unreleased]
 
+### Fixed
+- Princess chamber (intro), enhanced mode: the bed carpet was almost black. Its mesh faced down, so the double-sided lit material turned the normal away from the sun; it now faces up and is lit like the floor.
+
 ## [0.6.17] - 2026-11-27
 
 ### Added

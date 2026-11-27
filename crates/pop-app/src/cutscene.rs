@@ -169,7 +169,8 @@ fn bed_mesh() -> Mesh {
         }
         if r > 0 {
             let a = (r as u32 - 1) * 2;
-            idx.extend([a, a + 1, a + 3, a, a + 3, a + 2]);
+            // counter-clockwise seen from above: the face (and with it the up normal of the double-sided lit enhanced material) points up
+            idx.extend([a, a + 3, a + 1, a, a + 2, a + 3]);
         }
     }
     let n = pos.len();
@@ -757,6 +758,23 @@ mod tests {
         let l = super::lit_carpet(&u);
         assert!(!l.unlit && l.base_color_texture == u.base_color_texture && l.alpha_mode == u.alpha_mode && l.double_sided && l.cull_mode.is_none());
         assert_eq!(l.base_color, u.base_color);
+    }
+
+    /// The carpet mesh declares +y normals; every triangle must also face up (counter-clockwise from above), or the double-sided
+    /// lit enhanced material flips the shading normal away from the sun and the carpet turns black.
+    #[test]
+    fn bed_mesh_faces_up() {
+        use bevy::mesh::{Indices, VertexAttributeValues};
+        let m = super::bed_mesh();
+        let Some(VertexAttributeValues::Float32x3(p)) = m.attribute(bevy::prelude::Mesh::ATTRIBUTE_POSITION) else { panic!("positions") };
+        let Some(Indices::U32(idx)) = m.indices() else { panic!("indices") };
+        assert!(!idx.is_empty());
+        for t in idx.chunks(3) {
+            let [a, b, c] = [t[0], t[1], t[2]].map(|i| p[i as usize]);
+            let (u, v) = ([b[0] - a[0], b[2] - a[2]], [c[0] - a[0], c[2] - a[2]]);
+            // y component of u x v = u.z * v.x - u.x * v.z
+            assert!(u[1] * v[0] - u[0] * v[1] > 0.0, "triangle {t:?} faces down");
+        }
     }
 
     /// The set's pieces through the palace mapping (docs/texture_inventory.md 17): every lattice screen
