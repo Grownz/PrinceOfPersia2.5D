@@ -5,6 +5,8 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## [Unreleased]
 
+## [0.6.17] - 2026-11-27
+
 ### Added
 - App icon: the original hourglass (PV 953) on the title-screen night sky, embedded in the exe (`assets/icon.ico`, drawn by `tools/make_icon.py`, linked by `crates/pop-app/build.rs`).
 
