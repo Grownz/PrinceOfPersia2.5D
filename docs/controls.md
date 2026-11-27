@@ -14,7 +14,7 @@
 | Ctrl+A | Restart the level |
 | Ctrl+G | Save the game (levels 3 to 13) |
 | Ctrl+L | Load the saved game (title screen and demo only) |
-| Any key | Title screen: start a new game; demo: start the game |
+| Enter, Space, Esc (controller: B, Start) | Title screen: start a new game; skip the intro, story pages, cutscenes and the ending (any other key does nothing there). Demo: any key starts the game |
 | M | Mute / unmute |
 | - / = (numpad - / +) | Master volume down / up (10 % steps) |
 | F11 | Windowed / borderless fullscreen |

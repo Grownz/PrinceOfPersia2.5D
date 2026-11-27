@@ -5,6 +5,9 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## [Unreleased]
 
+### Changed
+- Skipping the intro, the story pages, the cutscenes and the ending (and starting the game from the title) now takes Enter, Space or Esc on the keyboard, or B and Start (Circle and Options on a PlayStation pad) on a controller; other keys and buttons, Shift included, no longer skip. The demo still starts the game on any key (original behaviour).
+
 ### Added
 - Input trace for tracking down blocked direction keys: `POP_INPUT_LOG=1` or `--input-log` writes one line per logic tick to pop.log (raw keys, keys fed to the sim, kid frame, action, sword, edge flags). Off by default.
 

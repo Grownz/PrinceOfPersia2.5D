@@ -386,6 +386,16 @@ pub fn pad_any(pads: &Query<&Gamepad>) -> bool {
     pads.iter().any(|p| p.get_just_pressed().next().is_some())
 }
 
+/// The keys that skip the intro, the story pages, the cutscenes and the ending, or start the game from the title: Enter, Space and Esc on
+/// the keyboard, B (East: Circle on a PlayStation pad) and Start (Options) on a controller. Any other key or button does nothing there.
+pub fn skip_key(k: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>) -> bool {
+    skip_keyboard(k) || pads.iter().any(|p| p.just_pressed(GamepadButton::East) || p.just_pressed(GamepadButton::Start))
+}
+
+fn skip_keyboard(k: &ButtonInput<KeyCode>) -> bool {
+    k.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space, KeyCode::Escape])
+}
+
 /// Longest frame delta the attract/title timers accept: a stall (window drag, alt-tab) must not skip phases.
 const MAX_DT: f32 = 0.1;
 
@@ -418,7 +428,7 @@ pub fn title(
         draw_pic(&mut f, &mut imgs);
         return; // the title menu is open (or just took this key): the attract loop holds
     }
-    let key = any_key(&k) || pad_any(&pads);
+    let key = skip_key(&k, &pads);
     if !f.ending {
         let loaded = (ctrl(&k) && k.just_pressed(KeyCode::KeyL)).then(load_game).flatten();
         if let Some(p) = loaded {
@@ -779,6 +789,16 @@ pub fn overlay(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_enter_space_and_esc_skip() {
+        use bevy::prelude::*;
+        for (key, skips) in [(KeyCode::Enter, true), (KeyCode::NumpadEnter, true), (KeyCode::Space, true), (KeyCode::Escape, true), (KeyCode::KeyA, false), (KeyCode::ShiftLeft, false), (KeyCode::ArrowUp, false), (KeyCode::KeyL, false)] {
+            let mut k = ButtonInput::<KeyCode>::default();
+            k.press(key);
+            assert_eq!(super::skip_keyboard(&k), skips, "{key:?}");
+        }
+    }
+
     #[test]
     fn level_banner_c270() {
         let b = |l| super::level_banner(l);

@@ -24,7 +24,7 @@ https://github.com/user-attachments/assets/498f5ae6-aa68-4cbb-ad87-2fd131e3076d
 ## Get started in two steps
 
 1. **Download** the latest `PrinceOfPersia-x64.zip` from the [Releases page](../../releases/latest) and unzip it anywhere.
-2. **Start `PrinceOfPersia.exe`** and press any key. This is a remake of the engine, not a copy of the game: the original
+2. **Start `PrinceOfPersia.exe`** and press Enter, Space or Esc (or B or Start on a controller). This is a remake of the engine, not a copy of the game: the original
    graphics, sounds and levels are copyrighted and are not included, so on the first start the window tells you the game files
    are missing and offers to download them from the Internet Archive ([PERSIA_VGA](https://archive.org/details/PERSIA_VGA)).
    Press D, confirm the licence sentence with Enter, and the game unpacks the files into `Original_data` next to the exe and

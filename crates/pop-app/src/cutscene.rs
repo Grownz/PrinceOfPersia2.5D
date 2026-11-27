@@ -566,7 +566,7 @@ pub fn live_look(set: Res<crate::settings::Settings>, mut c: ResMut<Cut>, mut ma
 }
 
 pub fn latch(k: Res<ButtonInput<KeyCode>>, pads: Query<&Gamepad>, mut c: ResMut<Cut>) {
-    if crate::flow::any_key(&k) || k.just_pressed(KeyCode::ShiftLeft) || k.just_pressed(KeyCode::ShiftRight) || crate::flow::pad_any(&pads) {
+    if crate::flow::skip_key(&k, &pads) {
         c.key = true;
     }
 }
