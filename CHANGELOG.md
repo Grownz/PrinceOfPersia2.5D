@@ -5,6 +5,9 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## [Unreleased]
 
+### Added
+- App icon: the original hourglass (PV 953) on the title-screen night sky, embedded in the exe (`assets/icon.ico`, drawn by `tools/make_icon.py`, linked by `crates/pop-app/build.rs`).
+
 ### Fixed
 - Minimap: with `cinematic_fights` on, the whole map (frame included) fades out smoothly (1 s) while a fight lasts, and fades back in afterwards.
 
