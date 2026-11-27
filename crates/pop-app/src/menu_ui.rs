@@ -28,6 +28,8 @@ pub struct MenuUi {
     pub note: String,
     /// pool slot of the slider being dragged
     drag: Option<usize>,
+    /// the scroll bar is being dragged
+    scroll_drag: bool,
     /// the cursor of the last frame (hover only follows a moving mouse, so the keyboard keeps its focus)
     cursor: Option<Vec2>,
 }
@@ -71,11 +73,16 @@ pub enum P {
     Popup,
     Opt(usize),
     OptText(usize),
+    ScrollTrack,
+    ScrollThumb,
 }
 
-/// The panel has one fixed size, that of the largest page.
-const CARD_W: f32 = 112.0;
-const CARD_H: f32 = 85.9; // the Graphics tab (measured: 618 px at 720 px window height)
+/// The panel has one fixed size, that of the largest page. Rule: every element keeps at least `MARGIN` of the panel's width (left,
+/// right) and height (top, bottom) away from the panel's edge; the padding is that margin, so size = content / (1 - 2 * MARGIN).
+/// The content of the Graphics tab measured 106 x 81.5 vmin (618 px at 720 px window height).
+const MARGIN: f32 = 0.05;
+const CARD_W: f32 = 106.0 / (1.0 - 2.0 * MARGIN);
+const CARD_H: f32 = 81.5 / (1.0 - 2.0 * MARGIN);
 const INFO: usize = 16;
 const GOLD: Color = Color::srgb(1.0, 0.85, 0.5);
 const GREY: Color = Color::srgb(0.8, 0.8, 0.85);
@@ -111,7 +118,7 @@ pub fn setup(mut cmds: Commands) {
     ))
     .with_children(|p| {
         p.spawn((
-            Node { flex_direction: FlexDirection::Column, width: vm(CARD_W), height: vm(CARD_H), max_width: Val::Percent(96.0), padding: UiRect::axes(vm(3.0), vm(2.2)), row_gap: vm(0.7), border: UiRect::all(Val::Px(2.0)), ..default() },
+            Node { flex_direction: FlexDirection::Column, width: vm(CARD_W), height: vm(CARD_H), max_width: Val::Percent(96.0), padding: UiRect::axes(vm(CARD_W * MARGIN), vm(CARD_H * MARGIN)), row_gap: vm(0.7), border: UiRect::all(Val::Px(2.0)), ..default() },
             BackgroundColor(Color::srgba(0.02, 0.02, 0.04, 0.88)),
             BorderColor::all(Color::srgba(1.0, 0.85, 0.5, 0.35)),
             Part(0, P::Card),
@@ -130,9 +137,12 @@ pub fn setup(mut cmds: Commands) {
             for i in 0..INFO {
                 p.spawn((Text::new(""), font(2.6), TextColor(GREY), TextLayout::justify(Justify::Center), MenuLine(i)));
             }
+            // the rows and, when there are more than fit, the scroll bar at their right
+            p.spawn(Node { flex_direction: FlexDirection::Row, column_gap: vm(1.2), ..default() }).with_children(|p| {
+            p.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, row_gap: vm(0.7), ..default() }).with_children(|p| {
             for slot in 0..ROWS {
                 p.spawn((
-                    boxed(Part(slot, P::Row), Node { flex_direction: FlexDirection::Row, justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, padding: UiRect::axes(vm(1.6), vm(0.7)), border: UiRect::all(Val::Px(2.0)), column_gap: vm(2.0), min_height: vm(5.4), ..default() }, Color::NONE),
+                    boxed(Part(slot, P::Row), Node { flex_direction: FlexDirection::Row, justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, padding: UiRect::axes(vm(1.6), vm(0.5)), border: UiRect::all(Val::Px(2.0)), column_gap: vm(2.0), min_height: vm(5.4), ..default() }, Color::NONE),
                     ZIndex(0),
                 ))
                 .with_children(|p| {
@@ -179,6 +189,11 @@ pub fn setup(mut cmds: Commands) {
                     });
                 });
             }
+            });
+            p.spawn(boxed(Part(0, P::ScrollTrack), Node { width: vm(1.6), display: Display::None, ..default() }, TRACK_BG)).with_children(|p| {
+                p.spawn(boxed(Part(0, P::ScrollThumb), Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), ..default() }, GOLD));
+            });
+            });
             txt(p, Part(0, P::Hint), 2.1, GREY, Node { align_self: AlignSelf::Center, margin: UiRect::top(vm(0.8)), ..default() });
         });
     });
@@ -320,7 +335,7 @@ fn hit_priority(p: P) -> Option<u8> {
     match p {
         P::Opt(_) => Some(5),
         P::Btn(_) => Some(4),
-        P::Track => Some(3),
+        P::Track | P::ScrollTrack => Some(3),
         P::Tab => Some(2),
         P::Row => Some(1),
         _ => None,
@@ -343,10 +358,10 @@ pub fn mouse(
     let dy: f32 = wheel.read().map(|e| e.y).sum(); // always drain
     let shown = ui.menu.as_ref().is_some_and(|m| matches!((m.ctx, state.get()), (Ctx::Title, Screen::Title) | (Ctx::Pause, Screen::Paused)));
     if !shown {
-        ui.drag = None;
+        (ui.drag, ui.scroll_drag) = (None, false);
         return;
     }
-    let cur = live.win.single().ok().and_then(|w| w.physical_cursor_position());
+    let cur =live.win.single().ok().and_then(|w| w.physical_cursor_position());
     let ui = &mut *ui;
     let moved = cur != ui.cursor;
     ui.cursor = cur;
@@ -358,6 +373,7 @@ pub fn mouse(
         let row = m.slot_idx(p.0).and_then(|i| rows.get(i).copied());
         match p.1 {
             P::Tab => m.has_tabs() && p.0 < m.tabs().len(),
+            P::ScrollTrack => m.scroll_thumb().is_some(),
             P::Row => row.is_some(),
             P::Track => matches!(row, Some(Row::Opt(i)) if matches!(OPTS[i].ctl, Ctl::Slider { .. } | Ctl::Steps)),
             P::Btn(b) => matches!(row, Some(Row::Font(i)) if b < menu::font_buttons(&soundfont::status(i)).len()),
@@ -365,9 +381,12 @@ pub fn mouse(
             _ => false,
         }
     };
-    let (mut best, mut drag_x): (Option<(u8, Part)>, Option<f32>) = (None, None);
+    let (mut best, mut drag_x, mut bar_y): (Option<(u8, Part)>, Option<f32>, Option<f32>) = (None, None, None);
     if let Some(c) = cur {
         for (&p, cn, tf) in &parts {
+            if p.1 == P::ScrollTrack {
+                bar_y = cn.normalize_point(*tf, c).map(|v| v.y + 0.5);
+            }
             if ui.drag == Some(p.0) && p.1 == P::Track {
                 drag_x = cn.normalize_point(*tf, c).map(|v| v.x + 0.5);
             }
@@ -379,7 +398,15 @@ pub fn mouse(
     }
     let was_open = m.open.is_some();
     let mut act = None;
-    if let Some(slot) = ui.drag {
+    if ui.scroll_drag {
+        if held {
+            if let Some(y) = bar_y {
+                m.scroll_to(y);
+            }
+        } else {
+            ui.scroll_drag = false;
+        }
+    } else if let Some(slot) = ui.drag {
         if held {
             if let (Some(x), Some(i)) = (drag_x, m.slot_idx(slot)) {
                 act = m.slide(i, x, &mut set);
@@ -424,6 +451,12 @@ pub fn mouse(
                 if click {
                     ui.drag = Some(p.0);
                     act = m.slide(i, drag_x.unwrap_or(0.0), &mut set);
+                }
+            }
+            (P::ScrollTrack, _) => {
+                if click {
+                    ui.scroll_drag = true;
+                    m.scroll_to(bar_y.unwrap_or(0.0));
                 }
             }
             (P::Row, Some(i)) => {
@@ -544,6 +577,7 @@ pub fn draw(
     let on_tabs = m.has_tabs();
     let tabs = m.tabs();
     let tabs_focus = on_tabs && m.sel == 0;
+    let bar = m.scroll_thumb();
     let width = CARD_W;
     let hint = ui.note.clone();
     for (&Part(slot, p), mut n, bg, border, text, tcol, z) in &mut parts {
@@ -562,6 +596,15 @@ pub fn draw(
                 (set_text, set_col) = (Some(hint.clone()), Some(GOLD));
             }
             P::TabBar => disp(&mut n, on_tabs),
+            P::ScrollTrack => disp(&mut n, bar.is_some()),
+            P::ScrollThumb => {
+                if let Some((top, total)) = bar {
+                    let (h, t) = (Val::Percent(ROWS as f32 / total as f32 * 100.0), Val::Percent(top as f32 / total as f32 * 100.0));
+                    if (n.height, n.top) != (h, t) {
+                        (n.height, n.top) = (h, t);
+                    }
+                }
+            }
             P::Tab => {
                 disp(&mut n, slot < tabs.len());
                 let active = tabs.get(slot) == Some(&m.tab);
@@ -655,7 +698,15 @@ pub fn draw(
                         set_border = Some(if f { Color::WHITE } else { GREY });
                     }
                     P::BtnText(b) => (set_text, set_col) = (v.btns.get(b).map(|s| s.to_string()), Some(if v.btn_focus == Some(b) { BLACK } else { Color::WHITE })),
-                    P::Popup => disp(&mut n, v.popup.is_some()),
+                    P::Popup => {
+                        disp(&mut n, v.popup.is_some());
+                        // the lower rows open their list upwards, so it stays inside the panel's margin
+                        let up = slot >= ROWS / 2 + 1;
+                        let (top, bottom) = if up { (Val::Auto, Val::Percent(100.0)) } else { (Val::Percent(100.0), Val::Auto) };
+                        if (n.top, n.bottom) != (top, bottom) {
+                            (n.top, n.bottom) = (top, bottom);
+                        }
+                    }
                     P::Opt(k) => {
                         let on = v.popup.as_ref().is_some_and(|p| k < p.0.len());
                         disp(&mut n, on);

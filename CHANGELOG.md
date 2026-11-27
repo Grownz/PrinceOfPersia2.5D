@@ -5,6 +5,16 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## [Unreleased]
 
+## [0.6.16] - 2026-11-27
+
+### Added
+- Minimap (option `minimap` in Settings > Graphics, F8; off by default, all render modes): a panel with the rooms the prince has entered, composed from the original tile images (dungeon and palace), with marks for potions, guards (start tile), entrance and exit doors and the prince; it follows the prince, can be dragged, resized (bottom right corner) and zoomed (mouse wheel), and keeps its place in `minimap_view`. Rooms not entered yet are not drawn. Limits: tiles as first seen (no gate or loose floor animation), no torch flames. The map inside the frame is drawn at 75 % opacity and eases to 25 % over one second while the prince is drawn behind it; a room is redrawn when one of its loose floors has fallen; the default place is the bottom right, above the status bar.
+- Menus with more rows than fit show a scroll bar at the right of the list (gold thumb on a track like the sliders); drag the thumb or click the track.
+
+### Changed
+- Menu panel margin rule: every element stays at least 5 % of the panel's width and height away from its edges (the panel grew to fit, `MARGIN` in `menu_ui.rs`); drop-down lists of the lower rows open upwards so they stay inside.
+- `cinematic_fights` and `tile_relief` are on by default (a settings.json that has the keys keeps its values).
+
 ## [0.6.15] - 2026-11-26
 
 ### Fixed

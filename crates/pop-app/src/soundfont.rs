@@ -79,8 +79,16 @@ static CANCEL: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)
 static STATE: Mutex<[Option<Status>; 2]> = Mutex::new([None, None]);
 
 pub fn dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(d) = TEST_DIR.lock().ok().and_then(|g| g.clone()) {
+        return d;
+    }
     crate::flow::exe_dir().join("soundfonts")
 }
+
+/// Tests that must not see the fonts installed on this machine point `dir()` at an empty folder (hold `LOCK`).
+#[cfg(test)]
+pub static TEST_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 pub fn path(i: usize) -> PathBuf {
     dir().join(FONTS[i].file)

@@ -31,6 +31,7 @@ mod menu_ui;
 mod mixer;
 mod music;
 mod blood;
+mod minimap;
 mod particles;
 mod perf;
 mod relief;
@@ -205,6 +206,7 @@ fn main() {
         .init_resource::<particles::Clash>()
         .init_resource::<particles::Swords>()
         .init_resource::<blood::Gore>()
+        .init_resource::<minimap::Minimap>()
         .insert_resource(assets)
         .init_resource::<flow::Flow>()
         .init_resource::<menu_ui::MenuUi>()
@@ -212,7 +214,7 @@ fn main() {
         .init_resource::<camera::View>()
         .insert_state(if skip_title { flow::Screen::Playing } else { flow::Screen::Title })
         .insert_resource(cutscene::Cut::load(&dir))
-        .add_systems(Startup, ((setup, cutscene::setup, debug_cutscene).chain(), kid::setup, (flow::setup, menu_ui::setup, flow::debug_menu).chain(), probe_gpu)) // first room is built by room::rebuild_on_change
+        .add_systems(Startup, ((setup, cutscene::setup, debug_cutscene).chain(), kid::setup, (flow::setup, menu_ui::setup, flow::debug_menu).chain(), minimap::setup, probe_gpu)) // first room is built by room::rebuild_on_change
         .add_systems(OnEnter(flow::Screen::Title), audio::enter_title)
         .add_systems(OnEnter(flow::Screen::Cutscene), audio::enter_cutscene)
         .add_systems(OnEnter(flow::Screen::Paused), audio::pause)
@@ -240,7 +242,7 @@ fn main() {
                 kid::render,
                 flash,
                 (camera::follow, cutscene::render, debug_camera, camera::mirror).chain(),
-                (flow::overlay, menu_ui::draw, controls_art::draw, controls_art::load),
+                (flow::overlay, menu_ui::draw, controls_art::draw, controls_art::load, (minimap::toggle, minimap::track, minimap::interact, minimap::layout_ui).chain()),
                 debug_text,
                 fullscreen,
                 char_style_key,

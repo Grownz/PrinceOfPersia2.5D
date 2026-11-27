@@ -133,7 +133,7 @@ in-game Settings menu (Esc), see [controls.md](controls.md).
   [texture_inventory.md](texture_inventory.md) 13) or `procedural` (plain coloured boxes); env `POP_TILES`. With `original`,
   the skeleton floor, the sword and the potions are voxel models built at runtime from their images (bubbles glow in the
   potion's colour).
-- `tile_relief` (off; Settings > Graphics, `POP_RELIEF=1`, `relief.rs`, needs `tile_textures = original`): the tile colour images enlarged 4x with
+- `tile_relief` (on by default; Settings > Graphics, `POP_RELIEF=1`, `relief.rs`, needs `tile_textures = original`): the tile colour images enlarged 4x with
   MMPX on their palette indices (palette and single pixels kept, linear sampling) plus a normal map (palette brightness of the indices scaled 2x,
   blur, Sobel, `RELIEF_STRENGTH` in `tiles.rs`) lit by the torches. Measured in the dev build (atlas included): tile textures 9 MB RGBA and 37 ms to load
   without, 156 MB and 1.3 s with (no mip maps); frame time on a palace level 12.6 ms plain, 13.5 ms with. [tile_filters.md](tile_filters.md) has the filter comparison.
@@ -147,7 +147,7 @@ in-game Settings menu (Esc), see [controls.md](controls.md).
 - `camera_scroll`: `smooth` (default: a short eased pan to the next room) or `flip` (the original's hard cut); env `POP_CAMERA`.
 - `motion_smoothing`: `position` (default: kid and guard drawn between the last two logic frames, 60 Hz motion, one logic frame
   / 83 ms of display delay) or `off` (the original's 12 Hz motion); env `POP_SMOOTH`.
-- `cinematic_fights` (off by default, Settings > Graphics, enhanced modes only; `blood.rs`, `camera::fight_aim`, `kid::bloody`): `World::hits` (`sim::Hit`: victim, room, x, y, side of the attacker, killed) is
+- `cinematic_fights` (on by default, Settings > Graphics, enhanced modes only; `blood.rs`, `camera::fight_aim`, `kid::bloody`): `World::hits` (`sim::Hit`: victim, room, x, y, side of the attacker, killed) is
   drained every frame by `blood::spawn`, also when the option is off. Blood sprays from the attacker's drawn sword tip (`Swords`), droplets fall ballistically and stay as flat spots (at most 500,
   the oldest go first); a killed figure's pool starts growing when its body lies on a dead frame. Blood belongs to the shown room and is removed on a room or level change. The sword's blood level
   (0..2) repaints the blade's grey pixels red in the sword picture (`KidAssets` colour key of kind 254). The zoom needs both fighters drawn in the shown room and the kid's sword drawn.

@@ -154,7 +154,7 @@ pub struct Opt {
 const ON_OFF: &[&str] = &["true", "false"];
 const PERCENT: Ctl = Ctl::Slider { min: 0, max: 100, step: 5 };
 
-pub const OPTS: [Opt; 23] = [
+pub const OPTS: [Opt; 24] = [
     Opt { key: "render_mode", label: "Rendering", values: &["classic", "enhanced"], live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "character_style", label: "Characters", values: &settings::CHARACTER_STYLES, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
     Opt { key: "camera_scroll", label: "Room change", values: &settings::CAMERA_SCROLLS, live: true, tab: Tab::Video, ctl: Ctl::Dropdown },
@@ -166,9 +166,9 @@ pub const OPTS: [Opt; 23] = [
     Opt { key: "sound", label: "Sound set", values: &["synth", "original", "adlib", "soundfont"], live: true, tab: Tab::Audio, ctl: Ctl::Dropdown },
     Opt { key: "soundfont", label: "SoundFont", values: &["musescore", "fluidr3"], live: true, tab: Tab::Audio, ctl: Ctl::Dropdown },
     Opt { key: "tile_textures", label: "Tile textures", values: &settings::TILE_TEXTURES, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
-    Opt { key: "quick_input", label: "Quick input (start at once)", values: ON_OFF, live: true, tab: Tab::Video, ctl: Ctl::Checkbox },
-    Opt { key: "low_latency_present", label: "Low latency (no vsync, restart)", values: ON_OFF, live: false, tab: Tab::Video, ctl: Ctl::Checkbox },
-    Opt { key: "tile_relief", label: "Tile relief (MMPX, normal maps)", values: ON_OFF, live: true, tab: Tab::Graphics, ctl: Ctl::Checkbox },
+    Opt { key: "quick_input", label: "Quick input", values: ON_OFF, live: true, tab: Tab::Video, ctl: Ctl::Checkbox },
+    Opt { key: "low_latency_present", label: "Low latency", values: ON_OFF, live: false, tab: Tab::Video, ctl: Ctl::Checkbox },
+    Opt { key: "tile_relief", label: "Tile relief (MMPX)", values: ON_OFF, live: true, tab: Tab::Graphics, ctl: Ctl::Checkbox },
     Opt { key: "column_style", label: "Columns", values: &settings::COLUMN_STYLES, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
     Opt { key: "object_style", label: "Objects", values: &settings::OBJECT_STYLES, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
     Opt { key: "voxel_normals", label: "Voxel normals", values: &settings::VOXEL_NORMALS, live: true, tab: Tab::Graphics, ctl: Ctl::Dropdown },
@@ -178,6 +178,7 @@ pub const OPTS: [Opt; 23] = [
     Opt { key: "pad_layout", label: "Controller layout", values: &settings::PAD_LAYOUTS, live: true, tab: Tab::Controller, ctl: Ctl::Dropdown },
     Opt { key: "ssao", label: "SSAO (enhanced)", values: ON_OFF, live: true, tab: Tab::Graphics, ctl: Ctl::Checkbox },
     Opt { key: "cinematic_fights", label: "Cinematic fights (enhanced)", values: ON_OFF, live: true, tab: Tab::Graphics, ctl: Ctl::Checkbox },
+    Opt { key: "minimap", label: "Minimap (F8)", values: ON_OFF, live: true, tab: Tab::Graphics, ctl: Ctl::Checkbox },
 ];
 
 /// The settings.json value of `key` as text ("classic", "true", "0.7").
@@ -486,6 +487,20 @@ impl Menu {
         if self.sel >= self.first() && !(lo..=hi).contains(&self.sel) {
             self.focus(self.sel.clamp(lo, hi));
         }
+    }
+
+    /// Scroll bar: (first visible row, rows in all) while more rows exist than fit.
+    pub fn scroll_thumb(&self) -> Option<(usize, usize)> {
+        let n = self.rows().len() - self.first();
+        (n > ROWS).then_some((self.top, n))
+    }
+
+    /// Scroll bar drag: the thumb's middle follows `f` (0..1 down the track).
+    pub fn scroll_to(&mut self, f: f32) {
+        let Some((top, n)) = self.scroll_thumb() else { return };
+        let thumb = ROWS as f32 / n as f32;
+        let want = ((f - thumb / 2.0) / (1.0 - thumb) * (n - ROWS) as f32).round().clamp(0.0, (n - ROWS) as f32);
+        self.scroll(want as i32 - top as i32);
     }
 
     /// Mouse press on row `idx` (button `sub` of a download row): focus it and do what Enter does.
@@ -960,8 +975,24 @@ mod tests {
     }
 
     #[test]
+    fn the_scroll_bar_follows_the_view_and_drags_it() {
+        let mut m = settings_menu();
+        m.set_tab(2); // Graphics: more rows than fit
+        let (top, n) = m.scroll_thumb().expect("a scroll bar");
+        assert_eq!((top, n > ROWS), (0, true));
+        m.scroll_to(1.0);
+        assert_eq!(m.scroll_thumb(), Some((n - ROWS, n)));
+        m.scroll_to(0.0);
+        assert_eq!(m.top, 0);
+        assert_eq!(Menu::new(Ctx::Title, false, false).scroll_thumb(), None); // the main page fits
+    }
+
+    #[test]
     fn download_rows_transitions() {
         let _g = soundfont::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // an empty folder: a font installed on this machine must not change the Absent states below
+        let empty = std::env::temp_dir().join(format!("pop_sf_empty_{}", std::process::id()));
+        *soundfont::TEST_DIR.lock().unwrap() = Some(empty);
         let mut s = Settings::default();
         let mut m = settings_menu();
         m.set_tab(3);
@@ -1013,6 +1044,7 @@ mod tests {
         assert!(!font_info(0, &s, &Status::Absent).warn);
         assert!(deleted_note(1, &s).contains("AdLib") && !deleted_note(0, &s).contains("AdLib"));
         soundfont::debug_clear(1);
+        *soundfont::TEST_DIR.lock().unwrap() = None;
     }
 
     #[test]

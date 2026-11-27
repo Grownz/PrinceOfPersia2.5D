@@ -61,16 +61,23 @@ pub struct Settings {
     /// buttons for strike and parry, down also on stick / D-pad) or "classic" (D-pad / stick, A or X = Shift)
     pub pad_layout: String,
     /// tile images enlarged 4x with MMPX (palette kept, sampled linearly) and given a normal map derived from them (relief.rs);
-    /// needs tile_textures = original; about 17x the texture memory (156 MB instead of 9 MB); POP_RELIEF=1 turns it on
+    /// needs tile_textures = original; about 17x the texture memory (156 MB instead of 9 MB); POP_RELIEF=1 turns it on; on by default
     pub tile_relief: bool,
     /// on by default. A direction key pressed while the kid stands idle starts the 12 Hz logic tick at once instead of at the next
     /// one (0-83 ms, 42 ms on average, less delay); the tick itself is unchanged, only that one frame is shorter
     pub quick_input: bool,
     /// off by default, needs a restart. No vsync (tearing possible) and one frame in flight: 8-33 ms less delay between the logic and the screen
     pub low_latency_present: bool,
-    /// off by default, enhanced mode only: zoom on a sword fight in one room, blood on hits and pools under the dead, bloody swords
+    /// on by default, enhanced mode only: zoom on a sword fight in one room, blood on hits and pools under the dead, bloody swords
     pub cinematic_fights: bool,
+    /// off by default (F8): a map of the rooms the prince has entered, drawn from the original tiles
+    pub minimap: bool,
+    /// the map panel's [left, top, width, height, room width] in logical px; a negative left / top = the default place (bottom right, above the status bar)
+    pub minimap_view: [f32; 5],
 }
+
+/// Default and limits of `Settings::minimap_view`.
+pub const MINIMAP_VIEW: [f32; 5] = [-1.0, -1.0, 300.0, 190.0, 150.0];
 
 pub const CAMERA_SCROLLS: [&str; 2] = ["smooth", "flip"];
 pub const MOTION_SMOOTHINGS: [&str; 2] = ["position", "off"];
@@ -179,7 +186,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.5, muted: false, sound: "adlib".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, external_terminal: false, render_mode: "enhanced".into(), character_style: "voxel".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "low".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into(), pad_layout: "modern".into(), tile_relief: false, quick_input: true, low_latency_present: false, cinematic_fights: false }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.5, muted: false, sound: "adlib".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, external_terminal: false, render_mode: "enhanced".into(), character_style: "voxel".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "low".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into(), pad_layout: "modern".into(), tile_relief: true, quick_input: true, low_latency_present: false, cinematic_fights: true, minimap: false, minimap_view: MINIMAP_VIEW }
     }
 }
 
@@ -234,6 +241,8 @@ impl Settings {
             quick_input: field(&o, "quick_input", d.quick_input, |_| true),
             low_latency_present: field(&o, "low_latency_present", d.low_latency_present, |_| true),
             cinematic_fights: field(&o, "cinematic_fights", d.cinematic_fights, |_| true),
+            minimap: field(&o, "minimap", d.minimap, |_| true),
+            minimap_view: field(&o, "minimap_view", d.minimap_view, |v| v.iter().all(|x| x.is_finite()) && v[2] >= 60.0 && v[3] >= 40.0 && v[4] >= 20.0),
         }
     }
 
@@ -549,8 +558,11 @@ mod tests {
     #[test]
     fn latency_options_parse_and_defaults() {
         let d = Settings::default();
-        assert!(d.quick_input && !d.low_latency_present && !d.cinematic_fights);
-        assert!(Settings::parse(r#"{"cinematic_fights": true}"#).cinematic_fights);
+        assert!(d.quick_input && !d.low_latency_present && d.cinematic_fights && d.tile_relief);
+        assert!(!Settings::parse(r#"{"cinematic_fights": false}"#).cinematic_fights);
+        assert!(!d.minimap && Settings::parse(r#"{"minimap": true}"#).minimap);
+        assert_eq!(Settings::parse(r#"{"minimap_view": [5, 6, 7, 8, 9]}"#).minimap_view, MINIMAP_VIEW); // too small: default
+        assert_eq!(Settings::parse(r#"{"minimap_view": [5, 6, 200, 100, 90]}"#).minimap_view, [5.0, 6.0, 200.0, 100.0, 90.0]);
         let s = Settings::parse(r#"{"quick_input": true, "low_latency_present": true}"#);
         assert!(s.quick_input && s.low_latency_present);
         assert_eq!(Settings::parse(&s.to_json()), s);

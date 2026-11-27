@@ -21,6 +21,7 @@
 | F3 | Debug text and debug keys |
 | F5 | Rendering: classic / enhanced (torch and sun shadows, SSAO, bloom; saved as `render_mode`) |
 | F6 | Characters: original sprites / voxel figures built from them (saved as `character_style`) |
+| F8 | Minimap on / off (option `minimap`): the rooms entered so far, drawn from the level's tiles, with potions, guards (start tile), entrance and exit doors and the prince; drag the panel to move it, drag its bottom right corner to resize it, mouse wheel over it to zoom (kept in settings.json `minimap_view`; default place bottom right above the status bar); 75 % opaque, fading to 25 % while the prince is behind it |
 | F9 | Frame-time overlay (top right): FPS, avg / min / max / 1% low over 120 frames, mode, resolution, mesh and light counts, GPU pass times when started with `POP_FPS=1` |
 
 The keypad is fixed like the original (its key handler `0000:1533` reads scancodes 0x47..0x50): keypad 1, 3 and 0 (End, PgDn, Ins)
