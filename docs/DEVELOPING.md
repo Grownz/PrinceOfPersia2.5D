@@ -18,6 +18,7 @@ Technical notes moved out of the README: building, the environment variables for
 ```
 cargo run -p pop-app                 # debug build (dependencies optimized)
 cargo run --release -p pop-app       # release build (no console; log in pop.log next to the exe)
+cargo build --profile release-fast -p pop-app   # for iteration: thin LTO, 16 codegen units (110 s instead of 456 s; exe 28 % larger, ~10 % slower)
 cargo test --workspace               # tests needing Original_data print "skipping" without it
 tools\test_without_data.ps1          # the same without Original_data, as GitHub CI runs it (tools\package.ps1 does this first)
 ```

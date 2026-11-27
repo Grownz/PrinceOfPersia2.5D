@@ -6,7 +6,8 @@
 //! Mouse: drag the panel to move it, drag its bottom right corner to resize it, wheel over it to zoom the map; the place, size and
 //! zoom are kept in settings.json (`minimap_view`).
 //! The map is 75 % opaque and eases to 25 % over a second while the prince is drawn behind it; a room is redrawn when a loose floor
-//! in it has fallen. The default place is the bottom right, above the status bar.
+//! in it has fallen. During a cinematic fight (sword drawn against a living guard) the whole map, frame included, fades out over a
+//! second and back in afterwards. The default place is the bottom right, above the status bar.
 //! Limits: a room shows the tiles as they were when first entered (no gate animation), torches have no flame, and the
 //! guards are marked at their start tile only.
 use crate::flow::Screen;
@@ -224,8 +225,10 @@ pub struct Minimap {
     loose: [u32; ROOMS + 1],
     /// 0..1: how far the map has faded out because the prince is behind it (eased into the opacity)
     hide: f32,
-    /// the opacity last written to the nodes (-1 = write again)
-    applied: f32,
+    /// 0..1: how far the whole map (frame too) has faded out for a cinematic fight
+    gone: f32,
+    /// the [map opacity, frame opacity] last written to the nodes (-1 = write again)
+    applied: [f32; 2],
 }
 
 /// Opacity of the map inside the frame, and when the prince stands behind it; it fades over `FADE_SECS`.
@@ -233,11 +236,13 @@ const OPACITY: f32 = 0.75;
 const OPACITY_BEHIND: f32 = 0.25;
 const FADE_SECS: f32 = 1.0;
 
-/// The colours a node has at full opacity; the fade scales their alpha.
+/// The colours a node has at full opacity; the fade scales their alpha. A `frame` node (border, grip) is not made translucent
+/// like the map, it only fades out for a cinematic fight.
 #[derive(Component)]
 pub(crate) struct Fade {
     bg: Color,
     border: Option<Color>,
+    frame: bool,
 }
 
 /// Which of the room's tiles are loose floors.
@@ -250,15 +255,17 @@ pub fn setup(mut cmds: Commands, mut mm: ResMut<Minimap>) {
     let gold = Color::srgb(0.85, 0.7, 0.35);
     let absolute = || Node { position_type: PositionType::Absolute, ..default() };
     let panel = cmds
-        .spawn((Node { left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Px(300.0), height: Val::Px(190.0), overflow: Overflow::clip(), border: UiRect::all(Val::Px(2.0)), ..absolute() }, BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.72)), BorderColor::all(gold), Fade { bg: Color::srgba(0.0, 0.0, 0.0, 0.72), border: None }, GlobalZIndex(8), Visibility::Hidden))
+        .spawn((Node { left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Px(300.0), height: Val::Px(190.0), overflow: Overflow::clip(), border: UiRect::all(Val::Px(2.0)), ..absolute() }, BackgroundColor(Color::NONE), BorderColor::all(gold), Fade { bg: Color::NONE, border: Some(gold), frame: true }, GlobalZIndex(8), Visibility::Hidden))
         .id();
+    // the dark backdrop is a layer of its own: it is translucent like the map, the border is not
+    let back = cmds.spawn((Node { width: Val::Percent(100.0), height: Val::Percent(100.0), ..absolute() }, BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.72)), Fade { bg: Color::srgba(0.0, 0.0, 0.0, 0.72), border: None, frame: false })).id();
     let content = cmds.spawn(absolute()).id();
     let kid = cmds
-        .spawn((Node { width: Val::Px(10.0), height: Val::Px(10.0), border: UiRect::all(Val::Px(2.0)), border_radius: BorderRadius::all(Val::Px(5.0)), ..absolute() }, BackgroundColor(Color::WHITE), BorderColor::all(Color::srgb(0.1, 0.45, 1.0)), Fade { bg: Color::WHITE, border: Some(Color::srgb(0.1, 0.45, 1.0)) }, ZIndex(10)))
+        .spawn((Node { width: Val::Px(10.0), height: Val::Px(10.0), border: UiRect::all(Val::Px(2.0)), border_radius: BorderRadius::all(Val::Px(5.0)), ..absolute() }, BackgroundColor(Color::WHITE), BorderColor::all(Color::srgb(0.1, 0.45, 1.0)), Fade { bg: Color::WHITE, border: Some(Color::srgb(0.1, 0.45, 1.0)), frame: false }, ZIndex(10)))
         .id();
-    let grip = cmds.spawn((Node { right: Val::Px(0.0), bottom: Val::Px(0.0), width: Val::Px(14.0), height: Val::Px(14.0), ..absolute() }, BackgroundColor(gold), ZIndex(11))).id();
+    let grip = cmds.spawn((Node { right: Val::Px(0.0), bottom: Val::Px(0.0), width: Val::Px(14.0), height: Val::Px(14.0), ..absolute() }, BackgroundColor(gold), Fade { bg: gold, border: None, frame: true }, ZIndex(11))).id();
     cmds.entity(content).add_child(kid);
-    cmds.entity(panel).add_children(&[content, grip]);
+    cmds.entity(panel).add_children(&[back, content, grip]);
     (mm.panel, mm.content, mm.kid) = (Some(panel), Some(content), Some(kid));
 }
 
@@ -293,7 +300,7 @@ fn mark<'a>(p: &'a mut ChildSpawnerCommands<'_>, (x, y, w): (f32, f32, f32), asp
         Node { position_type: PositionType::Absolute, left: Val::Percent(x - w / 2.0), top: Val::Percent(y - h / 2.0), width: Val::Percent(w), aspect_ratio: Some(aspect), border: UiRect::all(Val::Px(1.0)), border_radius: if round { BorderRadius::MAX } else { BorderRadius::ZERO }, ..default() },
         BackgroundColor(fill),
         BorderColor::all(Color::BLACK),
-        Fade { bg: fill, border: Some(Color::BLACK) },
+        Fade { bg: fill, border: Some(Color::BLACK), frame: false },
     ))
 }
 
@@ -333,7 +340,7 @@ pub fn track(mut cmds: Commands, g: Res<Game>, set: Res<Settings>, screen: Res<S
         }
         mm.loose[*r] = loose_mask(lv, *r);
     }
-    mm.applied = -1.0; // the new nodes get the current opacity
+    mm.applied = [-1.0; 2]; // the new nodes get the current opacity
     let start = (lv.start_room as usize, lv.start_tile as usize);
     for (r, rgba) in new.iter().cloned() {
         let mut img = Image::new(Extent3d { width: IMG_W as u32, height: IMG_H as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default());
@@ -380,7 +387,7 @@ pub fn interact(mb: Res<ButtonInput<MouseButton>>, mut wheel: MessageReader<Mous
     if !mm.init {
         (mm.view, mm.init) = (set.minimap_view, true);
     }
-    let (Ok(win), true) = (windows.single(), *screen.get() == Screen::Playing && set.minimap) else {
+    let (Ok(win), true) = (windows.single(), *screen.get() == Screen::Playing && set.minimap && mm.gone < 1.0) else {
         mm.drag = Drag::None;
         return;
     };
@@ -429,6 +436,7 @@ pub(crate) fn layout_ui(
     gore: Res<crate::blood::Gore>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cams: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    view: Res<crate::camera::View>,
     mut mm: ResMut<Minimap>,
     mut nodes: Query<&mut Node>,
     mut vis: Query<&mut Visibility>,
@@ -436,7 +444,9 @@ pub(crate) fn layout_ui(
     mut room_imgs: Query<&mut ImageNode>,
 ) {
     let (Some(panel), Some(content), Some(kid), Some(grid)) = (mm.panel, mm.content, mm.kid, mm.grid) else { return };
-    let show = set.minimap && matches!(screen.get(), Screen::Playing | Screen::Paused) && mm.cells.iter().any(|c| c.is_some());
+    // a cinematic fight fades the whole map out (frame included), and back in when it is over
+    mm.gone = (mm.gone + time.delta_secs() / FADE_SECS * if view.fighting { 1.0 } else { -1.0 }).clamp(0.0, 1.0);
+    let show = set.minimap && matches!(screen.get(), Screen::Playing | Screen::Paused) && mm.cells.iter().any(|c| c.is_some()) && mm.gone < 1.0;
     if let Ok(mut v) = vis.get_mut(panel) {
         *v = if show { Visibility::Inherited } else { Visibility::Hidden };
     }
@@ -456,13 +466,15 @@ pub(crate) fn layout_ui(
             .is_some_and(|p| r.contains(p));
     mm.hide = (mm.hide + time.delta_secs() / FADE_SECS * if behind { 1.0 } else { -1.0 }).clamp(0.0, 1.0);
     let ease = mm.hide * mm.hide * (3.0 - 2.0 * mm.hide);
-    let op = OPACITY + (OPACITY_BEHIND - OPACITY) * ease;
-    if (op - mm.applied).abs() > 1e-4 {
-        mm.applied = op;
+    let frame = 1.0 - mm.gone * mm.gone * (3.0 - 2.0 * mm.gone); // the fight fade, eased
+    let op = (OPACITY + (OPACITY_BEHIND - OPACITY) * ease) * frame;
+    if (op - mm.applied[0]).abs() > 1e-4 || (frame - mm.applied[1]).abs() > 1e-4 {
+        mm.applied = [op, frame];
         for (f, mut bg, mut bc) in &mut fades {
-            bg.0 = f.bg.with_alpha(f.bg.alpha() * op);
+            let k = if f.frame { frame } else { op };
+            bg.0 = f.bg.with_alpha(f.bg.alpha() * k);
             if let Some(b) = f.border {
-                *bc = BorderColor::all(b.with_alpha(op));
+                *bc = BorderColor::all(b.with_alpha(k));
             }
         }
         for mut im in &mut room_imgs {

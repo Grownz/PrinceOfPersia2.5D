@@ -31,6 +31,8 @@ pub struct View {
     /// cinematic fights: the smoothed camera shift from the room's centre and the zoom beyond 1 (both 0 = the plain camera)
     focus: Vec2,
     zoom: f32,
+    /// cinematic fights on and the kid's sword is drawn against a living guard in the shown room (the minimap fades out meanwhile)
+    pub fighting: bool,
 }
 
 /// Cinematic fights: the zoom never goes beyond this, and the fighters keep this margin (world units) to the picture's edge.
@@ -101,6 +103,7 @@ pub fn follow(
     }
     v.t += time.delta_secs();
     v.upside = g.world.upside;
+    v.fighting = set.cinematic_fights && *state.get() == crate::flow::Screen::Playing && g.world.kid.sword == 2 && g.world.kid.alive && g.world.kid.room as usize == g.room && g.world.guard.as_ref().is_some_and(|k| k.alive && k.room as usize == g.room);
     // cinematic fights: the kid has drawn his sword against a living guard in the shown room
     let fight = (set.cinematic_fights && *mode != crate::settings::RenderMode::Classic && *state.get() == crate::flow::Screen::Playing && !g.world.upside && g.world.kid.sword == 2 && g.world.kid.alive && g.world.kid.room as usize == g.room)
         .then_some(())

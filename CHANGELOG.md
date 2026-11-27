@@ -5,6 +5,9 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## [Unreleased]
 
+### Fixed
+- Minimap: with `cinematic_fights` on, the whole map (frame included) fades out smoothly (1 s) while a fight lasts, and fades back in afterwards.
+
 ## [0.6.16] - 2026-11-27
 
 ### Added

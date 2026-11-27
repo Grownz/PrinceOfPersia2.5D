@@ -19,3 +19,11 @@ lto = "fat"
 codegen-units = 1
 strip = true
 panic = "abort"
+
+# For iteration and screenshots (`cargo build --profile release-fast`, exe in target/release-fast): thin LTO and 16 codegen units use all cores.
+# Measured (Ryzen 7 7700X, only pop-app changed): 110 s instead of 456 s; the exe is 28 % larger and about 10 % slower on average (p95 26 %
+# in enhanced mode, POP_BENCH level 2). Releases (tools/package.ps1) use the `release` profile above.
+[profile.release-fast]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
