@@ -5,6 +5,8 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## [Unreleased]
 
+## [0.6.18] - 2026-11-27
+
 ### Changed
 - Skipping the intro, the story pages, the cutscenes and the ending (and starting the game from the title) now takes Enter, Space or Esc on the keyboard, or B and Start (Circle and Options on a PlayStation pad) on a controller; other keys and buttons, Shift included, no longer skip. The demo still starts the game on any key (original behaviour).
 
