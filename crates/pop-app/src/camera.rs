@@ -33,6 +33,8 @@ pub struct View {
     zoom: f32,
     /// cinematic fights on and the kid's sword is drawn against a living guard in the shown room (the minimap fades out meanwhile)
     pub fighting: bool,
+    /// impact shake (puffs.rs): the camera offset of this frame, zero unless enhanced + atmosphere kicked it
+    shake: Vec2,
 }
 
 /// Cinematic fights: the zoom never goes beyond this, and the fighters keep this margin (world units) to the picture's edge.
@@ -91,7 +93,9 @@ pub fn follow(
     gore: Res<crate::blood::Gore>,
     win: Single<&Window, With<bevy::window::PrimaryWindow>>,
     mut v: ResMut<View>,
+    shake: Res<crate::puffs::Shake>,
 ) {
+    v.shake = if *mode == crate::settings::RenderMode::Enhanced && set.atmosphere && *state.get() == crate::flow::Screen::Playing { shake.offset() } else { Vec2::ZERO };
     let now = (g.level, g.gen, g.room);
     if v.seen != now {
         let old = v.seen.2;
@@ -121,7 +125,7 @@ pub fn transform(aspect: f32, v: &View) -> Transform {
     // the fight shifts the aim point and moves the camera closer along its line of sight (same direction, so no new rotation)
     let look = LOOK.extend(0.0);
     t.translation = look + v.focus.extend(0.0) + (t.translation - look) / (1.0 + v.zoom);
-    t.translation += pan_offset(v.from, v.t).extend(0.0);
+    t.translation += pan_offset(v.from, v.t).extend(0.0) + v.shake.extend(0.0);
     t
 }
 
@@ -146,7 +150,7 @@ pub fn mirror(
     state: Res<State<crate::flow::Screen>>,
     win: Single<&Window, With<bevy::window::PrimaryWindow>>,
     mut images: ResMut<Assets<Image>>,
-    cam: Single<Entity, With<Camera3d>>,
+    cam: Single<Entity, (With<Camera3d>, Without<crate::mirror::MirrorCam>)>,
     mut m: Local<Mirror>,
 ) {
     use bevy::camera::RenderTarget;

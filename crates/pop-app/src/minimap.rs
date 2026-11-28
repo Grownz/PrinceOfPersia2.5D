@@ -435,7 +435,7 @@ pub(crate) fn layout_ui(
     screen: Res<State<Screen>>,
     gore: Res<crate::blood::Gore>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    cams: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    cams: Query<(&Camera, &GlobalTransform), (With<Camera3d>, Without<crate::mirror::MirrorCam>)>,
     view: Res<crate::camera::View>,
     mut mm: ResMut<Minimap>,
     mut nodes: Query<&mut Node>,

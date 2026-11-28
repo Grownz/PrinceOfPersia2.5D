@@ -18,6 +18,8 @@ pub struct Model {
 pub struct Items {
     /// vertex-coloured material shared by the item meshes
     pub mat: Handle<StandardMaterial>,
+    /// the same for the steel parts (gate bars, spikes, chomper blades, swords, exit door): mood.rs makes it metallic in enhanced mode
+    pub steel: Handle<StandardMaterial>,
     /// skeleton pile per set [dungeon, palace] (the palace set has no skeleton images)
     pub skeleton: [Option<Model>; 2],
     /// potion bottles per set [dungeon, palace], each [small, big] (`bottle_image`)
@@ -517,7 +519,7 @@ impl Items {
             let c = Color::srgb_u8(r, g, b);
             mats.add(StandardMaterial { base_color: c, emissive: c.to_linear() * 3.0, perceptual_roughness: 0.4, ..default() })
         });
-        Items { mat: mats.add(StandardMaterial { perceptual_roughness: 0.6, ..default() }), skeleton, bottles, bubble_at: if bubbles.len() == 7 { bubble_at } else { vec![] }, bubbles: if bubbles.len() == 7 { bubbles } else { vec![] }, sword: if sword.len() == 2 { sword } else { vec![] }, glow, columns, objects, flame_px: if flames.len() == 9 { flame_px } else { vec![] }, flame_at: if flames.len() == 9 { flame_at } else { vec![] }, flames: if flames.len() == 9 { flames } else { vec![] }, flame_mat: mats.add(StandardMaterial { unlit: true, ..default() }) }
+        Items { mat: mats.add(StandardMaterial { perceptual_roughness: 0.6, ..default() }), steel: mats.add(StandardMaterial { perceptual_roughness: 0.6, ..default() }), skeleton, bottles, bubble_at: if bubbles.len() == 7 { bubble_at } else { vec![] }, bubbles: if bubbles.len() == 7 { bubbles } else { vec![] }, sword: if sword.len() == 2 { sword } else { vec![] }, glow, columns, objects, flame_px: if flames.len() == 9 { flame_px } else { vec![] }, flame_at: if flames.len() == 9 { flame_at } else { vec![] }, flames: if flames.len() == 9 { flames } else { vec![] }, flame_mat: mats.add(StandardMaterial { unlit: true, ..default() }) }
     }
 }
 

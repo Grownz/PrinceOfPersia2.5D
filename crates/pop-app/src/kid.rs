@@ -343,10 +343,18 @@ pub(crate) fn screen_x(x: u8, dx: i8, flags: u8, facing_left: bool) -> i32 {
 }
 
 /// Build the world for `p` (restart, next level, new game, the demo level 0). Cutscenes: see `flow` and `cutscene`.
+/// Dev hook POP_MINUTES=<n>: n minutes left at a level start (screenshots of the time-of-day grade); not the demo.
+pub fn minutes_hook(w: &mut World) {
+    if let (Some(m), true) = (std::env::var("POP_MINUTES").ok().and_then(|v| v.parse::<i32>().ok()), w.level_no != 0) {
+        (w.progress.rem_min, w.progress.rem_tick) = (m.clamp(0, 60), 719);
+    }
+}
+
 pub fn start(g: &mut Game, a: &KidAssets, p: Progress) {
     let p = if p.level < g.levels.len() { p } else { Progress::new_game(0) }; // after the last level: back to the title
     g.level = p.level;
     g.world = World::from_progress(a.data.clone(), g.levels[g.level].clone(), p);
+    minutes_hook(&mut g.world);
     g.gen = g.gen.wrapping_add(1);
     g.room = g.world.kid.room as usize;
     let env = mk_env(&a.data, &g.world.level, g.world.guard_type);

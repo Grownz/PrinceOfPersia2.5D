@@ -21,17 +21,21 @@ mod camera;
 mod controls_art;
 mod cutscene;
 mod enhanced;
+mod floor;
 mod flow;
+mod fx;
 mod getdata;
 mod hof;
 mod items;
 mod kid;
 mod menu;
 mod menu_ui;
+mod mood;
 mod mixer;
 mod music;
 mod blood;
 mod minimap;
+mod mirror;
 mod particles;
 mod perf;
 mod relief;
@@ -42,8 +46,11 @@ mod soundfont;
 mod solari;
 mod synth;
 mod tiles;
+mod traces;
+mod puffs;
 mod update;
 mod voxel;
+mod wear;
 
 use bevy::prelude::*;
 use bevy::window::{MonitorSelection, PresentMode, PrimaryWindow, WindowMode};
@@ -214,6 +221,7 @@ fn main() {
         .init_resource::<camera::View>()
         .insert_state(if skip_title { flow::Screen::Playing } else { flow::Screen::Title })
         .insert_resource(cutscene::Cut::load(&dir))
+        .add_plugins((fx::plugin, wear::plugin, mirror::plugin, traces::plugin, puffs::plugin))
         .add_systems(Startup, ((setup, cutscene::setup, debug_cutscene).chain(), kid::setup, (flow::setup, menu_ui::setup, flow::debug_menu).chain(), minimap::setup, probe_gpu)) // first room is built by room::rebuild_on_change
         .add_systems(OnEnter(flow::Screen::Title), audio::enter_title)
         .add_systems(OnEnter(flow::Screen::Cutscene), audio::enter_cutscene)
@@ -224,7 +232,7 @@ fn main() {
             FixedUpdate,
             (audio::before_step, |mut g: ResMut<Game>, a: Res<kid::KidAssets>, mut latch: ResMut<kid::Latch>, keys: Res<ButtonInput<KeyCode>>, map: Res<settings::KeyMap>, pads: Query<&Gamepad>, set: Res<settings::Settings>| {
                 kid::fixed_step(&mut g, &a, &mut latch, kid::pressed(&keys, &map, &pads), set.quick_input);
-            }, audio::fixed)
+            }, audio::fixed, puffs::collect)
                 .chain()
                 .run_if(playing()),
         )
@@ -248,7 +256,7 @@ fn main() {
                 fullscreen,
                 char_style_key,
                 (kid::live_look, cutscene::live_look, (room::palette_live, cutscene::chamber_live).chain()), // settings that apply live
-                (enhanced::mode_key, enhanced::watchdog, enhanced::apply, enhanced::sun_brightness, room::flicker, enhanced::torch_shadows, enhanced::bubble_lights, particles::clash_sparks, particles::sparks, enhanced::drinking_lights, blood::spawn, blood::motion).chain(),
+                (enhanced::mode_key, enhanced::watchdog, enhanced::apply, (enhanced::sun_brightness, mood::atmosphere, fx::sync, wear::sync, floor::sync).chain(), room::flicker, enhanced::torch_shadows, enhanced::bubble_lights, particles::clash_sparks, particles::sparks, enhanced::drinking_lights, blood::spawn, blood::motion, traces::sync, puffs::update, mirror::sync, mirror::lights).chain(),
                 perf_log.run_if(move || perf),
                 (perf::overlay, perf::bench, perf::casters),
                 screenshot_and_quit,
@@ -353,7 +361,7 @@ fn probe_gpu(info: Option<Res<bevy::render::renderer::RenderAdapterInfo>>, adapt
 }
 
 /// F7 with the debug text on (or POP_DEBUG_CAM=1): a closer camera, turned 35 degrees around the kid, to inspect voxel depth.
-fn debug_camera(k: Res<ButtonInput<KeyCode>>, g: Res<Game>, state: Res<State<flow::Screen>>, mut on: Local<Option<bool>>, kid: Query<&Transform, (With<kid::KidSprite>, Without<Camera3d>)>, mut cam: Query<&mut Transform, With<Camera3d>>) {
+fn debug_camera(k: Res<ButtonInput<KeyCode>>, g: Res<Game>, state: Res<State<flow::Screen>>, mut on: Local<Option<bool>>, kid: Query<&Transform, (With<kid::KidSprite>, Without<Camera3d>)>, mut cam: Query<&mut Transform, (With<Camera3d>, Without<crate::mirror::MirrorCam>)>) {
     let on = on.get_or_insert_with(|| std::env::var("POP_DEBUG_CAM").is_ok());
     *on ^= g.debug && k.just_pressed(KeyCode::F7);
     let (true, Ok(kt), flow::Screen::Playing | flow::Screen::Paused) = (*on, kid.single(), state.get()) else { return };
@@ -435,17 +443,32 @@ fn debug_set(a: &kid::KidAssets, level: &Level, n: usize) -> sim::World {
     if let Some((r, t)) = val("start").as_deref().and_then(|v| v.split_once(':')).and_then(|(r, t)| Some((r.parse().ok()?, t.parse().ok()?))) {
         (l.start_room, l.start_tile) = (r, t);
     }
-    // guard=TILE: the only guard stands on that tile of the start room, facing left, skill 3 (sword-fight screenshots)
+    // guard=TILE: the only guard stands on that tile of the start room, facing left, skill 3 or `skill=N` (sword-fight screenshots)
     if let Some(t) = val("guard").and_then(|v| v.parse::<u8>().ok()) {
-        l.guards = vec![pop_core::level::Guard { room: l.start_room, tile: t, dir: 255, skill: 3, colour: 0 }];
+        l.guards = vec![pop_core::level::Guard { room: l.start_room, tile: t, dir: 255, skill: val("skill").and_then(|v| v.parse().ok()).unwrap_or(3), colour: 0 }];
         l.start_dir = 0;
-        // a plain floor row 1 in that room, nothing else in it
+    }
+    // guard or rows=DIGITS: the start room is plain floor in those rows (default 1), nothing else in it
+    if val("guard").is_some() || val("rows").is_some() {
+        let rows = val("rows").unwrap_or_else(|| "1".into());
         for i in 0..30 {
-            l.set_tile(l.start_room as usize, i, if (10..20).contains(&i) { pop_core::level::Tile::Floor } else { pop_core::level::Tile::Empty });
+            l.set_tile(l.start_room as usize, i, if rows.contains(char::from(b'0' + (i / 10) as u8)) { pop_core::level::Tile::Floor } else { pop_core::level::Tile::Empty });
         }
     }
+    // loose=TILE: that tile of the start room is a loose floor (after rows=)
+    if let Some(t) = val("loose").and_then(|v| v.parse::<usize>().ok()) {
+        l.set_tile(l.start_room as usize, t, pop_core::level::Tile::LooseFloor);
+    }
     let mut w = sim::World::new(a.data.clone(), l, n);
+    kid::minutes_hook(&mut w);
     w.kid.have_sword |= val("guard").is_some(); // the fight hook: the kid can draw his sword at once
+    // kidhp=N / guardhp=N: hit points of the fighters (a guard with 1 dies from the first hit)
+    if let Some(n) = val("kidhp").and_then(|v| v.parse::<i32>().ok()) {
+        (w.kid.hp, w.kid.hp_max) = (n, n);
+    }
+    if let (Some(n), Some(gd)) = (val("guardhp").and_then(|v| v.parse::<i32>().ok()), w.guard.as_mut()) {
+        (gd.hp, gd.hp_max) = (n, n);
+    }
     w.leveldoor_open = val("door").and_then(|v| v.parse().ok()).unwrap_or(w.leveldoor_open);
     // exit=1: every exit door stands open and the level counts as started elsewhere, so "up" in front of it climbs the stairs
     if val("exit").as_deref() == Some("1") {

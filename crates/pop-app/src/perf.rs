@@ -193,8 +193,8 @@ pub fn overlay(
     store: Option<Res<DiagnosticsStore>>,
     win: Query<&Window, With<PrimaryWindow>>,
     meshes: Query<&ViewVisibility, With<Mesh3d>>,
-    points: Query<&PointLight>,
-    suns: Query<&DirectionalLight>,
+    points: Query<&PointLight, Without<crate::mirror::TwinOf>>,
+    suns: Query<&DirectionalLight, Without<crate::mirror::TwinOf>>,
     mut text: Query<(&mut Text, &mut Visibility), With<FpsText>>,
     mut st: Local<(Option<bool>, Rolling, u32)>,
 ) {

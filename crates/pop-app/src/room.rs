@@ -12,7 +12,7 @@ pub const TILE_H: f32 = 2.0;
 /// wall blocks carry the same 3 rows as their base strip: 3 of the 63 px of a row (docs/texture_inventory.md 20).
 pub(crate) const SLAB: f32 = 3.0 * TILE_H / TILE_H_PX as f32;
 /// The back wall box (z, depth) behind every room, front face at -0.9.
-const BACK_WALL: (f32, f32) = (-1.0, -0.9);
+pub(crate) const BACK_WALL: (f32, f32) = (-1.0, -0.9);
 /// Back face of the floor slabs and wall blocks: inside the back wall box, so slabs, walls and the back wall close without
 /// a gap (no torch or sun light through the seams, no slit at an angle). The front stays at 0.5.
 pub(crate) const SLAB_BACK: f32 = -0.95;
@@ -46,6 +46,16 @@ pub struct Palette {
 }
 
 impl Palette {
+    /// The palace's floor materials (floor.rs gives them a polish).
+    pub fn palace_floors(&self) -> Vec<Handle<StandardMaterial>> {
+        self.tiles[1].iter().flat_map(|t| t.floor_mats().cloned()).collect()
+    }
+
+    /// The steel material of the voxel objects (None: procedural tiles).
+    pub fn steel(&self) -> Option<&Handle<StandardMaterial>> {
+        self.items.as_ref().map(|i| &i.steel)
+    }
+
     /// `tiles_dir`: game data folder to load the tile images from (None = procedural tiles); `columns` / `objects`: voxel
     /// columns / voxel objects.
     pub fn new(meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>, imgs: &mut Assets<Image>, tiles_dir: Option<&str>, columns: bool, objects: bool, relief: bool) -> Self {
@@ -119,6 +129,10 @@ struct B<'a, 'w, 's> {
     p: &'a Palette,
     origin: Vec3,
     chamber: bool,
+    /// a palace level (window light shafts)
+    palace: bool,
+    /// the level number: the seed of the weathering (wear.rs)
+    level_no: usize,
     /// room number (palace wall variants) and whether it is the level's start room (no stairs behind its exit door)
     room: usize,
     start_room: bool,
@@ -127,6 +141,8 @@ struct B<'a, 'w, 's> {
     items: Option<(&'a crate::items::Items, usize)>,
     /// the tile being built (tagged on its entities as `TileOf`, for incremental rebuilds); None: back wall, chamber
     cur: Option<TileOf>,
+    /// rubble piles marked so far (traces.rs caps them per room build)
+    rubble: u8,
 }
 
 /// The room tile (room, index) an entity was built for: `rebuild_on_change` respawns only the tiles that changed.
@@ -222,6 +238,47 @@ impl<'a> B<'a, '_, '_> {
         self.put_mesh(mesh, mat, Vec3::new(x, y0, z), Vec3::new(x + 1.0, y1, SLAB_FRONT))
     }
 
+    /// An atmosphere effect (fx.rs) in `size` at `centre` (room coordinates): a bare marker, `fx::sync` gives it its mesh while
+    /// enhanced + atmosphere is on. Not in the chamber.
+    fn fx(&mut self, k: crate::fx::FxSpawn, centre: Vec3, scale: Vec3) {
+        if !self.chamber {
+            let e = self.cmds.spawn((k, Transform::from_translation(self.origin + centre).with_scale(scale))).id();
+            self.tag(e);
+        }
+    }
+
+    /// A rubble pile (traces.rs) over the fallen floor at tile `idx`: a bare marker, `traces::sync` gives it its mesh while enhanced +
+    /// atmosphere is on. Not in the chamber.
+    fn rubble(&mut self, idx: usize) {
+        if self.chamber || self.rubble >= crate::traces::RUBBLE_MAX {
+            return;
+        }
+        self.rubble += 1;
+        let (c, size) = crate::traces::rubble_place(idx);
+        let seed = crate::wear::seed(self.level_no, self.room) * 30 + idx as u32;
+        let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+        let e = self.cmds.spawn((crate::traces::Rubble { seed, size }, bevy::light::NotShadowCaster, Transform::from_translation(self.origin + c).with_rotation(flat).with_scale(size.extend(1.0)))).id();
+        self.tag(e);
+    }
+
+    /// The weathering of the room (wear.rs): decals over the wall faces, floor tops and back wall, shallow puddles on dungeon floors; bare
+    /// markers like the effects. Not in the chamber.
+    fn wear(&mut self, kinds: &[Tile], spots: &[Vec2]) {
+        if self.chamber {
+            return;
+        }
+        let seed = crate::wear::seed(self.level_no, self.room);
+        let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+        for (d, c, size, lies) in crate::wear::quads(seed, self.palace, kinds, spots, self.origin.truncate()) {
+            let e = self.cmds.spawn((d, Transform::from_translation(self.origin + c).with_rotation(if lies { flat } else { Quat::IDENTITY }).with_scale(size.extend(1.0)))).id();
+            self.tag(e);
+        }
+        for (c, r) in if self.palace { vec![] } else { crate::wear::puddles(seed, kinds) } {
+            let e = self.cmds.spawn((crate::wear::Puddle, bevy::light::NotShadowCaster, Transform::from_translation(self.origin + c).with_rotation(flat).with_scale((r * 2.0).extend(1.0)))).id();
+            self.tag(e);
+        }
+    }
+
     fn tag(&mut self, e: Entity) {
         if self.chamber {
             self.cmds.entity(e).insert(Chamber);
@@ -236,7 +293,7 @@ impl<'a> B<'a, '_, '_> {
 
 /// The current room plus its 8 neighbours (left/right/up/down and the diagonals via the neighbours' links): (room, dx, dy,
 /// origin); room 0 = no room there (outside the level).
-fn rooms_around(g: &Game) -> Vec<(usize, i32, i32, Vec3)> {
+pub(crate) fn rooms_around(g: &Game) -> Vec<(usize, i32, i32, Vec3)> {
     let level = &g.world.level;
     let link = |r: u8, d: usize| if (1..=ROOMS as u8).contains(&r) { level.links[r as usize - 1][d] } else { 0 };
     let [l, r, u, d] = level.links[g.room - 1];
@@ -264,15 +321,15 @@ fn rooms_around(g: &Game) -> Vec<(usize, i32, i32, Vec3)> {
 }
 
 /// The room builder for `room` (1-based) with its left/bottom corner at `origin`; neighbours are drawn with other origins.
-fn room_builder<'a, 'w, 's>(cmds: &'a mut Commands<'w, 's>, level: &Level, room: usize, origin: Vec3, p: &'a Palette, palace: bool) -> B<'a, 'w, 's> {
+fn room_builder<'a, 'w, 's>(cmds: &'a mut Commands<'w, 's>, level: &Level, level_no: usize, room: usize, origin: Vec3, p: &'a Palette, palace: bool) -> B<'a, 'w, 's> {
     let items = p.items.as_ref().map(|i| (i, palace as usize));
-    B { cmds, p, origin, chamber: false, room, start_room: room == level.start_room as usize, tiles: p.tiles[palace as usize].as_ref(), items, cur: None }
+    B { cmds, p, origin, chamber: false, palace, level_no, room, start_room: room == level.start_room as usize, tiles: p.tiles[palace as usize].as_ref(), items, cur: None, rubble: 0 }
 }
 
 /// The builder for the cutscene set (a palace chamber): entities carry `Chamber` instead of `RoomEntity`; palace tile images,
 /// voxel columns and objects as in a palace level room (procedural tiles: the plain boxes, as before).
 fn chamber_builder<'a, 'w, 's>(cmds: &'a mut Commands<'w, 's>, room: usize, origin: Vec3, p: &'a Palette) -> B<'a, 'w, 's> {
-    B { cmds, p, origin, chamber: true, room, start_room: false, tiles: p.tiles[1].as_ref(), items: p.items.as_ref().map(|i| (i, 1)), cur: None }
+    B { cmds, p, origin, chamber: true, palace: true, level_no: 0, room, start_room: false, tiles: p.tiles[1].as_ref(), items: p.items.as_ref().map(|i| (i, 1)), cur: None, rubble: 0 }
 }
 
 pub fn spawn_chamber(cmds: &mut Commands, level: &Level, room: usize, origin: Vec3, p: &Palette) {
@@ -432,6 +489,14 @@ fn back_wall(b: &mut B) {
 
 fn spawn_tiles(b: &mut B, level: &Level, mobs: &[pop_core::sim::Mob], room: usize) {
     back_wall(b);
+    // dust motes show near the torches only: one quad around the room's torches (fx.rs)
+    let spots: Vec<Vec2> = (0..ROWS * COLS).filter(|&i| matches!(level.tile(room, i % COLS, i / COLS).kind, Tile::Torch | Tile::TorchDebris)).map(|i| Vec2::new((i % COLS) as f32 + TORCH_DX + 0.5, (ROWS - 1 - i / COLS) as f32 * TILE_H + TILE_H * 0.65 + 0.05)).take(4).collect();
+    if let Some((c, size)) = crate::fx::dust_rect(&spots) {
+        let mut a = [Vec2::ZERO; 4];
+        a[..spots.len()].iter_mut().zip(&spots).for_each(|(d, s)| *d = *s + b.origin.truncate());
+        b.fx(crate::fx::FxSpawn::Dust(a, spots.len(), crate::fx::solid_mask((0..ROWS * COLS).map(|i| level.tile(room, i % COLS, i / COLS).kind)), b.origin.truncate()), c.extend(crate::fx::DUST_Z), size.extend(1.0));
+    }
+    b.wear(&(0..ROWS * COLS).map(|i| level.tile(room, i % COLS, i / COLS).kind).collect::<Vec<_>>(), &spots);
     for idx in 0..ROWS * COLS {
         spawn_tile(b, level, room, idx);
     }
@@ -655,6 +720,9 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
     let column = |b: &mut B, m: &Handle<StandardMaterial>, w: f32, h: f32| {
         b.put(m, Vec3::new(x + 0.5 - w / 2.0, y, -w / 2.0), Vec3::new(x + 0.5 + w / 2.0, y + h, w / 2.0))
     };
+    if matches!(t.kind, Debris | TorchDebris) {
+        b.rubble(idx as usize);
+    }
     match t.kind {
         Empty => {}
         // textured: one row tall (63 px: the face + the 3-row base strip), so the faces of stacked walls and of the floor above do
@@ -700,7 +768,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
         Sword if b.items.is_some_and(|(i, _)| !i.sword.is_empty()) => {
             floor(b, &fl);
             let i = b.items.unwrap().0;
-            let e = b.item(&i.sword[0], &i.mat, Vec3::new(x, y, SWORD_Z));
+            let e = b.item(&i.sword[0], &i.steel, Vec3::new(x, y, SWORD_Z));
             b.cmds.entity(e).insert(SwordGlint(b.room as u8, idx));
         }
         Floor | Sword | Debris | BalconyLeft | BalconyRight => {
@@ -709,7 +777,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                 Sword => b.put(&metal, Vec3::new(x + 0.2, y, -0.05), Vec3::new(x + 0.8, y + 0.05, 0.05)),
                 Debris => b.put(&dark, Vec3::new(x + 0.2, y, -0.2), Vec3::new(x + 0.8, y + 0.15, 0.2)),
                 // palace balcony: the window (floor rows cut) on the back wall, its arch above it
-                _ => back_panel(b, &piece, x, y, 0.0),
+                _ => back_panel(b, &piece, t.kind, x, y, 0.0),
             }
         }
         LooseFloor => {} // its own entity, spawn_tiles
@@ -723,7 +791,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             for (r, id) in b.tiles.map_or(vec![], |s| s.piece_ids(Spikes, t.modifier)) {
                 let (dx, z) = match r { Role::SpikeFore => (0.0, SPIKE_ROWS[0]), Role::SpikeBack => (0.0, SPIKE_ROWS[1]), _ => (px_w(32.0 - FLOOR_SHEAR), SPIKE_ROWS[2]) };
                 if let Some(m) = o.ids.get(&id) {
-                    b.object(m, &items.mat, Vec3::new(x + dx, y - px_h(1.0), z), 1.0);
+                    b.object(m, &items.steel, Vec3::new(x + dx, y - px_h(1.0), z), 1.0);
                 }
             }
         }
@@ -765,7 +833,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
                 }
                 // palace lattice support: its arch panel on the back wall instead of the stone column
                 match piece(Role::BackPanel) {
-                    Some(_) => back_panel(b, &piece, x, y, 0.0),
+                    Some(_) => back_panel(b, &piece, t.kind, x, y, 0.0),
                     None => column(b, &stone, 0.5, TILE_H),
                 }
             }
@@ -783,7 +851,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             }
             // record +2 = -10: the 43-px arch pieces stand 10 px up, so with the 7-px frieze they fill the 60 px under the slab above
             match piece(Role::BackPanel) {
-                Some(_) => back_panel(b, &piece, x, y, 10.0),
+                Some(_) => back_panel(b, &piece, t.kind, x, y, 10.0),
                 None => b.put(&metal, Vec3::new(x, y, -0.5), Vec3::new(x + 1.0, y + TILE_H * 0.9, -0.45)),
             }
         }
@@ -884,7 +952,7 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             for (r, id) in b.tiles.map_or(vec![], |s| s.piece_ids(Chomper, t.modifier)) {
                 let lift = match r { Role::JawBack => 0.0, Role::JawTop(off) => px_h(off as f32) * sy, _ => continue };
                 if let Some(m) = o.ids.get(&id) {
-                    b.object(m, &items.mat, Vec3::new(x, y + lift, z), sy);
+                    b.object(m, &items.steel, Vec3::new(x, y + lift, z), sy);
                 }
             }
         }
@@ -919,6 +987,8 @@ fn tile(b: &mut B, x: f32, y: f32, t: TileRef, lift: f32, idx: u8) {
             // holder 346 at x + 32 px of the torch's cell, 6 of 6 torches in two rooms)
             let x = x + TORCH_DX;
             let top = Vec3::new(x + 0.5, y + TILE_H * 0.65, -0.8);
+            let (c, s) = crate::fx::ember_rect(top.x, top.y);
+            b.fx(crate::fx::FxSpawn::Embers, c.extend(crate::fx::EMBER_Z), s.extend(1.0));
             // voxel objects: the holder as a revolved rod near the back wall, the flame (9 frames) standing on its cup
             if let Some((items, h, axis)) = b.objects().filter(|(i, _)| !i.flames.is_empty()).and_then(|(i, o)| Some((i, o.ids.get(&346)?.clone(), o.holder_axis))) {
                 // the holder stands between its light and the wall: no shadow (enhanced), like the flame
@@ -979,10 +1049,15 @@ const EXIT_Z: [f32; 4] = [-0.33, -0.4, -0.5, -0.58];
 const BACK_Z: f32 = -0.88;
 
 /// The palace balcony window / lattice arch panel on the back wall, standing on the floor (`lift` px up), its top piece above it.
-fn back_panel(b: &mut B, piece: &dyn Fn(Role) -> Option<Tex>, x: f32, y: f32, lift: f32) {
+fn back_panel(b: &mut B, piece: &dyn Fn(Role) -> Option<Tex>, kind: Tile, x: f32, y: f32, lift: f32) {
     if let Some(p) = piece(Role::BackPanel) {
         let y = y + px_h(lift);
         b.sprite(&p, Vec3::new(x, y, BACK_Z));
+        // the window lets in a slanted shaft of sunlight (palace only, fx.rs)
+        if b.palace && crate::fx::shaft_tile(kind) {
+            let (at, scale) = crate::fx::shaft_place(x, y - px_h(lift), px_h(lift) + px_h(p.h));
+            b.fx(crate::fx::FxSpawn::Shaft, at, scale);
+        }
         if let Some(t) = piece(Role::BackTop) {
             b.sprite(&t, Vec3::new(x, y + px_h(p.h), BACK_Z));
         }
@@ -1031,7 +1106,7 @@ fn gate_voxel(b: &mut B, x: f32, y: f32, modifier: u8) -> bool {
     let Some(m) = o.gate.get(rise - 1) else { return false };
     let at = b.origin + Vec3::new(x + GATE_X, y + px_h(rise as f32 - 1.0), GATE_Z0);
     let t = Transform::from_translation(at).with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new((GATE_Z0 - GATE_Z1) / m.w as f32, px_h(1.0), 1.0 / 32.0));
-    let e = b.cmds.spawn((Mesh3d(m.mesh.clone()), MeshMaterial3d(items.mat.clone()), t)).id();
+    let e = b.cmds.spawn((Mesh3d(m.mesh.clone()), MeshMaterial3d(items.steel.clone()), t)).id();
     b.tag(e);
     true
 }
@@ -1048,7 +1123,7 @@ fn exit_voxel(b: &mut B, x: f32, y: f32, t: TileRef, f: &Tex) {
             b.object(s, &items.mat, Vec3::new(mid - px_w(s.w as f32) / 2.0, y, EXIT_Z[2]), 1.0);
         }
         if let Some(p) = o.panels.get(crate::items::panel_slices(t.modifier)) {
-            b.object(p, &items.mat, Vec3::new(mid - px_w(p.w as f32) / 2.0, y + px_h(t.modifier.min(43) as f32), EXIT_Z[1]), 1.0);
+            b.object(p, &items.steel, Vec3::new(mid - px_w(p.w as f32) / 2.0, y + px_h(t.modifier.min(43) as f32), EXIT_Z[1]), 1.0);
         }
     }
     if let Some(m) = &o.exit[(t.kind == Tile::ExitRight) as usize] {
@@ -1109,7 +1184,7 @@ pub fn rebuild_on_change(
         }
         built.0.clear();
         for (room, dx, dy, origin) in rooms_around(&g) {
-            let b = &mut room_builder(&mut cmds, level, room, origin, &p, palace);
+            let b = &mut room_builder(&mut cmds, level, g.level, room, origin, &p, palace);
             if room == 0 {
                 spawn_edge(b, dx, dy);
                 continue;
@@ -1146,7 +1221,7 @@ pub fn rebuild_on_change(
         }
     }
     for (room, origin, _) in &built.0 {
-        let b = &mut room_builder(&mut cmds, level, *room, *origin, &p, palace);
+        let b = &mut room_builder(&mut cmds, level, g.level, *room, *origin, &p, palace);
         for t in changed.iter().filter(|t| t.0 as usize == *room) {
             spawn_tile(b, level, *room, t.1 as usize);
         }
@@ -1243,7 +1318,7 @@ mod tests {
             world.query_filtered::<&Transform, With<RoomEntity>>().iter(world).filter(|t| t.scale != Vec3::ONE).map(|t| (t.translation - t.scale / 2.0, t.translation + t.scale / 2.0)).collect()
         };
         let mut q = bevy::ecs::world::CommandQueue::default();
-        spawn_tiles(&mut room_builder(&mut Commands::new(&mut q, &world), &l, 1, Vec3::ZERO, &p, false), &l, &[], 1);
+        spawn_tiles(&mut room_builder(&mut Commands::new(&mut q, &world), &l, 1, 1, Vec3::ZERO, &p, false), &l, &[], 1);
         q.apply(&mut world);
         let all = boxes(&mut world);
         let wall = *all.iter().find(|(lo, hi)| lo.z == BACK_WALL.0 && hi.z == BACK_WALL.1).expect("back wall");
@@ -1256,7 +1331,7 @@ mod tests {
         }
         // outside the level: back wall plus the wall cells next to the room (left neighbour missing: its right columns)
         world.clear_entities();
-        spawn_edge(&mut room_builder(&mut Commands::new(&mut q, &world), &l, 0, Vec3::ZERO, &p, false), -1, 0);
+        spawn_edge(&mut room_builder(&mut Commands::new(&mut q, &world), &l, 1, 0, Vec3::ZERO, &p, false), -1, 0);
         q.apply(&mut world);
         let edge = boxes(&mut world);
         assert!(edge.iter().any(|(lo, hi)| lo.z == BACK_WALL.0 && hi.z == BACK_WALL.1));

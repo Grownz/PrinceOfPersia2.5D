@@ -687,6 +687,7 @@ pub fn debug_menu(mut ui: ResMut<MenuUi>, mut f: ResMut<Flow>, mut hof: ResMut<H
             };
             // POP_MENU_SEL = focused row, POP_MENU_OPEN = open its drop-down, POP_MENU_FAKE = made-up download states
             m.sel = std::env::var("POP_MENU_SEL").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+            m.keep_visible(); // the row is scrolled into view, as after a key press
             if std::env::var("POP_MENU_OPEN").is_ok() {
                 m.open = Some(0);
             }

@@ -595,7 +595,7 @@ pub fn render(
         Query<(&StarDot, &mut MeshMaterial3d<StandardMaterial>)>,
         Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>), With<Bed>>,
         Query<&mut BackgroundColor, With<FadeOverlay>>,
-        Query<&mut Transform, With<Camera3d>>,
+        Query<&mut Transform, (With<Camera3d>, Without<crate::mirror::MirrorCam>)>,
     )>,
 ) {
     use crate::flow::Screen;

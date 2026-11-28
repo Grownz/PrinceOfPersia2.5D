@@ -5,6 +5,18 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## [Unreleased]
 
+### Added
+- Enhanced mode, setting "Atmosphere (enhanced)" (on by default): the light glides from dusk to deep night as the 60 minutes run out, each level has a mood (cool damp dungeons, golden palaces), and the last 5 minutes carry a subtle red pulse that quickens as time runs out. Gates, spikes, chomper blades, swords and the exit door now gleam like steel (metallic material plus a small environment map filtered on the GPU). Dev hook `POP_MINUTES=<n>` starts a level with n minutes left.
+- The same setting adds air, drawn on the GPU by one small shader (no particles): soft slanted light shafts with drifting dust fall from the palace windows and lattice screens (warm at dusk, blue at night), sparse dust motes glint near the torches, and a few embers rise from every flame.
+- The same setting breaks up the repeating tiles: every wall block and floor tile gets a slightly different tone and tint with a slow drift across the room, and the stone is weathered by one more small shader (a few multiply quads per room, no per-frame work): moss and damp creeping up from the floor line, grime at the tile bottoms, streaks, hairline cracks, soot above the torches and, in the dungeon, cobwebs in the corners. A room always looks the same.
+- The same setting makes the palace floors polished marble (smooth, reflective, a warm sheen under the torches) and puts a few shallow puddles on the dungeon floors that catch the light.
+- The same setting turns the palace back walls into a faint polished-marble mirror: the room in front of the wall is reflected as a real mirror shows it, from any camera position (pan, fight zoom, shake): columns, arches, gates, tapestries, torch holders and flames, the exit doors, the floor slabs and wall blocks, loose floors as they shake and fall, the debris they leave, the Prince, the guards and their swords, lit by the reflected torches. Anything standing in front of the wall hides its reflection. Drawn on the GPU by a second view of the reflected room (about +0.4 ms per frame); dev hook `POP_MIRROR=truth|off|<strength>`.
+- The same setting makes traces stay for the level: blood pools under the dead and a splatter per sword hit stay on the floor when you leave a room and come back (up to 24 per room, the oldest merged into their neighbour; drawn by a small GPU shader with ragged edges that darkens to dried brown with age), and a fallen loose floor leaves a pile of pebbles on the tile it landed on. A new level or a restart clears the blood. Dev hooks in `POP_SET`: `rows=12` (plain floor rows), `loose=TILE`, `skill=N`, `kidhp=N`, `guardhp=N`.
+- The same setting adds short dust puffs (one small GPU-shaded cloud each, 12 at most) where the kid lands (bigger on a hard landing), where a loose floor lets go and crashes, a gate slams (a spray along the floor) and a chomper closes, tinted by the nearest torch or the sun; a hard landing, a loose floor crashing near the Prince and a gate slam also shake the camera by a few pixels for a quarter of a second. Sword hits do not freeze the game.
+
+### Changed
+- Enhanced mode: torch light no longer shines through walls and slabs. Every unshadowed torch clips its range at the tile grid (a line-of-sight test against the solid wall blocks, eased when the room changes), torches of neighbouring rooms still light what they can reach, and more torches cast real shadows (6 on `high`, 3 on `low`, was 4 and 2) with smaller shadow maps (512 / 256). Decals and effect quads no longer punch holes into the shadow maps.
+
 ## [0.6.18] - 2026-11-27
 
 ### Changed

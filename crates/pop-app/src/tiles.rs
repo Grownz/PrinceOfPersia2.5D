@@ -602,6 +602,11 @@ impl TileSet {
         self.splits.iter().copied()
     }
 
+    /// Every floor material of the set (floor.rs polishes the palace's live).
+    pub fn floor_mats(&self) -> impl Iterator<Item = &Handle<StandardMaterial>> + '_ {
+        self.floors.values()
+    }
+
     /// A wall mark's image (`dungeon_wall_marks`).
     pub fn mark(&self, id: u16) -> Option<&Tex> {
         self.imgs.get(&id)

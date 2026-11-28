@@ -27,8 +27,8 @@ fn enhanced_ambient() -> AmbientLight {
 pub fn shadow_budget(quality: &str) -> (usize, usize, usize) {
     match quality {
         "off" => (0, 0, 0),
-        "low" => (2, 512, 1024),
-        _ => (4, 1024, 2048),
+        "low" => (3, 256, 1024),
+        _ => (6, 512, 2048),
     }
 }
 
@@ -108,7 +108,7 @@ fn sun_lux(step: &str) -> f32 {
 }
 
 /// Every frame: follows the `sun_brightness` setting live (enhanced mode only; apply() sets it on a mode change).
-pub fn sun_brightness(mode: Res<RenderMode>, set: Res<Settings>, mut sun: Query<&mut DirectionalLight>) {
+pub fn sun_brightness(mode: Res<RenderMode>, set: Res<Settings>, mut sun: Query<&mut DirectionalLight, Without<crate::mirror::TwinOf>>) {
     if *mode != RenderMode::Enhanced || !set.is_changed() {
         return;
     }
@@ -130,8 +130,8 @@ pub fn apply(
     set: Res<Settings>,
     device: Option<Res<bevy::render::renderer::RenderDevice>>,
     mut cmds: Commands,
-    mut cam: Query<(Entity, &mut AmbientLight), With<Camera3d>>,
-    mut sun: Query<(Entity, &mut DirectionalLight)>,
+    mut cam: Query<(Entity, &mut AmbientLight), (With<Camera3d>, Without<crate::mirror::MirrorCam>)>,
+    mut sun: Query<(Entity, &mut DirectionalLight), Without<crate::mirror::TwinOf>>,
     mut point_map: ResMut<PointLightShadowMap>,
     mut dir_map: ResMut<DirectionalLightShadowMap>,
     mut last: Local<Option<(RenderMode, String, bool)>>,
@@ -215,6 +215,45 @@ pub fn apply(
     );
 }
 
+/// Does a light at `p` with `range` reach the picture (the drawn room plus the margin the camera shows, 1.5 units)?
+fn touches_picture(p: Vec2, range: f32) -> bool {
+    let (w, h) = (pop_core::level::COLS as f32, pop_core::level::ROWS as f32 * crate::room::TILE_H);
+    let (dx, dy) = ((-1.5 - p.x).max(p.x - w - 1.5).max(0.0), (-1.5 - p.y).max(p.y - h - 1.5).max(0.0));
+    dx * dx + dy * dy <= range * range
+}
+
+/// A torch's light range clipped to the open space it sees (`light_range`): `cur` eases to `target` (world units).
+#[derive(Component)]
+pub struct Reach { cur: f32, target: f32 }
+
+/// Grid the line of sight runs on: the drawn room plus one room each way (tile coordinates -10..20 x -3..6).
+const GRID_W: i32 = 3 * pop_core::level::COLS as i32;
+const GRID_H: i32 = 3 * pop_core::level::ROWS as i32;
+
+/// Range of the light at world `at` (drawn-room frame, y up) so it does not reach past the geometry it sees: the farthest open tile
+/// centre within `max` that a grid line of sight (sampled every quarter unit, the light's and the target's own tile never block)
+/// reaches, plus a tile of margin, clamped to 2..`max`. `solid(col, row)` takes drawn-room tile coordinates (outside the grid = solid).
+/// Runs on room changes only; per torch about 100 tiles x 20 samples.
+pub fn light_range(solid: impl Fn(i32, i32) -> bool, at: Vec2, max: f32) -> f32 {
+    use crate::room::TILE_H;
+    let rows = pop_core::level::ROWS as i32;
+    let cell = |p: Vec2| (p.x.floor() as i32, rows - 1 - (p.y / TILE_H).floor() as i32);
+    let own = cell(at);
+    let mut far = 0.0f32;
+    for (col, row) in (-rows..GRID_H - rows).flat_map(|r| (-(GRID_W / 3)..GRID_W - GRID_W / 3).map(move |c| (c, r))) {
+        let to = Vec2::new(col as f32 + 0.5, (rows - 1 - row) as f32 * TILE_H + TILE_H * 0.5);
+        let dist = to.distance(at);
+        if dist <= far || dist > max || solid(col, row) {
+            continue;
+        }
+        let steps = (dist / 0.25).ceil() as i32;
+        if (1..steps).all(|s| { let c = cell(at.lerp(to, s as f32 / steps as f32)); c == own || c == (col, row) || !solid(c.0, c.1) }) {
+            far = dist;
+        }
+    }
+    (far + 1.0).clamp(2.0, max)
+}
+
 /// A torch light's classic z, kept while enhanced mode moves it.
 #[derive(Component)]
 pub struct ClassicZ(f32);
@@ -225,14 +264,50 @@ const ENHANCED_TORCH_Z: f32 = -0.6;
 
 /// Every frame: in enhanced mode the `n` torches nearest to the view cast shadows, the rest stay shadowless (a point
 /// shadow is 6 cube faces); in classic every light is back to `room::torch_light`'s values and its classic position.
-pub fn torch_shadows(mut cmds: Commands, mode: Res<RenderMode>, set: Res<Settings>, cam: Query<&GlobalTransform, With<Camera3d>>, mut lights: Query<(Entity, &mut Transform, &mut PointLight, Option<&ClassicZ>, Option<&crate::room::TorchLight>), (Without<crate::room::BubbleLight>, Without<crate::particles::Spark>, Without<Drinking>)>) {
+pub fn torch_shadows(mut cmds: Commands, mode: Res<RenderMode>, set: Res<Settings>, g: Res<crate::Game>, time: Res<Time>, mut drawn: Local<u8>, cam: Query<&GlobalTransform, (With<Camera3d>, Without<crate::mirror::MirrorCam>)>, overlays: Query<Entity, (Added<Mesh3d>, Or<(With<crate::wear::Decal>, With<crate::fx::FxSpawn>)>, Without<bevy::light::NotShadowCaster>)>, mut lights: Query<(Entity, &mut Transform, &mut PointLight, Option<&ClassicZ>, Option<&crate::room::TorchLight>, Option<&mut Reach>), (Without<crate::room::BubbleLight>, Without<crate::particles::Spark>, Without<Drinking>, Without<crate::mirror::TwinOf>)>) {
     let enhanced = *mode == RenderMode::Enhanced;
+    // decals and fx quads are never occluders: they would put holes into the torch shadow maps
+    for e in &overlays {
+        cmds.entity(e).insert(bevy::light::NotShadowCaster);
+    }
     let n = if enhanced { torch_count(&set) } else { 0 };
     let focus = cam.single().map_or(Vec2::ZERO, |t| t.translation().truncate());
-    let pos: Vec<Vec2> = lights.iter().map(|(_, t, _, _, _)| t.translation.truncate()).collect();
-    let on = nearest(&pos, focus, n);
     let d = PointLight::default();
-    for (i, (e, mut t, mut l, cz, flick)) in lights.iter_mut().enumerate() {
+    let (level, room) = (&g.world.level, g.world.shared.drawn_room);
+    let room_changed = std::mem::replace(&mut *drawn, room) != room;
+    let k = 1.0 - (-time.delta_secs() * 8.0).exp();
+    let grid: Vec<bool> = if enhanced && room != 0 { (-3..6).flat_map(|r| (-10..20).map(move |c| (c, r))).map(|(c, r)| level.tile_wrapped(room as i32, c, r) == pop_core::level::Tile::Wall).collect() } else { vec![] };
+    let max = crate::room::torch_light().range;
+    // pass 1: every enhanced torch only reaches as far as the open space it sees (the tile grid line of sight, `light_range`; classic keeps
+    // the full range); the shadow candidates are the lights whose clipped reach touches the picture
+    let mut cands: Vec<(usize, f32)> = Vec::new();
+    for (i, (e, t, mut l, _, flick, reach)) in lights.iter_mut().enumerate() {
+        let mut range = max;
+        if enhanced && flick.is_some() && room != 0 {
+            let at = t.translation.truncate();
+            let target = || light_range(|c, r| !(-10..20).contains(&c) || !(-3..6).contains(&r) || grid[((r + 3) * GRID_W + c + 10) as usize], at, max);
+            match reach {
+                Some(mut r) => {
+                    if room_changed { r.target = target(); }
+                    r.cur += (r.target - r.cur) * k;
+                    range = r.cur;
+                }
+                None => {
+                    let v = target();
+                    cmds.entity(e).insert(Reach { cur: v, target: v });
+                    range = v;
+                }
+            }
+        }
+        if l.range != range { l.range = range; }
+        if enhanced && touches_picture(t.translation.truncate(), range) {
+            // hysteresis: a light that already casts keeps its place against one that is almost as near
+            cands.push((i, t.translation.truncate().distance_squared(focus) * if l.shadow_maps_enabled { 0.5 } else { 1.0 }));
+        }
+    }
+    cands.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let on: Vec<usize> = cands.iter().take(n).map(|c| c.0).collect();
+    for (i, (e, mut t, mut l, cz, flick, _)) in lights.iter_mut().enumerate() {
         let want = if on.contains(&i) { (true, DEPTH_BIAS, NORMAL_BIAS) } else { (false, d.shadow_depth_bias, d.shadow_normal_bias) };
         let intensity = crate::room::torch_light().intensity * if enhanced { ENHANCED_TORCH_GAIN } else { 1.0 } * flick.map_or(1.0, |f| f.2);
         if (l.shadow_maps_enabled, l.shadow_depth_bias, l.shadow_normal_bias, l.intensity) != (want.0, want.1, want.2, intensity) {
@@ -309,7 +384,7 @@ pub fn drinking_lights(
 }
 
 /// The bubbles' faint coloured light shines in enhanced mode only.
-pub fn bubble_lights(mode: Res<RenderMode>, set: Res<Settings>, cam: Query<&GlobalTransform, With<Camera3d>>, mut q: Query<(&Transform, &mut PointLight), With<crate::room::BubbleLight>>) {
+pub fn bubble_lights(mode: Res<RenderMode>, set: Res<Settings>, cam: Query<&GlobalTransform, (With<Camera3d>, Without<crate::mirror::MirrorCam>)>, mut q: Query<(&Transform, &mut PointLight), With<crate::room::BubbleLight>>) {
     let n = if *mode == RenderMode::Enhanced && torch_count(&set) > 0 { BUBBLE_LIGHTS } else { 0 };
     let focus = cam.single().map_or(Vec2::ZERO, |t| t.translation().truncate());
     let pos: Vec<Vec2> = q.iter().map(|(t, _)| t.translation.truncate()).collect();
@@ -511,6 +586,18 @@ pub fn watchdog(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A torch behind a full wall column only reaches the open space it sees; a gap lets it reach further; in the open it keeps the full range.
+    #[test]
+    fn light_range_stops_at_walls() {
+        let at = Vec2::new(-3.5, 3.0); // row 1 of the room to the left
+        let wall = |c: i32, r: i32| c <= -5 || c == -2 || !(0..3).contains(&r);
+        assert!(light_range(wall, at, 9.0) <= 3.5, "nothing past the wall");
+        let gap = |c: i32, r: i32| c <= -5 || (c == -2 && r != 1) || !(0..3).contains(&r);
+        assert!(light_range(gap, at, 9.0) > 7.0, "through the gap");
+        assert_eq!(light_range(|_, _| false, at, 9.0), 9.0);
+        assert_eq!(light_range(|_, _| true, at, 9.0), 2.0, "boxed in: the minimum");
+    }
 
     /// A drunk potion's light: starts at the bottle, arrives at the kid after DRINK_FLY ticks, only ever gets darker and is out at the end.
     #[test]

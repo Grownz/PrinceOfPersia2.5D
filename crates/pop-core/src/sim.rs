@@ -155,6 +155,27 @@ pub const DEMO_MOVES: [(i16, i16); 25] = [
     (128, 6), (136, 3), (157, 7), (158, 0), (159, 1), (171, 4), (177, 0), (178, 1), (188, 0), (193, 1), (205, 0), (233, -1),
 ];
 
+/// What happened on a tile (`World::impacts`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImpactKind {
+    /// a loose floor let go (the tile became empty)
+    LooseFall,
+    /// a falling loose floor hit the floor below
+    Crash,
+    /// a gate finished its fast close
+    GateSlam,
+    /// a chomper closed
+    Chomp,
+}
+
+/// A tile impact in `room` at tile index `tilepos` (row * 10 + column).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Impact {
+    pub kind: ImpactKind,
+    pub room: u8,
+    pub tilepos: u8,
+}
+
 pub struct World {
     /// original logic ticks (12 Hz)
     pub tick: u64,
@@ -191,6 +212,8 @@ pub struct World {
     pub sounds: Vec<u8>,
     /// sword hits since the consumer last cleared this list (renderers: blood)
     pub hits: Vec<Hit>,
+    /// tile impacts (loose floor falls / crashes, gate slams, chompers) since the consumer last cleared this list (renderers: dust puffs); display only
+    pub impacts: Vec<Impact>,
     /// 0 = exit door closed, 1 = open (set when the door finished opening)
     pub leveldoor_open: u8,
     /// bumped whenever tiles, trobs or mobs changed; renderers use it to know when to rebuild
@@ -267,6 +290,7 @@ impl World {
             mobs: vec![],
             sounds: vec![],
             hits: vec![],
+            impacts: vec![],
             leveldoor_open: 0,
             version: 0,
             dirty: true,
@@ -668,6 +692,13 @@ impl World {
         self.sounds.push(id);
     }
 
+    /// Logs a tile impact for the renderers (capped, so a consumer that never clears it cannot make it grow).
+    fn impact(&mut self, kind: ImpactKind, room: u8, tilepos: u8) {
+        if self.impacts.len() < 32 {
+            self.impacts.push(Impact { kind, room, tilepos });
+        }
+    }
+
     /// door_sound_if_visible (simplified: only the room the kid is in counts as visible)
     fn sound_if_visible(&mut self, room: u8, id: u8) {
         if room == self.kid.room {
@@ -924,6 +955,7 @@ impl World {
                 *m = 0;
                 t.ty = -1;
                 self.sound(6);
+                self.impact(ImpactKind::GateSlam, room, t.tilepos);
             } else {
                 *m -= sp;
             }
@@ -973,6 +1005,7 @@ impl World {
         } else if *m >= 11 {
             // falls: the tile becomes empty (remove_loose) and a mob takes over
             self.set_tile(t.room, t.tilepos, Tile::Empty);
+            self.impact(ImpactKind::LooseFall, t.room, t.tilepos);
             *m = 0;
             t.ty = -1;
             let row = t.tilepos / COLS as u8;
@@ -1042,6 +1075,7 @@ impl World {
         *m = blood | f;
         if f == 2 {
             self.sound_if_visible(t.room, 47);
+            self.impact(ImpactKind::Chomp, t.room, t.tilepos);
         }
         if (t.room != self.kid.room || (t.tilepos / COLS as u8) as i32 != self.kid.row || (self.kid.alive && blood == 0)) && f >= 6 {
             t.ty = -1;
@@ -1165,6 +1199,7 @@ impl World {
             return;
         }
         self.sound(2);
+        self.impact(ImpactKind::Crash, m.room, idx);
         self.do_knock(m.room, m.row as i32);
         m.y = Y_SOMETHING[m.row as usize + 1] as u8;
         m.speed = -2;

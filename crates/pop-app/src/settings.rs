@@ -34,6 +34,8 @@ pub struct Settings {
     pub shadow_quality: String,
     /// enhanced mode only: screen-space ambient occlusion (turns MSAA off and uses SMAA instead)
     pub ssao: bool,
+    /// enhanced mode only: time-of-day and per-level grade, red pulse in the last minutes, steel gleam (mood.rs), light shafts / dust / embers (fx.rs), weathered tiles and dungeon puddles (wear.rs), polished palace floors (floor.rs)
+    pub atmosphere: bool,
     /// enhanced mode only: brightness of the sun next to the torches: "dim", "low", "medium" or "high"
     pub sun_brightness: String,
     /// "original" (the tile images of VDUNGEON.DAT / VPALACE.DAT on the room pieces) or "procedural" (plain coloured
@@ -186,7 +188,7 @@ impl Default for Bindings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.5, muted: false, sound: "adlib".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, external_terminal: false, render_mode: "enhanced".into(), character_style: "voxel".into(), shadow_quality: "high".into(), ssao: true, sun_brightness: "low".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into(), pad_layout: "modern".into(), tile_relief: true, quick_input: true, low_latency_present: false, cinematic_fights: true, minimap: false, minimap_view: MINIMAP_VIEW }
+        Settings { window: "windowed".into(), width: 1280, height: 720, volume: 0.5, muted: false, sound: "adlib".into(), soundfont: "musescore".into(), keys: Bindings::default(), data_path: None, update_check: true, external_terminal: false, render_mode: "enhanced".into(), character_style: "voxel".into(), shadow_quality: "high".into(), ssao: true, atmosphere: true, sun_brightness: "low".into(), tile_textures: "original".into(), column_style: "voxel".into(), object_style: "voxel".into(), voxel_normals: "smooth".into(), voxel_shading: "lit".into(), camera_scroll: "smooth".into(), motion_smoothing: "position".into(), pad_layout: "modern".into(), tile_relief: true, quick_input: true, low_latency_present: false, cinematic_fights: true, minimap: false, minimap_view: MINIMAP_VIEW }
     }
 }
 
@@ -228,6 +230,7 @@ impl Settings {
             character_style: field(&o, "character_style", d.character_style, |s| CHARACTER_STYLES.contains(&s.as_str())),
             shadow_quality: field(&o, "shadow_quality", d.shadow_quality, |s| SHADOW_QUALITIES.contains(&s.as_str())),
             ssao: field(&o, "ssao", d.ssao, |_| true),
+            atmosphere: field(&o, "atmosphere", d.atmosphere, |_| true),
             sun_brightness: field(&o, "sun_brightness", d.sun_brightness, |s| SUN_BRIGHTNESS.contains(&s.as_str())),
             tile_textures: field(&o, "tile_textures", d.tile_textures, |s| TILE_TEXTURES.contains(&s.as_str())),
             column_style: field(&o, "column_style", d.column_style, |s| COLUMN_STYLES.contains(&s.as_str())),
@@ -462,14 +465,14 @@ mod tests {
     #[test]
     fn enhanced_quality_settings_parse_and_fall_back() {
         let d = Settings::default();
-        assert_eq!((d.shadow_quality.as_str(), d.ssao), ("high", true));
-        let s = Settings::parse(r#"{"render_mode": "enhanced", "shadow_quality": "low", "ssao": false}"#);
-        assert_eq!((s.render_mode.as_str(), s.shadow_quality.as_str(), s.ssao), ("enhanced", "low", false));
+        assert_eq!((d.shadow_quality.as_str(), d.ssao, d.atmosphere), ("high", true, true));
+        let s = Settings::parse(r#"{"render_mode": "enhanced", "shadow_quality": "low", "ssao": false, "atmosphere": false}"#);
+        assert_eq!((s.render_mode.as_str(), s.shadow_quality.as_str(), s.ssao, s.atmosphere), ("enhanced", "low", false, false));
         assert_eq!(Settings::parse(&s.to_json()), s);
         // a file from before R2 (no quality keys) and bad values both give the defaults, per field
         assert_eq!(Settings::parse(r#"{"render_mode": "enhanced"}"#).shadow_quality, "high");
-        let s = Settings::parse(r#"{"shadow_quality": "ultra", "ssao": "yes", "volume": 0.5}"#);
-        assert_eq!((s.shadow_quality, s.ssao, s.volume), (d.shadow_quality, d.ssao, 0.5));
+        let s = Settings::parse(r#"{"shadow_quality": "ultra", "ssao": "yes", "atmosphere": 1, "volume": 0.5}"#);
+        assert_eq!((s.shadow_quality, s.ssao, s.atmosphere, s.volume), (d.shadow_quality, d.ssao, d.atmosphere, 0.5));
     }
 
     #[test]

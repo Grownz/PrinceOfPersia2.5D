@@ -2,9 +2,11 @@
 //! attacker's blade tip away from the victim; they fly on ballistic paths and stay on the floor as flat spots. A killed figure
 //! also gets a pool that grows once the body lies still. Every landed hit makes the attacker's sword bloodier (0 clean, 1
 //! flecked, 2 covered; `kid::bloody` paints it), a sheathed sword is clean again.
-//! Limit: blood belongs to the shown room and is gone when the room (or level) changes.
+//! Limit: droplets belong to the shown room and are gone when it changes. With `atmosphere` on (enhanced) the pools and one splatter
+//! per hit are handed to traces.rs instead, which keeps them for the level (the pool disc here then stays invisible).
 use crate::particles::Swords;
 use crate::settings::{RenderMode, Settings};
+use crate::traces::{Stain, Stains};
 use crate::Game;
 use bevy::prelude::*;
 use pop_core::level::TILE_H_PX;
@@ -29,6 +31,8 @@ const MAX_DROPS: usize = 500;
 /// Final radius of a pool (x; it is squashed in depth) and its time constant in seconds.
 const POOL_R: f32 = 0.34;
 const POOL_TAU: f32 = 2.5;
+/// Radius of a pool that stays (traces.rs): wider than the body that lies on it.
+const KEPT_POOL_R: f32 = 0.5;
 
 #[derive(Component)]
 pub struct Blood;
@@ -49,6 +53,8 @@ pub struct Pool {
     guard: bool,
     floor: f32,
     dead_for: Option<f32>,
+    /// persistent stains (traces.rs): the pool has been handed over
+    recorded: bool,
 }
 
 fn rnd(s: &mut u32) -> f32 {
@@ -70,7 +76,7 @@ pub fn floor_of(y: u8) -> f32 {
 
 /// Whether a drop landing at world `x`, floor height `floor` hits a rendered floor tile of the shown room (not a gap, a wall
 /// block, a balcony or another room); the rest of the spray is gone.
-fn on_floor(level: &pop_core::level::Level, room: usize, x: f32, floor: f32) -> bool {
+pub(crate) fn on_floor(level: &pop_core::level::Level, room: usize, x: f32, floor: f32) -> bool {
     use pop_core::level::Tile::*;
     let (col, row) = (x.floor(), 2 - (floor / crate::room::TILE_H).round() as i32);
     if !(0.0..10.0).contains(&col) || !(0..3).contains(&row) || !(1..=pop_core::level::ROOMS).contains(&room) {
@@ -102,7 +108,10 @@ pub fn spawn(
     old: Query<Entity, With<Blood>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut stains: ResMut<Stains>,
 ) {
+    let persist = crate::traces::persistent(&mode, &set);
+    stains.sync_world((g.level, g.gen));
     let hits = std::mem::take(&mut g.world.hits);
     if !set.cinematic_fights || *mode == RenderMode::Classic {
         gore.sword = [0; 2];
@@ -151,7 +160,21 @@ pub fn spawn(
         }
         if h.dead {
             let x = gore.bodies[vic].map_or(at.x, |b| b.x);
-            cmds.spawn((Blood, Pool { guard: h.guard, floor, dead_for: None }, Mesh3d(sh.disc.clone()), MeshMaterial3d(sh.mat.clone()), Transform::from_xyz(x, floor + 0.008, 0.25).with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)).with_scale(Vec3::ZERO), bevy::light::NotShadowCaster));
+            let tf = Transform::from_xyz(x, floor + 0.008, 0.25).with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)).with_scale(Vec3::ZERO);
+            let pool = Pool { guard: h.guard, floor, dead_for: None, recorded: false };
+            if persist {
+                // the pool is drawn by traces.rs once the body lies still; this entity only waits under the body
+                cmds.spawn((Blood, pool, tf));
+            } else {
+                cmds.spawn((Blood, pool, Mesh3d(sh.disc.clone()), MeshMaterial3d(sh.mat.clone()), tf, bevy::light::NotShadowCaster));
+            }
+        } else if persist {
+            // a splatter that stays: away from the attacker, a little in front of or behind the victim
+            let x = gore.bodies[vic].map_or(at.x, |b| b.x) + dir * (0.25 + 0.6 * rnd(&mut s));
+            if on_floor(&g.world.level, g.room, x, floor) {
+                let z = -0.4 + 0.7 * rnd(&mut s);
+                stains.add(Stain { room: g.room as u8, x, floor, z, r: 0.11 + 0.08 * rnd(&mut s), seed: (rnd(&mut s) * 1000.0) as u32, tick: g.world.tick, pool: false });
+            }
         }
         gore.sword[att] = (gore.sword[att] + 1).min(2);
     }
@@ -165,7 +188,11 @@ pub fn motion(
     gore: Res<Gore>,
     mut drops: Query<(Entity, &mut Drop, &mut Transform, &mut Mesh3d), Without<Pool>>,
     mut pools: Query<(&mut Pool, &mut Transform), Without<Drop>>,
+    mut stains: ResMut<Stains>,
+    mode: Res<RenderMode>,
+    set: Res<Settings>,
 ) {
+    let persist = crate::traces::persistent(&mode, &set);
     let dt = time.delta_secs();
     let Some(sh) = gore.shared.as_ref() else { return };
     for (e, mut d, mut t, mut m) in &mut drops {
@@ -199,6 +226,12 @@ pub fn motion(
         let still = k.is_none_or(|k| k.is_dead());
         if p.dead_for.is_none() && still {
             p.dead_for = Some(0.0);
+        }
+        if persist && !p.recorded && p.dead_for.is_some() {
+            p.recorded = true;
+            if on_floor(&g.world.level, g.room, t.translation.x, p.floor) {
+                stains.add(Stain { room: g.room as u8, x: t.translation.x, floor: p.floor, z: 0.15, r: KEPT_POOL_R, seed: (t.translation.x * 997.0) as u32 ^ g.world.tick as u32, tick: g.world.tick, pool: true });
+            }
         }
         match &mut p.dead_for {
             Some(s) => *s += dt,

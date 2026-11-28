@@ -74,7 +74,7 @@ const PROXY_OFFSET: Vec3 = Vec3::new(0.0, -0.18, -0.55);
 const PROXY_FLUX: f32 = 250_000.0;
 
 /// Camera and sun on entering / leaving Rt. Runs before `enhanced::apply`, which ignores Rt and redoes classic/enhanced.
-fn apply(mode: Res<RenderMode>, mut st: ResMut<RtState>, mut cmds: Commands, cam: Query<Entity, With<Camera3d>>, mut sun: Query<&mut DirectionalLight>) {
+fn apply(mode: Res<RenderMode>, mut st: ResMut<RtState>, mut cmds: Commands, cam: Query<Entity, (With<Camera3d>, Without<crate::mirror::MirrorCam>)>, mut sun: Query<&mut DirectionalLight, Without<crate::mirror::TwinOf>>) {
     let want = *mode == RenderMode::Rt;
     if want == st.on {
         return;
