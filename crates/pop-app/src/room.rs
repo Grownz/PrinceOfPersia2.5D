@@ -573,6 +573,19 @@ pub struct TorchFlame(u8, u8);
 #[derive(Component)]
 pub struct TorchLight(pub u8, pub u8, pub f32, pub Vec2);
 
+/// What makes a `TorchLight` a light of the cutscene set: torch `i`, its classic position (kept pixel-identical in classic mode), its
+/// place in enhanced mode while the flame is not animated (`rest`), `k` = scale of the flame on its plane and `voxel`: the flame is the
+/// level's voxel flame (`TorchLight.3` = its lower left corner), so the light follows its pixels as in the levels. `flicker` places the
+/// light (z too); `enhanced::torch_shadows` leaves its z alone and gives it no range clip (the set is open) and no flicker in classic.
+#[derive(Component)]
+pub struct ChamberTorch {
+    pub i: usize,
+    pub classic: Vec3,
+    pub rest: Vec3,
+    pub k: f32,
+    pub voxel: bool,
+}
+
 /// The faint light of a potion's bubbles, in the bubbles' colour (intensity set by `enhanced::bubble_lights`).
 #[derive(Component)]
 pub struct BubbleLight {
@@ -584,22 +597,44 @@ pub struct BubbleLight {
 
 /// Every frame: each torch light's place follows the centre of its flame frame's pixels, and its strength follow the opaque pixel count of its flame frame (fewest = 80 %, most = 100 %),
 /// eased so the steps between frames blend smoothly. `enhanced::torch_shadows` multiplies it into the intensity.
-pub fn flicker(g: Res<Game>, p: Res<Palette>, time: Res<Time>, mut q: Query<(&mut TorchLight, &mut Transform)>) {
-    let Some((px, at)) = p.items.as_ref().map(|i| (&i.flame_px, &i.flame_at)).filter(|(v, a)| !v.is_empty() && a.len() == v.len()) else { return };
-    let (lo, hi) = (*px.iter().min().unwrap() as f32, *px.iter().max().unwrap() as f32);
+#[allow(clippy::too_many_arguments)]
+pub fn flicker(g: Res<Game>, p: Res<Palette>, time: Res<Time>, mode: Res<crate::settings::RenderMode>, cut: Res<crate::cutscene::Cut>, state: Res<State<crate::flow::Screen>>, mut q: Query<(&mut TorchLight, &mut Transform, Option<&ChamberTorch>)>) {
+    let flame = p.items.as_ref().map(|i| (&i.flame_px, &i.flame_at)).filter(|(v, a)| !v.is_empty() && a.len() == v.len());
+    let (lo, hi) = flame.map_or((0.0, 0.0), |(px, _)| (*px.iter().min().unwrap() as f32, *px.iter().max().unwrap() as f32));
     let k = 1.0 - (-time.delta_secs() * 14.0).exp();
     let (level, drawn, tick) = (&g.world.level, g.world.shared.drawn_room, g.world.tick);
-    for (mut t, mut tr) in &mut q {
-        let f = if t.0 == drawn { level.anim_frame(t.0 as usize, t.1 as usize) } else { neighbour_frame(level.tile_at(t.0 as usize, t.1 as usize).kind, tick, t.0, t.1) };
+    let in_scene = *state.get() == crate::flow::Screen::Cutscene;
+    for (mut t, mut tr, ch) in &mut q {
+        // the set's lights: classic keeps its old place, enhanced puts the light at the flame
+        if let Some(ch) = ch {
+            if *mode != crate::settings::RenderMode::Enhanced {
+                tr.translation = ch.classic;
+                continue;
+            }
+            if !ch.voxel || flame.is_none() {
+                tr.translation = ch.rest;
+                continue;
+            }
+        }
+        let Some((px, at)) = flame else { continue };
+        let f = match ch {
+            Some(ch) => Some(cut.flame_frame(ch.i, in_scene)),
+            None if t.0 == drawn => level.anim_frame(t.0 as usize, t.1 as usize),
+            None => neighbour_frame(level.tile_at(t.0 as usize, t.1 as usize).kind, tick, t.0, t.1),
+        };
         let n = px[f.unwrap_or(0) as usize % px.len()] as f32;
         let want = 0.8 + 0.2 * if hi > lo { (n - lo) / (hi - lo) } else { 1.0 };
         t.2 += (want - t.2) * k;
-        // the light sits at the centre of the flame's pixels, eased like the strength (z is `enhanced::torch_shadows`')
+        // the light sits at the centre of the flame's pixels, eased like the strength (z is `enhanced::torch_shadows`', the set's is ours)
         let c = at[f.unwrap_or(0) as usize % at.len()];
-        let goal = t.3 + Vec2::new(px_w(c[0]), px_h(c[1]));
+        let s = ch.map_or(1.0, |c| c.k);
+        let goal = t.3 + Vec2::new(px_w(c[0]), px_h(c[1])) * s;
         let now = tr.translation.truncate();
         tr.translation.x = now.x + (goal.x - now.x) * k;
         tr.translation.y = now.y + (goal.y - now.y) * k;
+        if let Some(ch) = ch {
+            tr.translation.z = ch.rest.z;
+        }
     }
 }
 

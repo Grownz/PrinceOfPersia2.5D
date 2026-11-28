@@ -126,9 +126,9 @@ fn env() -> &'static str {
     S.get_or_init(|| std::env::var("POP_MIRROR").unwrap_or_default())
 }
 
-/// Enhanced + atmosphere in a palace level: the mirror is on.
-pub fn wanted(mode: &RenderMode, set: &Settings, level: usize) -> bool {
-    *mode == RenderMode::Enhanced && set.atmosphere && level != 0 && crate::kid::palace(level) && env() != "off"
+/// Enhanced + atmosphere in a palace level: the mirror is on (not on the title: `level` is the last game's there).
+pub fn wanted(mode: &RenderMode, set: &Settings, level: usize, screen: crate::flow::Screen) -> bool {
+    *mode == RenderMode::Enhanced && set.atmosphere && level != 0 && screen != crate::flow::Screen::Title && crate::kid::palace(level) && env() != "off"
 }
 
 #[derive(Default)]
@@ -151,7 +151,7 @@ type TwinItem<'a> = (&'a mut Transform, &'a mut Mesh3d, Option<&'a mut MeshMater
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn sync(
     mut cmds: Commands,
-    mode: Res<RenderMode>,
+    (mode, screen): (Res<RenderMode>, Res<bevy::prelude::State<crate::flow::Screen>>), // one param: a system takes at most 16
     set: Res<Settings>,
     g: Res<crate::Game>,
     mut std_mats: ResMut<Assets<StandardMaterial>>,
@@ -167,7 +167,7 @@ pub fn sync(
     all: Query<Entity, With<TwinOf>>,
     mut st: Local<State>,
 ) {
-    if !wanted(&mode, &set, g.level) {
+    if !wanted(&mode, &set, g.level, *screen.get()) {
         if std::mem::take(&mut st.on) {
             all.iter().chain(cams.iter()).for_each(|e| cmds.entity(e).despawn());
             images.remove(&st.image);
@@ -293,6 +293,14 @@ pub fn plugin(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_mirror_on_the_title() {
+        use crate::flow::Screen;
+        let set = Settings { atmosphere: true, ..default() };
+        let (palace, enh) = ((1..=14).find(|&l| crate::kid::palace(l)).unwrap(), RenderMode::Enhanced);
+        assert!(wanted(&enh, &set, palace, Screen::Playing) && !wanted(&enh, &set, palace, Screen::Title));
+    }
 
     /// The reflection through the wall plane as a matrix: z -> 2 * WALL - z.
     fn mirror_matrix() -> Mat4 {

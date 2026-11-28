@@ -50,7 +50,12 @@ const PULSE_SECS: f32 = 300.0;
 const PULSE_MAX: f32 = 0.7;
 const PULSE_HZ: (f32, f32) = (0.4, 1.6);
 
-/// The mood of a level: the palace levels are golden, the rest is dungeon; level 0 (the demo) has none.
+/// The level whose grade `level` gets: the demo (0) looks like level 1.
+fn demo_as_dungeon(level: usize) -> usize {
+    level.max(1)
+}
+
+/// The mood of a level: the palace levels are golden, the rest is dungeon; level 0 (the demo) has none of its own (`atmosphere` grades it as level 1).
 pub fn mood(level: usize) -> Grade {
     match level {
         0 => Grade::NEUTRAL,
@@ -197,10 +202,11 @@ pub fn atmosphere(
         let cube = st.cube.get_or_insert_with(|| imgs.add(env_cube())).clone();
         cmds.entity(cam_e).insert(GeneratedEnvironmentMapLight { environment_map: cube, intensity: ENV_INTENSITY, ..default() });
     }
-    let level = matches!(screen.get(), Screen::Playing | Screen::Paused).then_some(g.level).filter(|&l| l != 0);
+    // the demo (level 0) is graded like level 1, the dungeon it leads into (no timer pulse: it has no time limit)
+    let level = matches!(screen.get(), Screen::Playing | Screen::Paused).then_some(demo_as_dungeon(g.level));
     let secs = g.world.progress.rem_min as f32 * 60.0 + g.world.progress.rem_tick as f32 / 12.0;
     let red = match level {
-        Some(_) if pulse_amp(secs) > 0.0 => {
+        Some(_) if g.level != 0 && pulse_amp(secs) > 0.0 => {
             st.phase = (st.phase + time.delta_secs() * pulse_hz(secs)).fract();
             (0.5 - 0.5 * (st.phase * std::f32::consts::TAU).cos()) * pulse_amp(secs) * PULSE_MAX
         }
@@ -232,6 +238,12 @@ pub fn atmosphere(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_demo_is_graded_like_the_dungeon() {
+        assert_eq!((demo_as_dungeon(0), demo_as_dungeon(1), demo_as_dungeon(7)), (1, 1, 7));
+        assert_eq!(grade(demo_as_dungeon(0), 1.0, 0.0).exposure, grade(1, 1.0, 0.0).exposure);
+    }
 
     #[test]
     fn time_fraction_runs_from_one_to_zero() {

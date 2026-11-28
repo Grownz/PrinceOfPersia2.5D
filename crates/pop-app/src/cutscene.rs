@@ -68,6 +68,11 @@ impl Cut {
         Cut { pv: open("PV.DAT"), kid: open("KID.DAT"), prince: open("PRINCE.DAT"), ..default() }
     }
 
+    /// Frame (0..9) of torch flame `i`: the scene's while one runs (`in_scene`), else the title/story screens' idle animation.
+    pub fn flame_frame(&self, i: usize, in_scene: bool) -> u8 {
+        self.cs.as_ref().filter(|_| in_scene && self.ended.is_none()).map_or(((self.idle / 6 + i as u32 * 5) % 9) as u8, |cs| cs.torch[i])
+    }
+
     /// Start `scene` (None if there is none or PV.DAT is missing: the caller goes straight on).
     pub fn start(&mut self, data: std::sync::Arc<pop_core::sim::Data>, scene: Scene, rem_min: i32, then: Then) -> bool {
         let Some(script) = scene.script(rem_min).filter(|_| self.pv.is_some()) else { return false };
@@ -377,13 +382,40 @@ fn chamber_parts(cmds: &mut Commands, g: &Game, p: &Palette, cut: &Cut, meshes: 
             room::chamber_box(cmds, p, "stone", Vec3::new(o.x + x - r, o.y, o.z + zf - r), Vec3::new(o.x + x + r, o.y + y1, o.z + zf + r));
         }
     }
-    // torches: holder (the level's 346 with original tiles) and the level light
-    for &x in TORCH_X.iter() {
+    // torches: holder (the level's 346 with original tiles) and the level light (a `TorchLight` like the levels': enhanced mode
+    // puts it at the flame's pixels, `room::flicker`; classic keeps the old place)
+    let flames = room::chamber_flames(p);
+    for (i, &x) in TORCH_X.iter().enumerate() {
         let (cx, cy) = far(x + 8.0, TORCH_BOTTOM);
         if !room::chamber_holder(cmds, p, o + Vec3::new(cx, cy, 0.0), k) {
             room::chamber_box(cmds, p, "dark", o + Vec3::new(cx - 0.08, cy - 0.25, room::ARCADE_Z - 0.1), o + Vec3::new(cx + 0.08, cy + 0.02, room::ARCADE_Z + 0.05));
         }
-        cmds.spawn((room::torch_light(), Transform::from_translation(o + Vec3::new(cx, cy + 0.6, room::ARCADE_Z + 0.6)), Chamber));
+        // the voxel flame's lower left corner (as `render` places it); the light stands 0.17 (a level's offset) in front of the
+        // flame's plane, scaled like the flame; sprite flames: about the middle of the sprite
+        let (lo, rest) = match flames {
+            Some((_, _, rel)) => {
+                let lo = o.truncate() + Vec2::new(cx + rel.x * k, cy + rel.y * k);
+                (lo, lo.extend(o.z + rel.z + 0.17 * k))
+            }
+            None => (Vec2::ZERO, Vec3::new(o.x + cx, o.y + far(x + 8.0, TORCH_BOTTOM - 8.0).1, o.z + room::ARCADE_Z + 0.4)),
+        };
+        let classic = o + Vec3::new(cx, cy + 0.6, room::ARCADE_Z + 0.6);
+        cmds.spawn((room::torch_light(), room::TorchLight(0, i as u8, 1.0, lo), room::ChamberTorch { i, classic, rest, k, voxel: flames.is_some() }, Transform::from_translation(classic), Chamber));
+    }
+    // the air (enhanced + atmosphere, fx.rs): dust motes round the torches' glows and embers over the flames, as in a palace room.
+    // No light shafts: the chamber has no window in its back wall, the arcade opens onto the night sky, not onto a sun. The
+    // set is open, so the dust has no solid tiles (mask 0).
+    let spots: Vec<Vec2> = TORCH_X.iter().map(|&x| { let (cx, cy) = far(x + 8.0, TORCH_BOTTOM); Vec2::new(cx, cy + 0.05) + o.truncate() }).collect();
+    if let Some((c, size)) = crate::fx::dust_rect(&spots) {
+        let mut a = [Vec2::ZERO; 4];
+        a[..spots.len()].copy_from_slice(&spots);
+        let z = o.z + room::ARCADE_Z + 0.4;
+        cmds.spawn((crate::fx::FxSpawn::Dust(a, spots.len(), 0, o.truncate()), Transform::from_translation(c.extend(z)).with_scale(size.extend(1.0)), Chamber));
+        for s in &spots {
+            let (c, size) = crate::fx::ember_rect(s.x, s.y - 0.05);
+            let c = Vec2::new(c.x, s.y - 0.05 + (c.y - (s.y - 0.05)) * k); // the rect rises `k` times higher on this plane
+            cmds.spawn((crate::fx::FxSpawn::Embers, Transform::from_translation(c.extend(z)).with_scale((size * k).extend(1.0)), Chamber));
+        }
     }
 }
 
@@ -661,8 +693,7 @@ pub fn render(
     let idle = c.idle;
     let vflames = room::chamber_flames(&pal);
     for (FlameSprite(i), mut t, mut vis, mut mat, mut mesh) in &mut q.p2() {
-        let frame = cs.map_or(((idle / 6 + *i as u32 * 5) % 9) as u8, |cs| cs.torch[*i]);
-        let shown = match vflames {
+        let frame = cs.map_or(((idle / 6 + *i as u32 * 5) % 9) as u8, |cs| cs.torch[*i]);        let shown = match vflames {
             Some((frames, fmat, rel)) => on_set.then(|| {
                 let (fx, fy) = far(TORCH_X[*i] + 8.0, TORCH_BOTTOM);
                 let k = far_scale(-room::ARCADE_Z);

@@ -264,7 +264,7 @@ const ENHANCED_TORCH_Z: f32 = -0.6;
 
 /// Every frame: in enhanced mode the `n` torches nearest to the view cast shadows, the rest stay shadowless (a point
 /// shadow is 6 cube faces); in classic every light is back to `room::torch_light`'s values and its classic position.
-pub fn torch_shadows(mut cmds: Commands, mode: Res<RenderMode>, set: Res<Settings>, g: Res<crate::Game>, time: Res<Time>, mut drawn: Local<u8>, cam: Query<&GlobalTransform, (With<Camera3d>, Without<crate::mirror::MirrorCam>)>, overlays: Query<Entity, (Added<Mesh3d>, Or<(With<crate::wear::Decal>, With<crate::fx::FxSpawn>)>, Without<bevy::light::NotShadowCaster>)>, mut lights: Query<(Entity, &mut Transform, &mut PointLight, Option<&ClassicZ>, Option<&crate::room::TorchLight>, Option<&mut Reach>), (Without<crate::room::BubbleLight>, Without<crate::particles::Spark>, Without<Drinking>, Without<crate::mirror::TwinOf>)>) {
+pub fn torch_shadows(mut cmds: Commands, mode: Res<RenderMode>, set: Res<Settings>, g: Res<crate::Game>, time: Res<Time>, mut drawn: Local<u8>, cam: Query<&GlobalTransform, (With<Camera3d>, Without<crate::mirror::MirrorCam>)>, overlays: Query<Entity, (Added<Mesh3d>, Or<(With<crate::wear::Decal>, With<crate::fx::FxSpawn>)>, Without<bevy::light::NotShadowCaster>)>, mut lights: Query<(Entity, &mut Transform, &mut PointLight, Option<&ClassicZ>, Option<&crate::room::TorchLight>, Option<&mut Reach>, Option<&crate::room::ChamberTorch>), (Without<crate::room::BubbleLight>, Without<crate::particles::Spark>, Without<Drinking>, Without<crate::mirror::TwinOf>)>) {
     let enhanced = *mode == RenderMode::Enhanced;
     // decals and fx quads are never occluders: they would put holes into the torch shadow maps
     for e in &overlays {
@@ -281,9 +281,9 @@ pub fn torch_shadows(mut cmds: Commands, mode: Res<RenderMode>, set: Res<Setting
     // pass 1: every enhanced torch only reaches as far as the open space it sees (the tile grid line of sight, `light_range`; classic keeps
     // the full range); the shadow candidates are the lights whose clipped reach touches the picture
     let mut cands: Vec<(usize, f32)> = Vec::new();
-    for (i, (e, t, mut l, _, flick, reach)) in lights.iter_mut().enumerate() {
+    for (i, (e, t, mut l, _, flick, reach, chamber)) in lights.iter_mut().enumerate() {
         let mut range = max;
-        if enhanced && flick.is_some() && room != 0 {
+        if enhanced && flick.is_some() && chamber.is_none() && room != 0 {
             let at = t.translation.truncate();
             let target = || light_range(|c, r| !(-10..20).contains(&c) || !(-3..6).contains(&r) || grid[((r + 3) * GRID_W + c + 10) as usize], at, max);
             match reach {
@@ -300,20 +300,24 @@ pub fn torch_shadows(mut cmds: Commands, mode: Res<RenderMode>, set: Res<Setting
             }
         }
         if l.range != range { l.range = range; }
-        if enhanced && touches_picture(t.translation.truncate(), range) {
+        // the set's lights count only while the camera is on the set (the picture is then round `ORIGIN`, the levels' lights are far away)
+        let on_set = focus.distance(crate::cutscene::ORIGIN.truncate()) < 20.0;
+        let at = t.translation.truncate() - chamber.map_or(Vec2::ZERO, |_| crate::cutscene::ORIGIN.truncate());
+        if enhanced && (chamber.is_none() || on_set) && touches_picture(at, range) {
             // hysteresis: a light that already casts keeps its place against one that is almost as near
             cands.push((i, t.translation.truncate().distance_squared(focus) * if l.shadow_maps_enabled { 0.5 } else { 1.0 }));
         }
     }
     cands.sort_by(|a, b| a.1.total_cmp(&b.1));
     let on: Vec<usize> = cands.iter().take(n).map(|c| c.0).collect();
-    for (i, (e, mut t, mut l, cz, flick, _)) in lights.iter_mut().enumerate() {
+    for (i, (e, mut t, mut l, cz, flick, _, chamber)) in lights.iter_mut().enumerate() {
         let want = if on.contains(&i) { (true, DEPTH_BIAS, NORMAL_BIAS) } else { (false, d.shadow_depth_bias, d.shadow_normal_bias) };
-        let intensity = crate::room::torch_light().intensity * if enhanced { ENHANCED_TORCH_GAIN } else { 1.0 } * flick.map_or(1.0, |f| f.2);
+        let intensity = crate::room::torch_light().intensity * if enhanced { ENHANCED_TORCH_GAIN } else { 1.0 } * flick.filter(|_| enhanced || chamber.is_none()).map_or(1.0, |f| f.2);
         if (l.shadow_maps_enabled, l.shadow_depth_bias, l.shadow_normal_bias, l.intensity) != (want.0, want.1, want.2, intensity) {
             (l.shadow_maps_enabled, l.shadow_depth_bias, l.shadow_normal_bias, l.intensity) = (want.0, want.1, want.2, intensity);
         }
         match (enhanced, cz) {
+            _ if chamber.is_some() => {} // `room::flicker` places the set's lights
             (true, None) => {
                 cmds.entity(e).insert(ClassicZ(t.translation.z));
                 t.translation.z = ENHANCED_TORCH_Z;
