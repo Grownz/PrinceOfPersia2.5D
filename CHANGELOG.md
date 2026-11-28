@@ -5,6 +5,8 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-28
+
 ### Added
 - Enhanced mode, setting "Atmosphere (enhanced)" (on by default): the light glides from dusk to deep night as the 60 minutes run out, each level has a mood (cool damp dungeons, golden palaces), and the last 5 minutes carry a subtle red pulse that quickens as time runs out. Gates, spikes, chomper blades, swords and the exit door now gleam like steel (metallic material plus a small environment map filtered on the GPU). Dev hook `POP_MINUTES=<n>` starts a level with n minutes left.
 - The same setting adds air, drawn on the GPU by one small shader (no particles): soft slanted light shafts with drifting dust fall from the palace windows and lattice screens (warm at dusk, blue at night), sparse dust motes glint near the torches, and a few embers rise from every flame.
