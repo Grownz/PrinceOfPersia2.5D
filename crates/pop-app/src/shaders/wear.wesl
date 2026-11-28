@@ -61,10 +61,11 @@ fn floored(c: vec2<i32>) -> bool {
 // Tone and tint of a tile (the same everywhere in it) plus a slow drift and stone-sized patches across tiles; `amp` ~ 0.1 is a
 // few percent either way.
 fn tone(p: vec2<f32>, id: vec2<f32>, amp: f32) -> vec3<f32> {
-    let h = hash22(id);
+    // smooth value noise at about tile size instead of a constant per tile: no step at the column borders
     let s = wear.kind.z;
-    let b = 1.0 + amp * ((h.x - 0.5) + (fbm(p * 0.5 + s) - 0.5) * 1.1 + (vnoise(p * 2.3 + s * 3.1) - 0.5) * 0.6);
-    let t = (h.y - 0.5) * 0.28 * amp;
+    let h = vec2<f32>(vnoise(p * vec2<f32>(1.0, 0.5) + s * 7.0), vnoise(p * vec2<f32>(1.0, 0.5) + s * 13.0 + 40.0));
+    let b = 1.0 + amp * ((h.x - 0.5) * 1.6 + (fbm(p * 0.5 + s) - 0.5) * 1.1 + (vnoise(p * 2.3 + s * 3.1) - 0.5) * 0.6);
+    let t = (h.y - 0.5) * 0.56 * amp;
     return vec3<f32>(b + t, b, b - t);
 }
 
@@ -143,7 +144,7 @@ fn streak(u: f32, d: f32, id: vec2<f32>, chance: f32, width: f32) -> f32 {
 
 // Moss as a multiplier: `m` 0..1 how much.
 fn moss(m: f32) -> vec3<f32> {
-    return mix(vec3<f32>(1.0), MOSS, clamp(m, 0.0, 1.0));
+    return mix(vec3<f32>(1.0), MOSS, clamp(m * 1.2, 0.0, 1.0));
 }
 
 // A cobweb in the corner at (cx, ct): coverage 0..1 (`dir` -1 the wall is to the left of the corner, 1 to the right).
@@ -175,15 +176,18 @@ fn wall_face(p: vec2<f32>, c: vec2<i32>, ty: f32, px: f32) -> vec3<f32> {
     f *= 1.0 - 0.14 * (1.0 - smoothstep(0.0, 0.4, ty));
     f *= 1.0 - 0.07 * smoothstep(1.7, 2.0, ty);
     // moss grows from the floor line on a base block, ragged and in patches
-    if dungeon && !solid(c + vec2<i32>(0, 1)) && hash21(id + 5.0) > 0.45 {
+    // (a smooth gate along x, not a per-tile coin: no hard end at a column border)
+    if dungeon && !solid(c + vec2<i32>(0, 1)) {
+        let gate = smoothstep(0.4, 0.6, fbm(vec2<f32>(p.x * 0.7, wear.kind.z + 2.0)));
         let reach = 0.1 + 0.36 * fbm(vec2<f32>(p.x * 2.6, wear.kind.z));
-        let m = 1.0 - smoothstep(0.0, reach, ty + (vnoise(p * 14.0) - 0.5) * 0.14);
+        let m = (1.0 - smoothstep(0.0, reach, ty + (vnoise(p * 14.0) - 0.5) * 0.14)) * gate;
         f *= moss(m * 0.8) * (1.0 - 0.15 * m);
     }
     f *= 1.0 - 0.16 * streak(tx, (2.0 - ty) * 0.5, id, 0.4, 0.04);
     // and a few patches on the face itself
-    if dungeon && hash21(id + 6.0) > 0.7 {
-        let m = smoothstep(0.6, 0.75, fbm(p * 2.2 + wear.kind.z)) * (0.6 + 0.4 * vnoise(p * 14.0));
+    if dungeon {
+        let gate = smoothstep(0.5, 0.75, vnoise(p * 0.6 + wear.kind.z * 2.0));
+        let m = smoothstep(0.55, 0.8, fbm(p * 2.2 + wear.kind.z)) * gate * (0.6 + 0.4 * vnoise(p * 14.0));
         f *= moss(m * 0.6) * (1.0 - 0.1 * m);
     }
     f *= 1.0 - 0.5 * crack(vec2<f32>(tx, ty), vec2<f32>(1.0, 2.0), id, select(0.12, 0.2, dungeon), px);
@@ -235,9 +239,13 @@ fn back_wall(p: vec2<f32>, c: vec2<i32>, yl: f32, px: f32) -> vec3<f32> {
     let rise = (0.25 + 0.5 * fbm(vec2<f32>(p.x * 1.7, wear.kind.z))) * select(0.35, 1.0, dungeon);
     let wet = 1.0 - smoothstep(0.0, rise, up);
     f *= 1.0 - 0.22 * wet - 0.2 * (1.0 - smoothstep(0.0, 0.35, top));
-    // moss only in the crease where the floor tiles meet the wall: a thin ragged line along the floor line
+    // moss in the crease where floor tiles meet the wall (only where there is a floor, fading out over the neighbouring column)
+    // and in soft patches on the wall itself; every edge is a wide smoothstep, nothing ends in a line
     if dungeon {
-        let m = (1.0 - smoothstep(0.0, 0.05 + 0.08 * fbm(vec2<f32>(p.x * 4.0, wear.kind.z)), up + (vnoise(p * 22.0) - 0.5) * 0.05)) * smoothstep(0.25, 0.5, fbm(p * 3.1 + wear.kind.z)) * smoothstep(0.35, 0.6, fbm(vec2<f32>(p.x * 0.8, wear.kind.z + 3.0)));
+        let fl = max(select(0.0, 1.0, floored(c)), max(select(0.0, 1.0, floored(c + vec2<i32>(-1, 0))) * (1.0 - smoothstep(0.0, 0.3, tx)), select(0.0, 1.0, floored(c + vec2<i32>(1, 0))) * smoothstep(0.7, 1.0, tx)));
+        let crease = (1.0 - smoothstep(0.0, 0.1 + 0.14 * fbm(vec2<f32>(p.x * 3.0, wear.kind.z)), up + (vnoise(p * 9.0) - 0.5) * 0.08)) * fl * smoothstep(0.3, 0.6, fbm(vec2<f32>(p.x * 0.8, wear.kind.z + 3.0)));
+        let blotch = smoothstep(0.55, 0.9, fbm(p * 1.4 + wear.kind.z * 1.7)) * (0.7 + 0.3 * vnoise(p * 9.0)) * 0.55;
+        let m = max(crease, blotch);
         f *= moss(m * 0.75) * (1.0 - 0.15 * m);
     }
     // stains running down from the ceiling gaps
