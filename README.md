@@ -3,9 +3,9 @@
 **The 1989 classic, rebuilt for modern PCs.** Run, jump, climb and fence through the sultan's dungeons and palace in the
 original's exact rhythm, now in 3D lighting with real shadows, smooth motion and the music the way it was meant to sound.
 
-The prince fights a guard in the enhanced render mode with voxel characters:
+The prince in the enhanced render mode, with torch-lit shadows, dust and light shafts, weathered stone and mirrored palace walls:
 
-https://github.com/user-attachments/assets/498f5ae6-aa68-4cbb-ad87-2fd131e3076d
+https://github.com/user-attachments/assets/6804b91f-369a-495d-932b-7e2f2b945537
 
 ## Why play it
 
@@ -13,7 +13,9 @@ https://github.com/user-attachments/assets/498f5ae6-aa68-4cbb-ad87-2fd131e3076d
   all 14 levels behave the way you remember, including the hourglass, the shadow and the finale.
 - **It looks like a new game.** Switch to the *enhanced* look and the dungeon gets torch-lit shadows, ambient occlusion and glow.
   The prince and the guards can become 3D figures built from the original pixels, and walls, pillars, spikes, gates and
-  potions have real depth. Prefer the classic look? One key (F5) switches back.
+  potions have real depth. On top comes an atmosphere: the light fades from dusk to night as your 60 minutes run out, dust,
+  light shafts and embers drift through the air, moss and cracks age the stone, palace floors shine like marble and the palace
+  walls mirror the room. Blood and rubble stay where they fell. Prefer the classic look? One key (F5) switches back.
 - **Smooth at any frame rate.** Figures move at your screen's refresh rate instead of the 12 steps per second of 1989, and the
   camera glides from room to room.
 - **The music is back.** Play the original MIDI scores through an emulated AdLib sound card, or through a General MIDI
@@ -55,14 +57,15 @@ Controllers work too (Modern layout: A jump, B crouch, X action / strike, Y parr
 Press Esc and open **Settings**: sliders, checkboxes and drop-down lists for video, audio and graphics, usable with mouse,
 keyboard or controller. Every change applies immediately. The **Downloads** tab fetches the optional
 SoundFonts (MuseScore_General or FluidR3_GM, both MIT licensed) with a progress bar; you can cancel a download or delete a
-font at any time. Please respect the licences of the sources you download from.
+font at any time. Please respect the licences of the sources you download from. The row **Atmosphere (enhanced)** switches the
+extras of the enhanced look (mood, dust, moss, mirror, traces) on and off if you want it plainer or faster.
 
 ## Updates
 
 At every start the game asks GitHub whether a newer release exists. If so, a window offers it: press Y to download it (with a
 progress bar and a Cancel button), unpack it, replace the old files and restart, or N to play on. Your settings, saved game and
 `Original_data` are never touched. The version number is shown at the bottom of the main menu; click it to open the release
-page. To switch the check off, set `"update_check": false` in `settings.json`.
+page. A "Changelog" button in the window shows what changed since your version and stays open during the download. To switch the check off, set `"update_check": false` in `settings.json`.
 
 ## Questions
 
@@ -70,7 +73,7 @@ page. To switch the check off, set `"update_check": false` in `settings.json`.
 copy.
 
 **Will it run on my PC?** The classic look runs on any graphics card with Vulkan or DirectX 12. The enhanced look needs a bit
-more; the settings let you turn shadows and ambient occlusion down.
+more; the settings let you turn shadows, ambient occlusion and the atmosphere down.
 
 **Is it finished?** All 14 levels, the cutscenes, the hall of fame and saving work. See the [roadmap](ROADMAP.md) for what is
 next and the [changelog](CHANGELOG.md) for what changed.
