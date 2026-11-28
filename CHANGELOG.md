@@ -5,6 +5,12 @@ The original game data is never part of the repository or a release; see `docs/P
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-28
+
+### Changed
+- Enhanced mode: moss no longer ends in a hard line. On the dungeon back walls it grows in the crease above floor tiles and in soft patches on the wall itself, on the wall blocks it follows a smooth noise along the wall instead of a per-tile coin toss, and it is 20% stronger. The tone and tint of the stone vary smoothly across tile borders, so the columns of the room no longer show.
+- Enhanced mode, intro: the torches of the princess chamber are real torch lights now (flicker, range, shadows) and sit at their flames, with dust motes and embers around them. The demo is graded like the first dungeon level, and the wall mirror stays off on the title screen.
+
 ## [0.7.0] - 2026-11-28
 
 ### Added
